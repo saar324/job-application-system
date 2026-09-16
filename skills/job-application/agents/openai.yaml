@@ -1,0 +1,4 @@
+interface:
+  display_name: "Job Application"
+  short_description: "Find and submit configured job opportunities"
+  default_prompt: "Use $job-application to review matches, submit eligible applications, and ask me only for unresolved confirmations."

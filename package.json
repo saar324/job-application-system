@@ -1,0 +1,22 @@
+{
+  "name": "job-application-system",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Configurable, self-hosted, multi-profile job discovery and application orchestrator",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "worker": "node --env-file-if-exists=.env worker/server.js",
+    "openclaw:bootstrap": "node scripts/bootstrap-openclaw.js",
+    "dev": "node --env-file-if-exists=.env --watch src/index.js",
+    "test": "node --test",
+    "privacy:check": "node scripts/check-repository-privacy.js",
+    "check": "node --check src/index.js && node --check src/service.js && node --check src/documents.js && node --check src/credential-vault.js && node --check src/discovery/scoring.js && node --check src/discovery/sources/himalayas.js && node --check worker/server.js && node --check worker/execution.js && node --check worker/document-policy.js && node --check worker/receipts.js && node --check bin/jobctl.js && node --check skills/job-application/scripts/jobctl.js && node --check scripts/check-repository-privacy.js && node --test && npm run privacy:check"
+  },
+  "dependencies": {
+    "playwright": "^1.63.0"
+  }
+}

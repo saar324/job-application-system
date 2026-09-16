@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "purpose": "Neutral default. Replace this file only in a private deployment to reflect an applicant's own voice.",
+  "scope": [
+    "job application free-text fields",
+    "cover letters",
+    "important application messages"
+  ],
+  "voice": {
+    "person": "first person",
+    "tone": ["clear", "specific", "professional"],
+    "evidence": "Use only truthful facts from the applicant's profile, resume, portfolio, saved answers, and the job listing.",
+    "claims": "Do not invent experience, skills, metrics, credentials, dates, work rights, or motivation."
+  },
+  "qualityChecks": [
+    "Answer the exact prompt.",
+    "Remove unsupported claims and placeholders.",
+    "Check grammar and required length.",
+    "Request the applicant's approval at the final submission step."
+  ]
+}

@@ -1,0 +1,36 @@
+services:
+  job-server:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 4310
+      JOB_SERVER_CONFIG: /app/config/production.example.json
+      JOB_SERVER_DATA: /app/data/state.json
+      JOB_SERVER_TOKENS_FILE: /app/data/tokens.json
+      JOB_SERVER_PROFILES_FILE: /app/data/profiles.json
+      APPLICATION_WEBHOOK_URL: http://application-worker:4320/v1/submit
+      APPLICATION_WEBHOOK_TOKEN: ${APPLICATION_WORKER_TOKEN:?set APPLICATION_WORKER_TOKEN in .env}
+    ports:
+      - "127.0.0.1:4310:4310"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    depends_on:
+      - application-worker
+
+  application-worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    restart: unless-stopped
+    init: true
+    ipc: host
+    env_file: .env
+    environment:
+      WORKER_HOST: 0.0.0.0
+      WORKER_TOKEN: ${APPLICATION_WORKER_TOKEN:?set APPLICATION_WORKER_TOKEN in .env}
+      WORKER_ARTIFACTS: /app/artifacts
+    volumes:
+      - ./data/artifacts:/app/artifacts

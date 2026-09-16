@@ -1,0 +1,137 @@
+# Job Application System
+
+A configurable, self-hosted system for job discovery, application tracking, browser-assisted submission, confirmations, and auditable receipts. Multiple applicants can use one deployment without sharing profiles, credentials, or application history.
+
+This repository intentionally contains no real applicant profiles, resumes, application records, credentials, preferred employers, source selections, compensation requirements, or writing preferences. The included defaults are safe templates: discovery and automatic application are disabled until a deployment opts in.
+
+## Capabilities
+
+- profile-bound bearer credentials and isolated applicant data
+- configurable full-time and freelance workflows
+- normalized discovery adapters with explainable scoring and deduplication
+- durable opportunity, application, confirmation, receipt, and audit records
+- Playwright-based handling for standard and multi-step application forms
+- manual-review handoff for CAPTCHAs, legal attestations, unknown answers, and unsupported forms
+- encrypted, profile-scoped, domain-bound site credentials
+- verified-submission receipts instead of assuming a button click succeeded
+- a reusable Codex/OpenClaw skill and a profile-aware command-line client
+- simulation mode and browser fixtures for safe development
+
+## Private configuration boundary
+
+Keep deployment-specific material outside Git or in the ignored paths shown below.
+
+| Material | Recommended location |
+| --- | --- |
+| Environment variables and tokens | `.env` or `/etc/job-application/*.env` |
+| Applicant profiles and answers | `config/profiles.json` or a private absolute path |
+| Runtime state and receipts | `data/` or `/var/lib/job-application/` |
+| Resumes and other documents | a private directory allowed by `JOB_SERVER_ALLOWED_DOCUMENT_ROOTS` |
+| Employer boards and enabled source IDs | `config/local.json` or another private config file |
+| Applicant-specific source catalog and writing style | private copies of the skill reference JSON files |
+
+Do not commit any of these files. Run `npm run privacy:check` before every push.
+
+An optional GitHub Actions definition is available at `docs/ci.example.yml`. Copy it to `.github/workflows/ci.yml` from a GitHub credential with `workflow` permission when automated CI is desired.
+
+## Quick start
+
+Requirements: Node.js 22 or newer.
+
+```bash
+npm install
+cp .env.example .env
+cp config/profiles.example.json config/profiles.json
+npm run check
+AUTH_DISABLED=true npm start
+```
+
+The API listens on `127.0.0.1:4310`. In another shell:
+
+```bash
+node bin/jobctl.js health
+node bin/jobctl.js profile
+```
+
+Simulation mode never performs a live submission.
+
+## Configure an applicant
+
+Replace every `REPLACE_ME` value in the ignored `config/profiles.json`. An applicant can also update only their own profile through the authenticated CLI:
+
+```bash
+printf '%s' '{"contact":{"firstName":"...","lastName":"...","email":"...","phone":"...","location":"..."},"documents":{"resume":"/absolute/private/path/resume.pdf"},"skills":["..."],"preferences":{"locations":["..."],"fullTime":{"jobTitles":["..."]}}}' \
+  | node bin/jobctl.js profile-update
+```
+
+The API reports missing onboarding fields. Discovery becomes available when search preferences exist; submission remains blocked until required contact and document fields are complete.
+
+## Configure discovery privately
+
+No source is enabled by default. Copy `config/default.json` to ignored `config/local.json`, set `JOB_SERVER_CONFIG=./config/local.json`, and choose source IDs for each mode. Supported adapters are registered in `src/discovery/service.js`.
+
+Ashby, Greenhouse, and Lever require explicit board configuration; the repository does not ship with employer selections:
+
+```json
+{
+  "discovery": {
+    "sourceOptions": {
+      "ashby": { "boards": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] },
+      "greenhouse": { "boards": [{ "token": "REPLACE_ME", "company": "REPLACE_ME" }] },
+      "lever": { "sites": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] }
+    }
+  },
+  "modes": {
+    "full_time": {
+      "sources": ["REPLACE_WITH_SOURCE_IDS"],
+      "autoApply": false,
+      "autoApplyDiscovered": false
+    }
+  }
+}
+```
+
+Run a scan only after reviewing the private profile and source configuration:
+
+```bash
+printf '%s' '{}' | node bin/jobctl.js scan
+node bin/jobctl.js applications
+node bin/jobctl.js inbox
+```
+
+## Production browser worker
+
+Set strong, unique tokens in `.env`, keep the API on loopback or a trusted private network, and use the same worker secret on both sides:
+
+```bash
+docker compose up --build -d
+```
+
+The API sends the worker only the current application and matching profile. The worker runs each attempt in an isolated browser context. Passwords are redacted, document roots are allowlisted, and unexpected domains become manual-review items.
+
+Systemd templates and the deployment script use dedicated `jobapp-api` and `jobapply-worker` accounts. See [deployment](docs/deployment.md), [architecture](docs/architecture.md), [configuration](docs/configuration.md), and [discovery adapters](docs/discovery.md).
+
+## Codex and OpenClaw
+
+The reusable skill lives in `skills/job-application`. Install one copy per applicant and give each installation a different profile-bound token. `scripts/bootstrap-openclaw.js` can provision an OpenClaw agent without printing its generated credential.
+
+```bash
+node scripts/bootstrap-openclaw.js \
+  --agent applicant-one \
+  --profile applicant-one \
+  --workspace /private/openclaw/workspaces/applicant-one \
+  --tokens-file /private/job-application/tokens.json
+```
+
+See [OpenClaw integration](docs/openclaw.md) for the isolation model.
+
+## Safety invariants
+
+- Profile identity comes from authentication, never request content.
+- Unknown applicant facts are never inferred or invented.
+- Legal attestations require explicit applicant confirmation.
+- A production application is `submitted` only after a verifiable receipt.
+- Credentials, documents, source preferences, and application state stay out of Git.
+- Live submission is opt-in; repository defaults remain simulation-only and approval-gated.
+
+No license is included yet. Keep the GitHub repository private until a license, contribution policy, and a final history scan are chosen for public release.
