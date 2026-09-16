@@ -36,7 +36,7 @@ Keep deployment-specific material outside Git or in the ignored paths shown belo
 
 Do not commit any of these files. Run `npm run privacy:check` before every push.
 
-An optional GitHub Actions definition is available at `docs/ci.example.yml`. Copy it to `.github/workflows/ci.yml` from a GitHub credential with `workflow` permission when automated CI is desired.
+GitHub Actions runs the syntax, test, dependency-lock, and repository privacy checks for every pull request and push to `main`. Branch protection requires a pull request, an owner review, and a passing check before merge.
 
 ## Quick start
 
@@ -138,4 +138,4 @@ See [OpenClaw integration](docs/openclaw.md) for the isolation model.
 - Credentials, documents, source preferences, and application state stay out of Git.
 - Live submission is opt-in; repository defaults remain simulation-only and approval-gated.
 
-See [Contributing](CONTRIBUTING.md) before sharing changes and [Security](SECURITY.md) before reporting a vulnerability. No license is included yet; keep the repository private until a license and public-release policy are chosen.
+See [Contributing](CONTRIBUTING.md) before proposing changes and [Security](SECURITY.md) before reporting a vulnerability. No license is included yet. Public visibility permits inspection and GitHub collaboration but does not grant general reuse or redistribution rights; choose an explicit license before encouraging downstream reuse.

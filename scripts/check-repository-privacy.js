@@ -8,6 +8,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: root })
   .toString("utf8").split("\0").filter(Boolean);
 const failures = [];
+const personalIdentifiers = [
+  ["my", "os"].join(""),
+  ["sa", "ar"].join(""),
+  ["res", "hef"].join(""),
+  ["ev", "a"].join("")
+];
 
 const forbiddenPaths = [
   /^\.env(?:\.|$)/,
@@ -30,7 +36,8 @@ const contentChecks = [
   [/\bsk-[A-Za-z0-9_-]{20,}\b/, "API key"],
   [/https?:\/\/[^\s/]+:[^\s@/]+@/, "credential-bearing URL"],
   [/(?:^|["'\s=])\/Users\/[A-Za-z0-9._-]+\//m, "absolute macOS home path"],
-  [/(?:^|["'\s=])\/home\/(?!applicant|jobapp)[A-Za-z0-9._-]+\//m, "absolute user home path"]
+  [/(?:^|["'\s=])\/home\/(?!applicant|jobapp)[A-Za-z0-9._-]+\//m, "absolute user home path"],
+  [new RegExp(`\\b(?:${personalIdentifiers.join("|")})\\b`, "i"), "personal identifier"]
 ];
 const emailPattern = /\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b/gi;
 
@@ -38,6 +45,41 @@ for (const file of tracked) {
   let contents;
   try { contents = await readFile(path.join(root, file), "utf8"); }
   catch { continue; }
+  inspectContents(file, contents);
+}
+
+const historicalPaths = execFileSync("git", ["log", "--all", "--name-only", "--format="], { cwd: root })
+  .toString("utf8").split(/\r?\n/).filter(Boolean);
+for (const file of historicalPaths) {
+  if (file === ".env.example") continue;
+  if (forbiddenPaths.some((pattern) => pattern.test(file))) {
+    failures.push(`${file}: private path exists in Git history`);
+  }
+}
+
+const objectLines = execFileSync("git", ["rev-list", "--objects", "--all"], { cwd: root })
+  .toString("utf8").split(/\r?\n/).filter(Boolean);
+const objectIds = objectLines.map((line) => line.split(" ", 1)[0]);
+const objectTypes = execFileSync(
+  "git", ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+  { cwd: root, input: `${objectIds.join("\n")}\n` }
+).toString("utf8").split(/\r?\n/).filter(Boolean);
+const typeById = new Map(objectTypes.map((line) => line.split(" ")));
+for (const line of objectLines) {
+  const separator = line.indexOf(" ");
+  const objectId = separator === -1 ? line : line.slice(0, separator);
+  if (typeById.get(objectId) !== "blob") continue;
+  const file = separator === -1 ? objectId : line.slice(separator + 1);
+  let contents;
+  try {
+    const blob = execFileSync("git", ["cat-file", "blob", objectId], { cwd: root, maxBuffer: 50_000_000 });
+    if (blob.includes(0)) continue;
+    contents = blob.toString("utf8");
+  } catch { continue; }
+  inspectContents(`history:${file}`, contents);
+}
+
+function inspectContents(file, contents) {
   for (const [pattern, label] of contentChecks) {
     if (pattern.test(contents)) failures.push(`${file}: possible ${label}`);
   }
