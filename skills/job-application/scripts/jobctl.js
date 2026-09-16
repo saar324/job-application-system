@@ -19,10 +19,6 @@ const base = process.env.JOB_SERVER_URL
   || "http://127.0.0.1:4310";
 const token = process.env.JOB_SERVER_TOKEN
   || await optionalFile(process.env.JOB_SERVER_TOKEN_FILE ?? path.join(skillRoot, ".job-server-token"));
-if (!token && command !== "health") {
-  console.error("No job-server credential is configured for this agent");
-  process.exit(2);
-}
 
 const routes = {
   health: ["GET", "/health"], me: ["GET", "/v1/me"], opportunities: ["GET", "/v1/opportunities"],
