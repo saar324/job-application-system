@@ -93,6 +93,7 @@ export class ApplicationService {
   }
 
   async requestApplication(opportunityId, input, identity) {
+    assertNoSensitiveAnswerFields(input.answers, "application answers");
     const initialOpportunity = this.store.snapshot().opportunities.find(
       (item) => item.id === opportunityId && item.profileId === identity.profileId
     );
@@ -181,19 +182,25 @@ export class ApplicationService {
     );
     if (!target) throw new ClientError(404, "confirmation not found");
     let safeAnswers = structuredClone(input.answers ?? {});
-    if (target.kind === "account_credentials" && input.approved === true) {
-      if (!this.credentialVault) throw new ClientError(503, "credential vault is not configured");
-      if (safeAnswers.site_password) {
-        const profile = await this.profiles?.get(identity.profileId);
-        await this.credentialVault.set(identity.profileId, target.origin, {
-          username: safeAnswers.site_username ?? profile?.contact?.email,
-          password: safeAnswers.site_password,
-          generated: false
-        });
-        safeAnswers = { siteAccountAction: "existing", credentialStored: true };
-      } else if (safeAnswers.siteAccountAction !== "generate") {
-        throw new ClientError(400, "choose generated credentials or provide site_username and site_password");
+    if (target.kind === "account_credentials") {
+      if (input.approved === true) {
+        if (!this.credentialVault) throw new ClientError(503, "credential vault is not configured");
+        if (safeAnswers.site_password) {
+          const profile = await this.profiles?.get(identity.profileId);
+          await this.credentialVault.set(identity.profileId, target.origin, {
+            username: safeAnswers.site_username ?? profile?.contact?.email,
+            password: safeAnswers.site_password,
+            generated: false
+          });
+          safeAnswers = { siteAccountAction: "existing", credentialStored: true };
+        } else if (safeAnswers.siteAccountAction !== "generate") {
+          throw new ClientError(400, "choose generated credentials or provide site_username and site_password");
+        }
+      } else {
+        safeAnswers = {};
       }
+    } else {
+      assertNoSensitiveAnswerFields(safeAnswers, "confirmation answers");
     }
     const result = await this.store.mutate(async (state) => {
       const confirmation = state.confirmations.find(
@@ -499,6 +506,18 @@ function audit(state, identity, action, subjectId, details) {
 
 const CONTROL_ANSWER_KEYS = new Set(["retry", "submitted", "finalUrl", "externalId"]);
 const SENSITIVE_KEY = /(?:^|[_-])(?:password|passwd|passcode|secret|token|api[_-]?key|otp|cookie|session)(?:$|[_-])/i;
+const CREDENTIAL_INPUT_KEY = /(?:^|[_-])(?:password|passwd|passcode|secret|token|api[_-]?key|otp|cookie)(?:$|[_-])/i;
+
+function assertNoSensitiveAnswerFields(value, label, path = "") {
+  if (!value || typeof value !== "object") return;
+  for (const [key, nested] of Object.entries(value)) {
+    const field = path ? `${path}.${key}` : key;
+    if (CREDENTIAL_INPUT_KEY.test(key)) {
+      throw new ClientError(400, `${label} must not contain credential field: ${field}`);
+    }
+    assertNoSensitiveAnswerFields(nested, label, field);
+  }
+}
 
 function buildApplicationLogEntry(application, opportunity = {}, confirmations = []) {
   const answered = new Map();

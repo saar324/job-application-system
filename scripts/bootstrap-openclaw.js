@@ -49,6 +49,20 @@ if (!/^[a-zA-Z0-9_-]{1,80}$/.test(input.agent) || !/^[a-zA-Z0-9_-]{1,80}$/.test(
 const workspace = path.resolve(input.workspace);
 const serverUrl = input["server-url"] ?? "http://127.0.0.1:4310";
 const tokensFile = path.resolve(input["tokens-file"] ?? path.join(projectRoot, "data/tokens.json"));
+const installedSkill = path.join(workspace, "skills/job-application");
+const privateReferences = new Map();
+for (const [name, option] of [["sources.json", "sources-file"], ["writing-style.json", "writing-style-file"]]) {
+  const source = input[option]
+    ? path.resolve(input[option])
+    : path.join(installedSkill, "references", name);
+  try {
+    const contents = await readFile(source, "utf8");
+    JSON.parse(contents);
+    privateReferences.set(name, contents.endsWith("\n") ? contents : `${contents}\n`);
+  } catch (error) {
+    if (input[option] || error.code !== "ENOENT") throw error;
+  }
+}
 const agents = JSON.parse(openclaw(["agents", "list", "--json"]));
 if (!agents.some((entry) => entry.id === input.agent)) {
   openclaw(["agents", "add", input.agent, "--workspace", workspace, "--non-interactive", "--json"]);
@@ -58,6 +72,9 @@ openclaw([
   "skills", "install", path.join(projectRoot, "skills/job-application"),
   "--agent", input.agent, "--as", "job-application", "--force"
 ]);
+for (const [name, contents] of privateReferences) {
+  await secureWrite(path.join(installedSkill, "references", name), contents);
+}
 openclaw([
   "config", "set", `channels.telegram.accounts.${input["telegram-account"] ?? input.agent}.capabilities.inlineButtons`,
   JSON.stringify("dm"), "--strict-json"
@@ -73,7 +90,6 @@ for (const [existingToken, identity] of Object.entries(tokenMap)) {
 tokenMap[token] = { actorId: `${input.agent}-openclaw`, profileId: input.profile, roles: ["agent"] };
 await secureWrite(tokensFile, `${JSON.stringify(tokenMap, null, 2)}\n`);
 
-const installedSkill = path.join(workspace, "skills/job-application");
 await secureWrite(path.join(installedSkill, ".job-server-token"), `${token}\n`);
 await secureWrite(path.join(installedSkill, ".job-server-url"), `${serverUrl}\n`);
 
@@ -83,5 +99,6 @@ console.log(JSON.stringify({
   workspace,
   installedSkill,
   tokensFile,
+  privateReferencesRestored: [...privateReferences.keys()],
   credentialRotated: true
 }, null, 2));

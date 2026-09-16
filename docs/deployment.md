@@ -1,30 +1,60 @@
 # Production deployment
 
-The repository supports Docker Compose and hardened systemd services. Both require private configuration before launch.
+The repository supports Docker Compose and hardened systemd services. Complete the local simulation first, keep all files listed below out of Git, and back them up before upgrades.
 
 ## Docker Compose
 
-Create `.env`, `config/local.json`, and `config/profiles.json`; generate a long `APPLICATION_WORKER_TOKEN`; then review mounted paths before running:
+Prepare the private instance:
 
 ```bash
-docker compose up --build -d
+cp .env.example .env
+cp config/production.example.json config/local.json
+mkdir -p data/artifacts data/receipts private-documents
+cp config/profiles.example.json data/profiles.json
 ```
 
-The API binds to host loopback and reaches the worker only on the private Compose network.
+Then:
+
+1. Replace every placeholder in `data/profiles.json`. Document paths must use their container location, such as `/app/private-documents/resume.pdf`.
+2. Put resumes and cover letters in ignored `private-documents/`.
+3. Create `data/tokens.json` with a long random bearer token mapped to each fixed profile ID.
+4. Run `node scripts/init-vault-keys.js data/profiles.json data/vault-keys.json`.
+5. Set `APPLICATION_WORKER_TOKEN` in `.env` to a long random value.
+6. Set `WORKER_ALLOWED_DOMAINS` in `.env` for any reviewed employer-specific domains.
+7. Run `docker compose config` locally to validate the file. Its output can contain resolved secrets, so do not paste, log, or commit it.
+8. Start with `docker compose up --build -d`.
+
+The API binds to host loopback. The worker receives only staged documents through a dedicated volume; it cannot read profiles, API tokens, state, or original document roots. Chromium uses a private shared-memory allocation rather than the host IPC namespace.
 
 ## Systemd
 
 The deployment script targets a conventional Linux host and creates dedicated `jobapp-api` and `jobapply-worker` users.
 
-1. Create `/etc/job-application/env` from `.env.example` with production paths and secrets.
-2. Put the private profile document at `/var/lib/job-application/profiles.json` with mode `0600`.
-3. Set `JOB_SERVER_CONFIG` to a private production config and `JOB_SERVER_ALLOWED_DOCUMENT_ROOTS` to the narrow applicant-document directory.
-4. Run `sudo ./scripts/deploy-systemd.sh`.
+Prepare these files before running it:
 
-The script copies code to `/opt/job-application-system`, installs production dependencies and Chromium, splits API and worker environment files, initializes profile vault keys, installs the units, and starts the worker before the API.
+```text
+/etc/job-application/env
+/etc/job-application/config.json
+/var/lib/job-application/profiles.json
+/var/lib/job-application/tokens.json
+```
 
-OpenClaw integration is deliberately separate. Provision each applicant after the service is healthy with `scripts/bootstrap-openclaw.js`.
+Use `.env.example`, `config/production.example.json`, and `config/profiles.example.json` as templates. In `/etc/job-application/env`, set:
 
-## Upgrades
+- identical long random values for `APPLICATION_WEBHOOK_TOKEN` and `WORKER_TOKEN`;
+- `JOB_SERVER_ALLOWED_DOCUMENT_ROOTS` to a narrow absolute directory containing applicant documents;
+- `WORKER_ALLOWED_DOMAINS` to reviewed employer domains in addition to built-in ATS hosts.
 
-Back up `/var/lib/job-application` and `/etc/job-application` before deployment. Do not copy those directories into the repository. Run `npm run check` on the candidate revision, deploy, then verify health, profile binding, and worker authentication before enabling discovery.
+Then run:
+
+```bash
+sudo ./scripts/deploy-systemd.sh
+```
+
+The script normalizes all runtime paths, fixes private-file ownership before migration, copies root-owned code to `/opt/job-application-system`, installs Chromium, generates per-profile vault keys, splits API and worker environments, and starts the worker before the API.
+
+OpenClaw installation is deliberately separate. Provision each applicant only after API authentication and worker health are verified.
+
+## Upgrades and recovery
+
+Back up `/var/lib/job-application`, `/etc/job-application`, private applicant documents, and external OpenClaw reference files. Run `npm run check` on the candidate revision, deploy, then verify health, profile binding, credential isolation, and worker authentication before enabling discovery or live submission.

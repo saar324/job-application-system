@@ -78,3 +78,11 @@ test("profile application cap overrides are bounded and zero disables them", asy
     /must be an integer from 0 to 100/
   );
 });
+
+test("profile answers reject credential-like fields", async () => {
+  const { store } = await fixture();
+  await assert.rejects(
+    store.patch("applicant-one", { applicationAnswers: { account_password: "do-not-store" } }),
+    /credential fields are not allowed/
+  );
+});

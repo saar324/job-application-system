@@ -4,6 +4,7 @@ import path from "node:path";
 const ALLOWED_SECTIONS = new Set([
   "displayName", "defaultMode", "contact", "links", "skills", "preferences", "documents", "applicationAnswers"
 ]);
+const CREDENTIAL_KEY = /(?:^|[_-])(?:password|passwd|passcode|secret|token|api[_-]?key|otp|cookie)(?:$|[_-])/i;
 
 function merge(base, patch) {
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) return patch;
@@ -74,6 +75,7 @@ export class ProfileStore {
     for (const key of Object.keys(input)) {
       if (!ALLOWED_SECTIONS.has(key)) throw Object.assign(new Error(`profile field is not allowed: ${key}`), { status: 400 });
     }
+    rejectSensitiveApplicationAnswers(input.applicationAnswers);
     const operation = this.#pending.then(async () => {
       const document = await this.#read();
       const index = document.profiles.findIndex((profile) => profile.id === profileId);
@@ -124,5 +126,16 @@ export class ProfileStore {
     const temporary = `${this.#file}.${process.pid}.tmp`;
     await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
     await rename(temporary, this.#file);
+  }
+}
+
+function rejectSensitiveApplicationAnswers(value, path = "applicationAnswers") {
+  if (!value || typeof value !== "object") return;
+  for (const [key, nested] of Object.entries(value)) {
+    const field = `${path}.${key}`;
+    if (CREDENTIAL_KEY.test(key)) {
+      throw Object.assign(new Error(`credential fields are not allowed in applicationAnswers: ${field}`), { status: 400 });
+    }
+    rejectSensitiveApplicationAnswers(nested, field);
   }
 }

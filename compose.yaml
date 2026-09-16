@@ -6,10 +6,14 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 4310
-      JOB_SERVER_CONFIG: /app/config/production.example.json
+      JOB_SERVER_CONFIG: /app/config/local.json
       JOB_SERVER_DATA: /app/data/state.json
       JOB_SERVER_TOKENS_FILE: /app/data/tokens.json
       JOB_SERVER_PROFILES_FILE: /app/data/profiles.json
+      JOB_SERVER_DOCUMENT_STAGING: /app/data/documents
+      JOB_SERVER_ALLOWED_DOCUMENT_ROOTS: /app/private-documents
+      JOB_SERVER_CREDENTIAL_VAULTS: /app/data/vaults
+      JOB_SERVER_VAULT_KEYS_FILE: /app/data/vault-keys.json
       APPLICATION_WEBHOOK_URL: http://application-worker:4320/v1/submit
       APPLICATION_WEBHOOK_TOKEN: ${APPLICATION_WORKER_TOKEN:?set APPLICATION_WORKER_TOKEN in .env}
     ports:
@@ -17,6 +21,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./config:/app/config:ro
+      - ./private-documents:/app/private-documents:ro
+      - job-documents:/app/data/documents
     depends_on:
       - application-worker
 
@@ -26,11 +32,19 @@ services:
       dockerfile: worker/Dockerfile
     restart: unless-stopped
     init: true
-    ipc: host
-    env_file: .env
+    shm_size: "1gb"
     environment:
       WORKER_HOST: 0.0.0.0
       WORKER_TOKEN: ${APPLICATION_WORKER_TOKEN:?set APPLICATION_WORKER_TOKEN in .env}
-      WORKER_ARTIFACTS: /app/artifacts
+      WORKER_ALLOWED_DOMAINS: ${WORKER_ALLOWED_DOMAINS:-}
+      WORKER_HEADLESS: ${WORKER_HEADLESS:-true}
+      WORKER_ARTIFACTS: /app/data/artifacts
+      WORKER_DOCUMENT_ROOT: /app/data/documents
+      WORKER_RECEIPTS: /app/data/receipts
     volumes:
-      - ./data/artifacts:/app/artifacts
+      - ./data/artifacts:/app/data/artifacts
+      - ./data/receipts:/app/data/receipts
+      - job-documents:/app/data/documents:ro
+
+volumes:
+  job-documents:

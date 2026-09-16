@@ -8,6 +8,8 @@ worker_state_root=/var/lib/job-application-worker
 config_root=/etc/job-application
 environment_file="$config_root/env"
 profiles_file="$api_state_root/profiles.json"
+tokens_file="$api_state_root/tokens.json"
+config_file="$config_root/config.json"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "deploy-systemd.sh must run as root" >&2
@@ -19,6 +21,14 @@ if [[ ! -f "$environment_file" ]]; then
 fi
 if [[ ! -f "$profiles_file" ]]; then
   echo "Create the private $profiles_file from config/profiles.example.json first." >&2
+  exit 1
+fi
+if [[ ! -f "$tokens_file" ]]; then
+  echo "Create the private $tokens_file with at least one profile-bound token first." >&2
+  exit 1
+fi
+if [[ ! -f "$config_file" ]]; then
+  echo "Create the private $config_file from config/production.example.json first." >&2
   exit 1
 fi
 
@@ -55,12 +65,13 @@ runuser -u jobapply-worker -- env \
   "$runtime_root/node_modules/.bin/playwright" install chromium
 
 node "$runtime_root/scripts/update-production-env.js" "$environment_file"
+chown jobapp-api:jobapply "$profiles_file" "$tokens_file" "$config_file"
+chmod 0600 "$profiles_file" "$tokens_file" "$config_file"
 runuser -u jobapp-api -- node "$runtime_root/scripts/migrate-profile-settings.js" "$profiles_file"
 node "$runtime_root/scripts/init-vault-keys.js" "$profiles_file" "$config_root/vault-keys.json"
 node "$runtime_root/scripts/split-production-env.js" "$environment_file" \
   "$config_root/server.env" "$config_root/worker.env"
 
-chown jobapp-api:jobapply "$profiles_file"
 chmod 0600 "$profiles_file" "$config_root/env" "$config_root/server.env" \
   "$config_root/worker.env" "$config_root/vault-keys.json"
 install -o root -g root -m 0644 "$runtime_root/deploy/systemd/job-application-server.service" /etc/systemd/system/

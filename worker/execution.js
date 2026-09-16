@@ -2,10 +2,8 @@ import path from "node:path";
 import { automateApplication } from "./automation.js";
 
 export async function executeInFreshContext({ browser, payload, urlPolicy, artifactsDirectory, automate = automateApplication }) {
-  const requestedDomains = payload.opportunity.userRequested
-    ? [new URL(payload.opportunity.applyUrl).hostname] : [];
   try {
-    urlPolicy.assertAllowed(payload.opportunity.applyUrl, requestedDomains);
+    urlPolicy.assertAllowed(payload.opportunity.applyUrl);
     await urlPolicy.assertPublic(payload.opportunity.applyUrl);
   } catch (error) {
     return {
@@ -20,7 +18,7 @@ export async function executeInFreshContext({ browser, payload, urlPolicy, artif
     const requestUrl = route.request().url();
     try {
       if (/^https?:/i.test(requestUrl)) await urlPolicy.assertPublic(requestUrl);
-      if (route.request().isNavigationRequest()) urlPolicy.assertAllowed(requestUrl, requestedDomains);
+      if (route.request().isNavigationRequest()) urlPolicy.assertAllowed(requestUrl);
       else if (/^https?:/i.test(requestUrl)) urlPolicy.assertNetworkSafe(requestUrl);
       await route.continue();
     } catch (error) {

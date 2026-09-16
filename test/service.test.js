@@ -437,6 +437,37 @@ test("existing site password moves to the profile vault and never enters durable
   assert.equal(service.list("applications", identity.profileId)[0].status, "submitted");
 });
 
+test("rejected account credentials are discarded instead of entering durable state", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
+  const stateFile = path.join(directory, "state.json");
+  const store = await new JsonStore(stateFile).init();
+  const adapter = { name: "account-worker", async submit() {
+    throw new NeedsInputError("account required", [{
+      kind: "account_credentials", message: "Login required", fields: ["siteAccountAction"],
+      origin: "https://accounts.example.test", options: [], recommendation: "custom"
+    }]);
+  } };
+  const service = new ApplicationService({ store, config, adapter });
+  const job = await opportunity(service);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const confirmation = service.list("confirmations", identity.profileId)[0];
+  await service.resolveConfirmation(confirmation.id, { approved: false, answers: {
+    site_username: "owner@example.test", site_password: "discard-me"
+  } }, identity);
+  assert.doesNotMatch(await readFile(stateFile, "utf8"), /discard-me/);
+  assert.deepEqual(service.list("confirmations", identity.profileId)[0].response, {});
+});
+
+test("ordinary application answers reject credential-like fields", async () => {
+  const service = await fixture();
+  const job = await opportunity(service);
+  await assert.rejects(
+    service.requestApplication(job.id, { answers: { account_password: "do-not-store" } }, identity),
+    /must not contain credential field/
+  );
+});
+
 test("application log joins job details and records safe question answers", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();
@@ -463,10 +494,14 @@ test("application log joins job details and records safe question answers", asyn
   await service.requestApplication(job.id, {}, identity);
   await service.waitForIdle();
   const confirmation = service.list("confirmations", identity.profileId)[0];
-  await service.resolveConfirmation(confirmation.id, { approved: true, answers: {
-    kotlin_years: 3,
-    site_password: "must-not-appear"
-  } }, identity);
+  await assert.rejects(
+    service.resolveConfirmation(confirmation.id, { approved: true, answers: {
+      kotlin_years: 3,
+      site_password: "must-not-appear"
+    } }, identity),
+    /must not contain credential field/
+  );
+  await service.resolveConfirmation(confirmation.id, { approved: true, answers: { kotlin_years: 3 } }, identity);
   await service.waitForIdle();
 
   const [entry] = service.applicationLog(identity.profileId);
@@ -481,11 +516,6 @@ test("application log joins job details and records safe question answers", asyn
     field: "kotlin_years",
     question: "How many years of Kotlin experience do you have?",
     answer: 3,
-    answeredAt: resolvedConfirmation.resolvedAt
-  }, {
-    field: "site_password",
-    question: "How many years of Kotlin experience do you have?",
-    answer: "[redacted]",
     answeredAt: resolvedConfirmation.resolvedAt
   }]);
   assert.equal(service.applicationLog("person-two").length, 0);

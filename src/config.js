@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 function deepMerge(base, override) {
   if (!override || typeof override !== "object" || Array.isArray(override)) return base;
@@ -19,7 +20,7 @@ async function readJson(file) {
 }
 
 export async function loadConfig(env = process.env) {
-  const projectRoot = path.resolve(new URL("..", import.meta.url).pathname);
+  const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const basePath = path.resolve(projectRoot, "config/default.json");
   const selectedPath = path.resolve(env.JOB_SERVER_CONFIG ?? basePath);
   const base = await readJson(basePath);

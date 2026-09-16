@@ -12,6 +12,7 @@ const failures = [];
 const forbiddenPaths = [
   /^\.env(?:\.|$)/,
   /^data\//,
+  /^private-documents\//,
   /^config\/(?:local|profiles)\.json$/,
   /^config\/.*(?:private|secret).*\.json$/i,
   /(?:^|\/)\.job-server-(?:token|url)$/,

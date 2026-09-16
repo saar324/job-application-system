@@ -38,4 +38,43 @@ test("deployment migrates the profile as its owning service account", async () =
     /runuser -u jobapp-api -- node "\$runtime_root\/scripts\/migrate-profile-settings\.js"/,
     "running the migration as root would replace the private profile with a root-owned file"
   );
+  assert.ok(
+    script.indexOf('chown jobapp-api:jobapply "$profiles_file"')
+      < script.indexOf('runuser -u jobapp-api -- node "$runtime_root/scripts/migrate-profile-settings.js"'),
+    "the private profile must be readable by the service account before migration"
+  );
+});
+
+test("production environment updater replaces development paths with isolated absolute paths", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-production-env-test-"));
+  const environment = path.join(directory, "env");
+  await writeFile(environment, [
+    "JOB_SERVER_CONFIG=./config/default.json",
+    "JOB_SERVER_DATA=./data/state.json",
+    "JOB_SERVER_PROFILES_FILE=./config/profiles.json",
+    "JOB_SERVER_TOKENS_FILE=./data/tokens.json",
+    "APPLICATION_WEBHOOK_TOKEN=shared-secret",
+    "WORKER_TOKEN=shared-secret",
+    "JOB_SERVER_ALLOWED_DOCUMENT_ROOTS=/srv/private-applicant-documents"
+  ].join("\n"));
+  await execute(process.execPath, ["scripts/update-production-env.js", environment]);
+  const output = await readFile(environment, "utf8");
+  assert.match(output, /JOB_SERVER_CONFIG=\/etc\/job-application\/config\.json/);
+  assert.match(output, /JOB_SERVER_DATA=\/var\/lib\/job-application\/state\.json/);
+  assert.match(output, /JOB_SERVER_PROFILES_FILE=\/var\/lib\/job-application\/profiles\.json/);
+  assert.match(output, /JOB_SERVER_TOKENS_FILE=\/var\/lib\/job-application\/tokens\.json/);
+  assert.match(output, /AUTH_DISABLED=false/);
+  assert.match(output, /JOB_SERVER_ALLOWED_DOCUMENT_ROOTS=\/srv\/private-applicant-documents/);
+});
+
+test("compose keeps private API state away from the worker and avoids host IPC", async () => {
+  const compose = await readFile("compose.yaml", "utf8");
+  assert.match(compose, /JOB_SERVER_CONFIG: \/app\/config\/local\.json/);
+  assert.match(compose, /job-documents:\/app\/data\/documents:ro/);
+  assert.match(compose, /WORKER_DOCUMENT_ROOT: \/app\/data\/documents/);
+  assert.match(compose, /shm_size: "1gb"/);
+  assert.doesNotMatch(compose, /ipc:\s*host/);
+  const workerSection = compose.split("\n  application-worker:")[1].split("\nvolumes:")[0];
+  assert.doesNotMatch(workerSection, /^\s*- \.\/data:\/app\/data\s*$/m);
+  assert.doesNotMatch(workerSection, /^\s*env_file:/m);
 });

@@ -4,6 +4,8 @@ A configurable, self-hosted system for job discovery, application tracking, brow
 
 This repository intentionally contains no real applicant profiles, resumes, application records, credentials, preferred employers, source selections, compensation requirements, or writing preferences. The included defaults are safe templates: discovery and automatic application are disabled until a deployment opts in.
 
+Start with [Getting started](docs/getting-started.md). It separates a five-minute local simulation from authenticated and production deployment, and lists every private file a new operator must create.
+
 ## Capabilities
 
 - profile-bound bearer credentials and isolated applicant data
@@ -39,7 +41,7 @@ An optional GitHub Actions definition is available at `docs/ci.example.yml`. Cop
 Requirements: Node.js 22 or newer.
 
 ```bash
-npm install
+npm ci
 cp .env.example .env
 cp config/profiles.example.json config/profiles.json
 npm run check
@@ -101,7 +103,7 @@ node bin/jobctl.js inbox
 
 ## Production browser worker
 
-Set strong, unique tokens in `.env`, keep the API on loopback or a trusted private network, and use the same worker secret on both sides:
+Use the production checklist in [Getting started](docs/getting-started.md) before enabling the browser worker. It covers profile-bound API tokens, vault keys, document paths, allowed domains, and the shared worker secret.
 
 ```bash
 docker compose up --build -d
@@ -134,4 +136,4 @@ See [OpenClaw integration](docs/openclaw.md) for the isolation model.
 - Credentials, documents, source preferences, and application state stay out of Git.
 - Live submission is opt-in; repository defaults remain simulation-only and approval-gated.
 
-No license is included yet. Keep the GitHub repository private until a license, contribution policy, and a final history scan are chosen for public release.
+See [Contributing](CONTRIBUTING.md) before sharing changes and [Security](SECURITY.md) before reporting a vulnerability. No license is included yet; keep the repository private until a license and public-release policy are chosen.

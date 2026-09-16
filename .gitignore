@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 data/
+private-documents/
 config/local.json
 config/profiles.json
 config/*.local.json

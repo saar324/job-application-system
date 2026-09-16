@@ -15,6 +15,8 @@ node scripts/bootstrap-openclaw.js \
   --profile applicant-one \
   --workspace /private/openclaw/workspaces/applicant-one \
   --tokens-file /private/job-application/tokens.json \
+  --sources-file /private/job-application/sources.json \
+  --writing-style-file /private/job-application/writing-style.json \
   --server-url http://127.0.0.1:4310
 ```
 
@@ -25,9 +27,12 @@ The script:
 3. enables direct-message inline buttons for its Telegram account;
 4. rotates only that applicant's API credential;
 5. writes the token into the installed skill with mode `0600`;
-6. never prints the token.
+6. restores private source and writing-style references after a forced skill refresh;
+7. never prints the token.
 
 Run it once per applicant with different IDs and workspaces. Never reuse a token between profiles.
+
+The two private reference flags are optional. When omitted during an upgrade, the script preserves existing installed `sources.json` and `writing-style.json` files in memory and restores them after installation. Keeping authoritative copies outside the workspace is still recommended for backup and disaster recovery.
 
 ## Confirmation flow
 

@@ -14,8 +14,11 @@ function domainMatches(hostname, allowed) {
 }
 
 export function createUrlPolicy(env = process.env, lookup = dnsLookup) {
-  const allowedDomains = (env.WORKER_ALLOWED_DOMAINS ?? DEFAULT_ALLOWED.join(","))
-    .split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+  const configuredDomains = env.WORKER_ALLOWED_DOMAINS?.trim();
+  const allowedDomains = [...new Set([
+    ...DEFAULT_ALLOWED,
+    ...(configuredDomains ?? "").split(",")
+  ].map((item) => item.trim().toLowerCase()).filter(Boolean))];
   const allowHttp = env.WORKER_ALLOW_HTTP === "true";
 
   function parse(rawUrl) {
@@ -37,11 +40,10 @@ export function createUrlPolicy(env = process.env, lookup = dnsLookup) {
     return url;
   }
 
-  function assertAllowed(rawUrl, requestDomains = []) {
+  function assertAllowed(rawUrl) {
     const url = assertNetworkSafe(rawUrl);
     const hostname = url.hostname.toLowerCase();
-    const scoped = [...allowedDomains, ...requestDomains.map((item) => item.toLowerCase())];
-    if (!scoped.some((allowed) => domainMatches(hostname, allowed))) {
+    if (!allowedDomains.some((allowed) => domainMatches(hostname, allowed))) {
       throw new Error(`application domain is not allowed: ${hostname}`);
     }
     return url;
