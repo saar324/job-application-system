@@ -2,6 +2,8 @@
 
 Choose the smallest setup that matches your goal.
 
+This is a standalone application. You do not need the repository owner's surrounding automation, an AI assistant, or a messaging bot. The first two setups use only Git, Node.js, and the included command-line client. OpenClaw, Codex, Telegram, and other chat clients are optional integrations that can be added later.
+
 | Goal | Setup |
 | --- | --- |
 | Inspect the system safely | Local simulation with authentication disabled |
@@ -77,3 +79,9 @@ Continue with [Production deployment](deployment.md). For system design and secu
 - personalized `sources.json` and `writing-style.json`
 
 Run `npm run privacy:check` before every push.
+
+## Optional clients
+
+The built-in `node bin/jobctl.js` client covers health, profile setup, discovery, applications, confirmations, and status tracking. Any other client can use the same bearer-authenticated HTTP API; identity is always derived from its profile-bound token.
+
+If an operator already has OpenClaw, follow [OpenClaw integration](openclaw.md). That integration connects the existing runtime to this server—it is not part of the core deployment and is never required to run the job application system.

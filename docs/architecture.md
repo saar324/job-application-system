@@ -1,6 +1,6 @@
 # Architecture
 
-The API is the durable system of record. Codex, OpenClaw, and other chat runtimes are replaceable clients that use profile-bound credentials.
+The API is the durable system of record. The included `jobctl` command-line program is the default client. Codex, OpenClaw, messaging bots, and other chat runtimes are optional, replaceable clients that use the same profile-bound credentials; none is part of the server's runtime dependency chain.
 
 ```text
 applicant client A ---- token for profile A ----+

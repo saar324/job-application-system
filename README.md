@@ -2,6 +2,8 @@
 
 A configurable, self-hosted system for job discovery, application tracking, browser-assisted submission, confirmations, and auditable receipts. Multiple applicants can use one deployment without sharing profiles, credentials, or application history.
 
+The repository is standalone. It does not require a broader personal operating system, an AI assistant, a chat bot, Telegram, OpenClaw, or Codex. Node.js and the built-in `jobctl` client are enough for local and authenticated use; Docker Compose or the included systemd units add browser-assisted production submission. Assistant integrations are optional clients of the same HTTP API.
+
 This repository intentionally contains no real applicant profiles, resumes, application records, credentials, preferred employers, source selections, compensation requirements, or writing preferences. The included defaults are safe templates: discovery and automatic application are disabled until a deployment opts in.
 
 Start with [Getting started](docs/getting-started.md). It separates a five-minute local simulation from authenticated and production deployment, and lists every private file a new operator must create.
@@ -16,7 +18,7 @@ Start with [Getting started](docs/getting-started.md). It separates a five-minut
 - manual-review handoff for CAPTCHAs, legal attestations, unknown answers, and unsupported forms
 - encrypted, profile-scoped, domain-bound site credentials
 - verified-submission receipts instead of assuming a button click succeeded
-- a reusable Codex/OpenClaw skill and a profile-aware command-line client
+- a profile-aware command-line client and optional Codex/OpenClaw skill
 - simulation mode and browser fixtures for safe development
 
 ## Private configuration boundary
@@ -113,9 +115,9 @@ The API sends the worker only the current application and matching profile. The 
 
 Systemd templates and the deployment script use dedicated `jobapp-api` and `jobapply-worker` accounts. See [deployment](docs/deployment.md), [architecture](docs/architecture.md), [configuration](docs/configuration.md), and [discovery adapters](docs/discovery.md).
 
-## Codex and OpenClaw
+## Optional: Codex and OpenClaw
 
-The reusable skill lives in `skills/job-application`. Install one copy per applicant and give each installation a different profile-bound token. `scripts/bootstrap-openclaw.js` can provision an OpenClaw agent without printing its generated credential.
+Neither integration is required. Without an assistant, use `node bin/jobctl.js` or call the HTTP API directly. The reusable skill lives in `skills/job-application` for operators who already use a compatible assistant runtime. Install one copy per applicant and give each installation a different profile-bound token. `scripts/bootstrap-openclaw.js` can connect an existing OpenClaw installation without printing its generated credential.
 
 ```bash
 node scripts/bootstrap-openclaw.js \
