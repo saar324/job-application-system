@@ -18,7 +18,8 @@ public job APIs --------------------------------------|-- discovery + scoring
 
 ## Agent contract
 
-- Agents discover or add opportunities, request applications, and observe durable state instead of relying on one long-running chat turn.
+- Agents operate in recurring cycles: recover existing work, handle confirmations, discover or add opportunities, request applications, observe bounded progress, and yield until the next cycle.
+- The agent runtime owns the wake schedule, bounded polling, backoff, and user notification; the server does not require one permanently running chat turn.
 - Every request is authenticated to one profile; an agent cannot select another applicant in its payload.
 - Queue delivery and application creation are idempotent so retries do not duplicate submissions.
 - Unknown facts, legal attestations, CAPTCHAs, sensitive answers, and final approval become durable confirmation items for the person.

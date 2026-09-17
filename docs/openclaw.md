@@ -38,6 +38,10 @@ Run it once per applicant with different IDs and workspaces. Never reuse a token
 
 The two private reference flags are optional. When omitted during an upgrade, the script preserves existing installed `sources.json` and `writing-style.json` files in memory and restores them after installation. Keeping authoritative copies outside the workspace is still recommended for backup and disaster recovery.
 
+## Agent loop
+
+Configure the OpenClaw agent to run continuously or wake on a recurring schedule. Each invocation is one bounded cycle: recover applications and confirmations first, discover and request new eligible work second, observe newly queued work for a limited period, and then yield. Unresolved state remains on the server for the next invocation. Do not depend on one permanent conversation or repeatedly notify the owner about an unchanged inbox.
+
 ## Confirmation flow
 
 OpenClaw receives durable confirmation items from the server. Telegram buttons carry opaque callback data; the client passes that value back to the server. Typed answers are required when a question has no safe predefined choice. Final approval shows the complete redacted field preview before submission.

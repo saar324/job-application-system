@@ -23,6 +23,19 @@ Start with [Getting started](docs/getting-started.md). It separates a five-minut
 - an agent-oriented HTTP API, reusable skill, and profile-aware reference CLI
 - simulation mode and browser fixtures for safe development
 
+## Primary operating model
+
+The normal deployment is driven by an agent that runs continuously or wakes on a schedule. Each cycle:
+
+1. checks profile readiness and unfinished applications;
+2. reads the confirmation inbox and surfaces new human decisions;
+3. scans configured sources and evaluates evidence-backed matches;
+4. requests eligible applications within policy and daily limits;
+5. observes queued browser work, records verified receipts, and leaves blocked work durable;
+6. sleeps or exits until the next scheduled cycle.
+
+The agent runtime owns scheduling, backoff, and notifications. The server owns durable state, deduplication, policy, identity, confirmations, and receipts. A cycle can stop at any point and a later cycle—or a replacement agent runtime—can resume without relying on chat history or an always-running process.
+
 ## Private configuration boundary
 
 Keep deployment-specific material outside Git or in the ignored paths shown below.

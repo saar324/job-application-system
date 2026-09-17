@@ -19,6 +19,16 @@ $JOBCLI application-log
 $JOBCLI inbox
 ```
 
+For each recurring cycle, use this order:
+
+1. `health` and `profile`;
+2. `applications` and `inbox` to recover durable work;
+3. `scan` and evidence-based opportunity evaluation;
+4. `add`/`apply` for eligible work;
+5. bounded `applications`/`inbox` observation before yielding.
+
+The external agent runtime schedules the next cycle. Do not implement an unbounded shell polling loop, overlap cycles for one profile, or repeat a mutation after an ambiguous timeout.
+
 `application-log` joins each durable application with its opportunity. It reports the company, role, URLs, status, timestamps, receipt, and structured questions with answers. Credential-like values are redacted.
 
 After the owner or agent verifies a submission in an external browser, record the result and any form answers:

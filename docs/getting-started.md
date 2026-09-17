@@ -72,6 +72,12 @@ Before enabling Chromium:
 
 Continue with [Production deployment](deployment.md). For system design and security boundaries, read [Architecture](architecture.md) and [Configuration](configuration.md).
 
+## 5. Run the agent loop
+
+Configure the chosen agent runtime to run continuously or wake on a schedule. A cycle should first recover existing work by reading applications and confirmations, then scan configured sources, evaluate and request eligible applications, observe queued work for a bounded period, and leave unresolved items durable for the next cycle.
+
+Do not implement reliability as one permanent chat turn or a shell loop that retries blindly. The runtime should use bounded polling, back off after infrastructure failures, avoid overlapping cycles for the same profile, and notify the person only when a new decision, failure, or verified submission needs attention. The server's deduplication and durable queues make separate scheduled invocations safe.
+
 ## What never belongs in Git
 
 - `.env` and token maps
@@ -83,6 +89,6 @@ Run `npm run privacy:check` before every push.
 
 ## Connect an agent
 
-The built-in `node bin/jobctl.js` client defines the reference operations for health, profile setup, discovery, applications, confirmations, and status tracking. It is useful for setup, testing, and manual recovery. An agent should use the same bearer-authenticated operations through the reusable skill, by invoking `jobctl`, or by calling the HTTP API directly. Identity is always derived from its profile-bound token.
+The built-in `node bin/jobctl.js` client defines the reference operations for health, profile setup, discovery, applications, confirmations, and status tracking. It is useful for setup, testing, and manual recovery. A recurring agent should use the same bearer-authenticated operations through the reusable skill, by invoking `jobctl`, or by calling the HTTP API directly. Identity is always derived from its profile-bound token.
 
 The repository exposes the skill at `.agents/skills/job-application`. If an operator uses OpenClaw, follow [OpenClaw integration](openclaw.md). OpenClaw is one adapter for the agent-first system, not a dependency of the core server.
