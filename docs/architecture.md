@@ -1,11 +1,11 @@
 # Architecture
 
-The API is the durable system of record. The included `jobctl` command-line program is the default client. Codex, OpenClaw, messaging bots, and other chat runtimes are optional, replaceable clients that use the same profile-bound credentials; none is part of the server's runtime dependency chain.
+The API is the durable system of record and agents are its primary clients. Codex, OpenClaw, custom agents, and other runtimes are replaceable adapters that use the same profile-bound credentials. The included `jobctl` command-line program is the reference transport, test client, and manual recovery tool; it is not the production orchestrator.
 
 ```text
-applicant client A ---- token for profile A ----+
+applicant agent A ----- token for profile A ----+
                                                 |
-applicant client B ---- token for profile B ----+--> Job API
+applicant agent B ----- token for profile B ----+--> Job API
                                                       |-- profile store
 public job APIs --------------------------------------|-- discovery + scoring
                                                       |-- policy + daily caps
@@ -15,6 +15,16 @@ public job APIs --------------------------------------|-- discovery + scoring
                                                       |
                                                       +--> isolated browser worker
 ```
+
+## Agent contract
+
+- Agents operate in recurring cycles: recover existing work, handle confirmations, discover or add opportunities, request applications, observe bounded progress, and yield until the next cycle.
+- The agent runtime owns the wake schedule, bounded polling, backoff, and user notification; the server does not require one permanently running chat turn.
+- Every request is authenticated to one profile; an agent cannot select another applicant in its payload.
+- Queue delivery and application creation are idempotent so retries do not duplicate submissions.
+- Unknown facts, legal attestations, CAPTCHAs, sensitive answers, and final approval become durable confirmation items for the person.
+- Agents resume the same application after confirmation and report only verified submission receipts.
+- Agent runtimes never need direct access to the state database, credential vault, or unrestricted document storage.
 
 ## Trust boundaries
 

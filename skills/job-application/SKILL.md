@@ -1,12 +1,24 @@
 ---
 name: job-application
-description: Search, record, review, and submit full-time or freelance opportunities through the private Job Application Server. Use when the user asks to find work, apply, inspect application status, or answer a pending application question.
+description: Run recurring job-discovery and application cycles, submit full-time or freelance opportunities, inspect durable status, and resolve pending applicant questions through the Job Application Server. Use for scheduled job-search loops and direct application requests.
 metadata: {"openclaw":{"emoji":"💼","requires":{"bins":["node"]}}}
 ---
 
 # Job Application
 
 Use the server as the source of truth for opportunities, applications, confirmations, and submission receipts. Run `node {baseDir}/scripts/jobctl.js` for every operation. The installed skill contains its own profile-bound credential; never print or read that credential into the conversation.
+
+## Recurring cycle
+
+Treat each scheduled or continuous invocation as one bounded cycle, not as a permanent chat turn:
+
+1. Check `health` and `profile`, then inspect `applications` and `inbox` before discovering new work.
+2. Surface new confirmations or failures that need the owner. Do not repeat notifications for unchanged items.
+3. Scan configured sources, evaluate results from listing and profile evidence, and request eligible applications within policy limits.
+4. Observe newly queued applications for a bounded period. Never repeat an apply request because polling ended or a transport call timed out.
+5. Report new verified submissions and actionable blocks, then yield. Leave queued, blocked, and waiting-confirmation work on the server for the next cycle.
+
+Do not overlap cycles for the same profile. Back off after infrastructure failures, but do not retry an uncertain final submission. The hosting agent runtime owns scheduling and wakeups; the server owns durable resume, deduplication, and application state.
 
 ## Workflow
 

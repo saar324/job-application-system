@@ -2,7 +2,7 @@
   "name": "job-application-system",
   "version": "0.1.0",
   "private": true,
-  "description": "Configurable, self-hosted, multi-profile job discovery and application orchestrator",
+  "description": "Agent-first, self-hosted, multi-profile job discovery and application orchestrator",
   "type": "module",
   "engines": {
     "node": ">=22"

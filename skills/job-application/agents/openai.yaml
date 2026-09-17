@@ -1,4 +1,4 @@
 interface:
   display_name: "Job Application"
-  short_description: "Find and submit configured job opportunities"
-  default_prompt: "Use $job-application to review matches, submit eligible applications, and ask me only for unresolved confirmations."
+  short_description: "Run recurring job discovery and application cycles"
+  default_prompt: "Use $job-application to run one bounded job-search cycle, resume durable work, submit eligible applications, and surface only new decisions that need me."
