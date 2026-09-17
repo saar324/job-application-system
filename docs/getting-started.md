@@ -2,13 +2,14 @@
 
 Choose the smallest setup that matches your goal.
 
-This is a standalone application. You do not need the repository owner's surrounding automation, an AI assistant, or a messaging bot. The first two setups use only Git, Node.js, and the included command-line client. OpenClaw, Codex, Telegram, and other chat clients are optional integrations that can be added later.
+This is an agents-first, runtime-agnostic application. Production use is intended to be driven by an agent, but you do not need the repository owner's surrounding automation or any specific bot platform. The setup flow uses the included command-line client as a deterministic reference and diagnostic tool; connect Codex, OpenClaw, or another agent after the server is verified.
 
 | Goal | Setup |
 | --- | --- |
 | Inspect the system safely | Local simulation with authentication disabled |
-| Use multiple private profiles without browser submission | Authenticated simulation |
+| Test agent identity and multiple private profiles | Authenticated simulation |
 | Submit through Chromium | Docker Compose or systemd production deployment |
+| Connect an agent runtime | Profile-bound token plus the skill or HTTP API |
 
 ## 1. Local simulation
 
@@ -80,8 +81,8 @@ Continue with [Production deployment](deployment.md). For system design and secu
 
 Run `npm run privacy:check` before every push.
 
-## Optional clients
+## Connect an agent
 
-The built-in `node bin/jobctl.js` client covers health, profile setup, discovery, applications, confirmations, and status tracking. Any other client can use the same bearer-authenticated HTTP API; identity is always derived from its profile-bound token.
+The built-in `node bin/jobctl.js` client defines the reference operations for health, profile setup, discovery, applications, confirmations, and status tracking. It is useful for setup, testing, and manual recovery. An agent should use the same bearer-authenticated operations through the reusable skill, by invoking `jobctl`, or by calling the HTTP API directly. Identity is always derived from its profile-bound token.
 
-If an operator already has OpenClaw, follow [OpenClaw integration](openclaw.md). That integration connects the existing runtime to this server—it is not part of the core deployment and is never required to run the job application system.
+The repository exposes the skill at `.agents/skills/job-application`. If an operator uses OpenClaw, follow [OpenClaw integration](openclaw.md). OpenClaw is one adapter for the agent-first system, not a dependency of the core server.

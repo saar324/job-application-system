@@ -1,6 +1,6 @@
 # OpenClaw integration
 
-This is an optional integration, not a deployment prerequisite. The job application server works fully through its built-in `jobctl` client without OpenClaw, Telegram, Codex, or any wider personal automation system.
+This is one agent-runtime integration, not a deployment prerequisite. The system is agents-first, but it is not OpenClaw-specific: another agent can use the reusable skill, invoke `jobctl`, or call the same HTTP API without reproducing any wider personal automation system.
 
 Use this guide only if you already operate OpenClaw. The bootstrap script connects an agent to the job application API; it does not install OpenClaw, create a messaging bot, or configure a messaging-provider credential. Use one OpenClaw agent, workspace, and profile-bound API token per applicant.
 
@@ -48,4 +48,4 @@ Generated site credentials go directly to the encrypted profile vault and are ne
 
 The repository exposes the same skill at `.agents/skills/job-application`. Any compatible client can use it when `JOB_SERVER_TOKEN` is set to the intended profile-bound credential. Identity always comes from the credential, never from a CLI flag or request body.
 
-For a client with no skill support, call `node bin/jobctl.js` as a subprocess or integrate directly with the HTTP API. This keeps the server usable without reproducing another operator's assistant, bot, or workspace setup.
+For an agent runtime with no skill support, call `node bin/jobctl.js` as a subprocess or integrate directly with the HTTP API. The command-line client is also the manual diagnostic and recovery path; the normal production operator remains an agent.

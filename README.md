@@ -1,8 +1,10 @@
-# Job Application System
+# Agent-First Job Application System
 
-A configurable, self-hosted system for job discovery, application tracking, browser-assisted submission, confirmations, and auditable receipts. Multiple applicants can use one deployment without sharing profiles, credentials, or application history.
+An agents-first, self-hosted system for job discovery, application tracking, browser-assisted submission, confirmations, and auditable receipts. Multiple applicants can use one deployment without sharing profiles, credentials, or application history.
 
-The repository is standalone. It does not require a broader personal operating system, an AI assistant, a chat bot, Telegram, OpenClaw, or Codex. Node.js and the built-in `jobctl` client are enough for local and authenticated use; Docker Compose or the included systemd units add browser-assisted production submission. Assistant integrations are optional clients of the same HTTP API.
+Agents are the primary operators. The API exposes durable, machine-readable work queues, idempotent actions, profile-bound identity, confirmation items, and verified receipts so an agent can discover, evaluate, apply, pause for a person, and resume safely. People remain the authority for unknown facts, legal attestations, sensitive answers, and final approval.
+
+Agent-first does not mean tied to a particular agent runtime or to a broader personal operating system. Codex, OpenClaw, a custom agent, or another compatible runtime can drive the same HTTP API. The included `jobctl` program is the reference transport and an operator/debugging fallback—not the intended production orchestrator.
 
 This repository intentionally contains no real applicant profiles, resumes, application records, credentials, preferred employers, source selections, compensation requirements, or writing preferences. The included defaults are safe templates: discovery and automatic application are disabled until a deployment opts in.
 
@@ -18,7 +20,7 @@ Start with [Getting started](docs/getting-started.md). It separates a five-minut
 - manual-review handoff for CAPTCHAs, legal attestations, unknown answers, and unsupported forms
 - encrypted, profile-scoped, domain-bound site credentials
 - verified-submission receipts instead of assuming a button click succeeded
-- a profile-aware command-line client and optional Codex/OpenClaw skill
+- an agent-oriented HTTP API, reusable skill, and profile-aware reference CLI
 - simulation mode and browser fixtures for safe development
 
 ## Private configuration boundary
@@ -50,7 +52,7 @@ npm run check
 AUTH_DISABLED=true npm start
 ```
 
-The API listens on `127.0.0.1:4310`. In another shell:
+The API listens on `127.0.0.1:4310`. Use the reference client from another shell to verify the deployment:
 
 ```bash
 node bin/jobctl.js health
@@ -115,9 +117,11 @@ The API sends the worker only the current application and matching profile. The 
 
 Systemd templates and the deployment script use dedicated `jobapp-api` and `jobapply-worker` accounts. See [deployment](docs/deployment.md), [architecture](docs/architecture.md), [configuration](docs/configuration.md), and [discovery adapters](docs/discovery.md).
 
-## Optional: Codex and OpenClaw
+## Agent clients
 
-Neither integration is required. Without an assistant, use `node bin/jobctl.js` or call the HTTP API directly. The reusable skill lives in `skills/job-application` for operators who already use a compatible assistant runtime. Install one copy per applicant and give each installation a different profile-bound token. `scripts/bootstrap-openclaw.js` can connect an existing OpenClaw installation without printing its generated credential.
+The system is agent-runtime agnostic. The reusable skill lives in `skills/job-application` and is exposed at `.agents/skills/job-application` for compatible agents. A custom agent can call the same bearer-authenticated API or invoke `jobctl` as a subprocess. Install one skill and profile-bound token per applicant.
+
+OpenClaw is one supported runtime, not a prerequisite. `scripts/bootstrap-openclaw.js` can connect an existing installation without printing its generated credential:
 
 ```bash
 node scripts/bootstrap-openclaw.js \
