@@ -11,7 +11,7 @@ const SUCCESS_TEXT = /thank you|application (?:has been |was )?submitted|applica
 const CHALLENGE_TEXT = /captcha|verify you are human|security check|unusual traffic|cloudflare/i;
 const VERIFICATION_FIELD = /\b(otp|one.?time|verification code|security code|authenticator|two.?factor|2fa|mfa|passkey)\b/i;
 
-async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSubmit, timeoutMs = 10_000) {
+export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSubmit, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const currentUrl = page.url();
@@ -273,7 +273,7 @@ async function findAction(page) {
   return null;
 }
 
-async function receipt(page, artifactsDirectory, applicationId) {
+export async function captureReceipt(page, artifactsDirectory, applicationId) {
   await mkdir(artifactsDirectory, { recursive: true });
   const screenshot = path.join(artifactsDirectory, `${applicationId}.png`);
   await page.screenshot({ path: screenshot, fullPage: true });
@@ -400,7 +400,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
         requirements: [{ kind: "submission_unverified", action: "manual_review", message: "Check whether the application was received before retrying" }]
       };
     }
-    return { status: "submitted", receipt: await receipt(page, artifactsDirectory, application.id) };
+    return { status: "submitted", receipt: await captureReceipt(page, artifactsDirectory, application.id) };
   }
   return {
     status: "needs_human", message: "The application exceeded the supported number of form steps",

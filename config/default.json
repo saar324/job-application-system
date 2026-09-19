@@ -2,10 +2,14 @@
   "defaultMode": "full_time",
   "execution": {
     "adapter": "simulation",
-    "maxApplicationsPerDay": 10
+    "maxApplicationsPerDay": 10,
+    "concurrency": 2,
+    "claimLeaseMs": 60000
   },
   "discovery": {
     "limitPerSource": 50,
+    "scorerVersion": "2",
+    "semantic": { "maxCandidates": 20 },
     "sourceOptions": {
       "ashby": { "boards": [] },
       "greenhouse": { "boards": [] },

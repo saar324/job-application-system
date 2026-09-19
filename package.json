@@ -1,23 +1,30 @@
 {
   "name": "job-application-system",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Agent-first, self-hosted, multi-profile job discovery and application orchestrator",
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.5"
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/index.js",
     "worker": "node --env-file-if-exists=.env worker/server.js",
     "openclaw:bootstrap": "node scripts/bootstrap-openclaw.js",
+    "state:migrate": "node scripts/migrate-state-to-sqlite.js",
+    "eval:ranking": "node scripts/evaluate-ranking.js",
+    "eval:adaptive": "node scripts/evaluate-adaptive.js",
     "dev": "node --env-file-if-exists=.env --watch src/index.js",
     "test": "node --test",
     "privacy:check": "node scripts/check-repository-privacy.js",
-    "check:syntax": "node --check src/index.js && node --check src/service.js && node --check src/documents.js && node --check src/credential-vault.js && node --check src/discovery/scoring.js && node --check src/discovery/sources/himalayas.js && node --check worker/server.js && node --check worker/execution.js && node --check worker/document-policy.js && node --check worker/receipts.js && node --check bin/jobctl.js && node --check skills/job-application/scripts/jobctl.js && node --check scripts/bootstrap-openclaw.js && node --check scripts/check-repository-privacy.js && node --check scripts/init-vault-keys.js && node --check scripts/migrate-profile-settings.js && node --check scripts/split-production-env.js && node --check scripts/update-production-env.js && bash -n scripts/deploy-systemd.sh docker-entrypoint.sh worker/docker-entrypoint.sh",
+    "check:syntax": "find src worker scripts bin skills/job-application/scripts -name '*.js' -type f -print0 | xargs -0 -n1 node --check && bash -n scripts/deploy-systemd.sh docker-entrypoint.sh worker/docker-entrypoint.sh",
     "check": "npm run check:syntax && node --test && npm run privacy:check"
   },
   "dependencies": {
-    "playwright": "^1.63.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@opentelemetry/api": "^1.9.1",
+    "playwright": "^1.63.0",
+    "zod": "^4.6.5"
   }
 }

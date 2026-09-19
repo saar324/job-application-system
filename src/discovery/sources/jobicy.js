@@ -8,8 +8,7 @@ export const jobicy = {
     const preferred = groups.primary.length
       ? groups.primary
       : profile?.preferences?.jobTitles ?? [];
-    const defaults = ["AI engineer", "automation engineer", "full stack", "backend", "frontend", "GIS"];
-    const primary = [...new Map([...preferred, ...defaults]
+    const primary = [...new Map(preferred
       .filter((value) => typeof value === "string" && value.trim())
       .map((value) => [value.trim().toLowerCase(), value.trim()])).values()].slice(0, 8);
     const secondary = groups.secondary
@@ -17,6 +16,7 @@ export const jobicy = {
       .map((value) => value.trim()).slice(0, 4);
     const tags = [...new Map([...primary, ...secondary]
       .map((value) => [value.toLowerCase(), value])).values()];
+    if (!tags.length) return [];
     const count = Math.max(1, Math.ceil(Math.min(limit, 200) / tags.length));
     const rows = [];
     for (const tag of tags) {
@@ -24,7 +24,7 @@ export const jobicy = {
       url.searchParams.set("count", String(Math.min(count, 200)));
       url.searchParams.set("tag", tag);
       const response = await fetchImpl(url, {
-        headers: { "user-agent": "job-application-server/0.2 (+private personal use)" },
+        headers: { "user-agent": "job-application-server/0.2 (+self-hosted)" },
         signal: AbortSignal.timeout(20_000)
       });
       if (!response.ok) throw new Error(`Jobicy returned HTTP ${response.status}`);

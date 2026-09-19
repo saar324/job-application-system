@@ -15,6 +15,7 @@ const updates = {
   PORT: "4310",
   JOB_SERVER_CONFIG: "/etc/job-application/config.json",
   JOB_SERVER_DATA: "/var/lib/job-application/state.json",
+  JOB_SERVER_DATABASE: "/var/lib/job-application/state.sqlite",
   JOB_SERVER_PROFILES_FILE: "/var/lib/job-application/profiles.json",
   JOB_SERVER_TOKENS_FILE: "/var/lib/job-application/tokens.json",
   AUTH_DISABLED: "false",

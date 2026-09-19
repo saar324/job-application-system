@@ -141,6 +141,48 @@ test("the same application URL is deduplicated across direct and feed sources", 
   assert.equal(service.list("opportunities", identity.profileId).length, 1);
 });
 
+test("direct user intent upgrades an existing low-scoring discovered opportunity", async () => {
+  const service = await fixture();
+  const discovered = await opportunity(service, {
+    applyUrl: "https://careers.example.test/jobs/one?utm_source=feed", source: "feed", score: 20
+  });
+  const direct = await service.directApplication({ url: "https://careers.example.test/jobs/one" }, identity);
+  assert.equal(direct.opportunity.id, discovered.id);
+  assert.equal(direct.opportunity.userRequested, true);
+  assert.equal(direct.opportunity.score, 100);
+  assert.equal(direct.application.status, "queued");
+  await service.waitForIdle();
+});
+
+test("different profiles execute independently under the global concurrency limit", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  const releases = new Map();
+  const starts = [];
+  let bothStartedResolve;
+  const bothStarted = new Promise((resolve) => { bothStartedResolve = resolve; });
+  const adapter = { name: "parallel", async submit({ application }) {
+    starts.push(application.profileId);
+    if (new Set(starts).size === 2) bothStartedResolve();
+    await new Promise((resolve) => releases.set(application.profileId, resolve));
+    return { submittedAt: new Date().toISOString(), finalUrl: "https://example.test/done" };
+  } };
+  const localConfig = structuredClone(config); localConfig.execution = { concurrency: 2 };
+  const service = new ApplicationService({ store, config: localConfig, adapter });
+  const secondIdentity = { actorId: "bot-two", profileId: "person-two" };
+  const first = await opportunity(service, { applyUrl: "https://example.test/one" });
+  const second = await service.addOpportunity({ title: "Engineer", company: "Example",
+    applyUrl: "https://example.test/two", score: 90 }, secondIdentity);
+  await service.requestApplication(first.id, {}, identity);
+  await service.requestApplication(second.id, {}, secondIdentity);
+  await Promise.race([bothStarted, new Promise((_, reject) => setTimeout(
+    () => reject(new Error("profile lanes did not start concurrently")), 1_000
+  ))]);
+  assert.deepEqual(new Set(starts), new Set(["person-one", "person-two"]));
+  releases.get("person-one")(); releases.get("person-two")();
+  await service.waitForIdle();
+});
+
 test("worker-discovered questions create resumable confirmations", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();
@@ -328,8 +370,12 @@ test("recovery resumes queued work and sends uncertain submissions to review", a
     );
     state.applications.push(
       { id: "app-queued", opportunityId: "op-queued", profileId: "person-one", status: "queued", createdAt: new Date().toISOString() },
-      { id: "app-uncertain", opportunityId: "op-uncertain", profileId: "person-one", status: "submitting", createdAt: new Date().toISOString() }
+      { id: "app-uncertain", opportunityId: "op-uncertain", profileId: "person-one", status: "submitting",
+        claim: { attemptId: "attempt-uncertain", executionStartedAt: new Date().toISOString() },
+        createdAt: new Date().toISOString() }
     );
+    state.attempts.push({ id: "attempt-uncertain", applicationId: "app-uncertain", profileId: "person-one",
+      status: "submitting" });
   });
   const service = new ApplicationService({ store, config, adapter });
   await service.recover();
@@ -337,6 +383,7 @@ test("recovery resumes queued work and sends uncertain submissions to review", a
   assert.equal(attempts, 1);
   assert.equal(service.list("applications", identity.profileId).find((item) => item.id === "app-queued").status, "submitted");
   assert.equal(service.list("applications", identity.profileId).find((item) => item.id === "app-uncertain").status, "waiting_confirmation");
+  assert.equal(store.snapshot().attempts.find((item) => item.id === "attempt-uncertain").status, "uncertain");
   assert.equal(service.list("confirmations", identity.profileId).filter((item) => item.kind === "submission_recovery").length, 1);
 });
 
@@ -353,6 +400,33 @@ test("duplicate queue delivery claims an application only once", async () => {
   service.enqueue(application.id);
   await service.waitForIdle();
   assert.equal(attempts, 1);
+});
+
+test("a verified receipt survives a transient persistence failure without resubmission", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
+  const inner = await new JsonStore(path.join(directory, "state.json")).init();
+  let failReceiptOnce = true;
+  const store = {
+    snapshot: () => inner.snapshot(),
+    mutate: (fn) => inner.mutate(async (state) => {
+      const result = await fn(state);
+      if (failReceiptOnce && state.applications.some((item) => item.status === "submitted")) {
+        failReceiptOnce = false;
+        throw new Error("transient receipt persistence failure");
+      }
+      return result;
+    })
+  };
+  let submissions = 0;
+  const service = new ApplicationService({ store, config, adapter: { name: "capture", async submit() {
+    submissions += 1;
+    return { submittedAt: new Date().toISOString(), finalUrl: "https://example.test/done" };
+  } } });
+  const job = await opportunity(service);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  assert.equal(submissions, 1);
+  assert.equal(service.list("applications", identity.profileId)[0].status, "submitted");
 });
 
 test("a direct HTTPS link creates one deduplicated durable application", async () => {
@@ -536,7 +610,7 @@ test("a verified browser submission updates a skipped application and stores saf
     title: "Correct Role",
     questionsAndAnswers: [{
       field: "work_authorization",
-      question: "Are you authorized to work in Portugal?",
+      question: "Are you authorized to work in Canada?",
       answer: "Yes"
     }, {
       field: "account_password",

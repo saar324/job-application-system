@@ -4,14 +4,15 @@ import { createHttpServer } from "./http.js";
 import { SimulationAdapter } from "./adapters/simulation.js";
 import { WebhookAdapter } from "./adapters/webhook.js";
 import { ApplicationService } from "./service.js";
-import { JsonStore } from "./store.js";
+import { initializeStore } from "./storage.js";
 import { ProfileStore } from "./profile-store.js";
 import { DiscoveryService } from "./discovery/service.js";
 import { documentStagerFromEnv } from "./documents.js";
 import { credentialVaultFromEnv } from "./credential-vault.js";
+import { semanticEnricherFromEnv } from "./discovery/enrichment.js";
 
 const config = await loadConfig();
-const store = await new JsonStore(process.env.JOB_SERVER_DATA ?? "./data/state.json").init();
+const store = await initializeStore();
 const profiles = await new ProfileStore(
   process.env.JOB_SERVER_PROFILES_FILE ?? "./config/profiles.json",
   { allowMissing: true }
@@ -23,7 +24,9 @@ const documentStager = config.execution.adapter === "webhook" ? documentStagerFr
 const credentialVault = await credentialVaultFromEnv();
 const service = new ApplicationService({ store, config, adapter, profiles, documentStager, credentialVault });
 await service.recover();
-const discovery = new DiscoveryService({ applicationService: service, profiles, config });
+const discovery = new DiscoveryService({
+  applicationService: service, profiles, config, enricher: semanticEnricherFromEnv()
+});
 const server = createHttpServer({ service, discovery, profiles, authenticate: createAuthenticator(), config });
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? 4310);

@@ -7,8 +7,8 @@ Prevents automatic applications to roles that conflict with the active profileâ€
 ### Requirement: Restricted remote locations are enforced
 The scorer SHALL distinguish globally remote jobs from remote jobs restricted to named locations and SHALL exclude restricted jobs that do not match the profileâ€™s allowed work locations.
 
-#### Scenario: US-only remote role for EU profile
-- **WHEN** a remote listing is restricted to the United States and the profile permits Portugal or Europe
+#### Scenario: US-only remote role for a profile in another country
+- **WHEN** a remote listing is restricted to the United States and the profile permits Canada
 - **THEN** the opportunity is hard-excluded and cannot auto-apply
 
 #### Scenario: Worldwide remote role

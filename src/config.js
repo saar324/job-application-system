@@ -33,6 +33,24 @@ export async function loadConfig(env = process.env) {
   if (!["simulation", "webhook"].includes(config.execution.adapter)) {
     throw new Error(`unsupported execution adapter: ${config.execution.adapter}`);
   }
+  if (!Number.isInteger(config.execution.concurrency ?? 1) || (config.execution.concurrency ?? 1) < 1
+    || (config.execution.concurrency ?? 1) > 32) {
+    throw new Error("execution.concurrency must be an integer from 1 to 32");
+  }
+  if (!Number.isInteger(config.execution.claimLeaseMs ?? 60_000) || (config.execution.claimLeaseMs ?? 60_000) < 1_000) {
+    throw new Error("execution.claimLeaseMs must be an integer of at least 1000");
+  }
+  if (!["1", "2"].includes(String(config.discovery?.scorerVersion ?? "2"))) {
+    throw new Error("discovery.scorerVersion must be 1 or 2");
+  }
+  if (config.discovery?.shadowScorerVersion !== undefined
+    && !["1", "2"].includes(String(config.discovery.shadowScorerVersion))) {
+    throw new Error("discovery.shadowScorerVersion must be 1 or 2");
+  }
+  const maximumSemantic = config.discovery?.semantic?.maxCandidates ?? 20;
+  if (!Number.isInteger(maximumSemantic) || maximumSemantic < 0 || maximumSemantic > 200) {
+    throw new Error("discovery.semantic.maxCandidates must be an integer from 0 to 200");
+  }
   for (const [mode, settings] of Object.entries(config.modes)) {
     if (!Number.isFinite(settings.minimumScore) || settings.minimumScore < 0 || settings.minimumScore > 100) {
       throw new Error(`${mode}.minimumScore must be from 0 to 100`);

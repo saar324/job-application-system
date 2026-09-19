@@ -7,7 +7,9 @@ export function evaluatePolicy({ opportunity, mode, modeConfig, answers = {} }) 
   const reasons = [];
   const confirmations = [];
   const score = Number(opportunity.score ?? 0);
-  if (score < modeConfig.minimumScore) reasons.push(`score ${score} is below ${modeConfig.minimumScore}`);
+  if (opportunity.userRequested !== true && score < modeConfig.minimumScore) {
+    reasons.push(`score ${score} is below ${modeConfig.minimumScore}`);
+  }
   if (opportunity.scoreDetails?.hardExclusion) reasons.push(opportunity.scoreDetails.hardExclusion);
 
   const missing = (opportunity.requiredQuestions ?? []).filter(

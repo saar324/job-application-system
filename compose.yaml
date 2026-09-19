@@ -8,6 +8,7 @@ services:
       PORT: 4310
       JOB_SERVER_CONFIG: /app/config/local.json
       JOB_SERVER_DATA: /app/data/state.json
+      JOB_SERVER_DATABASE: /app/data/state.sqlite
       JOB_SERVER_TOKENS_FILE: /app/data/tokens.json
       JOB_SERVER_PROFILES_FILE: /app/data/profiles.json
       JOB_SERVER_DOCUMENT_STAGING: /app/data/documents
@@ -41,6 +42,13 @@ services:
       WORKER_ARTIFACTS: /app/data/artifacts
       WORKER_DOCUMENT_ROOT: /app/data/documents
       WORKER_RECEIPTS: /app/data/receipts
+      WORKER_ADAPTIVE_ENABLED: ${WORKER_ADAPTIVE_ENABLED:-false}
+      WORKER_ADAPTIVE_ENDPOINT: ${WORKER_ADAPTIVE_ENDPOINT:-}
+      WORKER_ADAPTIVE_TOKEN: ${WORKER_ADAPTIVE_TOKEN:-}
+      WORKER_ADAPTIVE_PROFILES: ${WORKER_ADAPTIVE_PROFILES:-}
+      WORKER_ADAPTIVE_MODES: ${WORKER_ADAPTIVE_MODES:-}
+      WORKER_ADAPTIVE_DOMAINS: ${WORKER_ADAPTIVE_DOMAINS:-}
+      WORKER_ADAPTIVE_KILL_SWITCH_FILE: ${WORKER_ADAPTIVE_KILL_SWITCH_FILE:-/app/data/disable-adaptive}
     volumes:
       - ./data/artifacts:/app/data/artifacts
       - ./data/receipts:/app/data/receipts

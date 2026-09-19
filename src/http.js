@@ -1,5 +1,8 @@
 import { createServer } from "node:http";
 import { ClientError } from "./service.js";
+import { telemetry } from "./telemetry.js";
+import { handleMcpRequest } from "./mcp.js";
+import { runIdempotent } from "./idempotency.js";
 
 async function jsonBody(request) {
   const chunks = [];
@@ -22,15 +25,36 @@ function send(response, status, body) {
   response.end(`${JSON.stringify(body)}\n`);
 }
 
+async function idempotentHttp(service, request, identity, action, input, execute) {
+  const raw = request.headers["idempotency-key"];
+  if (raw === undefined) return execute();
+  if (typeof raw !== "string" || raw.length < 8 || raw.length > 200) {
+    throw new ClientError(400, "Idempotency-Key must contain 8 to 200 characters");
+  }
+  return runIdempotent({ store: service.store, profileId: identity.profileId,
+    action: `http.${action}`, key: raw, input, execute });
+}
+
 export function createHttpServer({ service, discovery, profiles, authenticate, config }) {
   return createServer(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
     try {
       if (request.method === "GET" && url.pathname === "/health") {
-        return send(response, 200, { ok: true, adapter: service.adapter.name });
+        return send(response, 200, {
+          ok: true, adapter: service.adapter.name,
+          storage: service.store.kind ?? "json", schemaVersion: service.store.schemaVersion?.(),
+          telemetry: telemetry.health()
+        });
       }
       const identity = authenticate(request);
       if (!identity) return send(response, 401, { error: "invalid or missing bearer token" });
+
+      if (url.pathname === "/mcp") {
+        if (request.method !== "POST") return send(response, 405, { error: "method not allowed" });
+        return handleMcpRequest(request, response, await jsonBody(request), {
+          service, discovery, profiles, config, identity
+        });
+      }
 
       if (request.method === "GET" && url.pathname === "/v1/config") {
         return send(response, 200, { defaultMode: config.defaultMode, modes: config.modes, adapter: service.adapter.name });
@@ -53,7 +77,11 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         return send(response, 200, await discovery.scan(await jsonBody(request), identity));
       }
       if (request.method === "POST" && url.pathname === "/v1/direct-applications") {
-        return send(response, 202, await service.directApplication(await jsonBody(request), identity));
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "direct_application",
+          { body },
+          async () => ({ status: 202, body: await service.directApplication(body, identity) }));
+        return send(response, saved.status, saved.body);
       }
       if (request.method === "GET" && url.pathname === "/v1/opportunities") {
         return send(response, 200, { items: service.list("opportunities", identity.profileId) });
@@ -74,11 +102,19 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
 
       const apply = url.pathname.match(/^\/v1\/opportunities\/([^/]+)\/apply$/);
       if (request.method === "POST" && apply) {
-        return send(response, 202, await service.requestApplication(apply[1], await jsonBody(request), identity));
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "request_application",
+          { opportunityId: apply[1], body },
+          async () => ({ status: 202, body: await service.requestApplication(apply[1], body, identity) }));
+        return send(response, saved.status, saved.body);
       }
       const confirmation = url.pathname.match(/^\/v1\/confirmations\/([^/]+)$/);
       if (request.method === "POST" && confirmation) {
-        return send(response, 200, await service.resolveConfirmation(confirmation[1], await jsonBody(request), identity));
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "resolve_confirmation",
+          { confirmationId: confirmation[1], body },
+          async () => ({ status: 200, body: await service.resolveConfirmation(confirmation[1], body, identity) }));
+        return send(response, saved.status, saved.body);
       }
       const manualSubmission = url.pathname.match(/^\/v1\/applications\/([^/]+)\/manual-submission$/);
       if (request.method === "POST" && manualSubmission) {
@@ -95,6 +131,7 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       return send(response, 404, { error: "route not found" });
     } catch (error) {
       const status = error.status ?? 500;
+      telemetry.count("http.errors", 1, { method: request.method, route: url.pathname, status });
       send(response, status, { error: status === 500 ? "internal server error" : error.message });
       if (status === 500) console.error(error);
     }

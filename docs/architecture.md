@@ -6,10 +6,11 @@ The API is the durable system of record and agents are its primary clients. Code
 applicant agent A ----- token for profile A ----+
                                                 |
 applicant agent B ----- token for profile B ----+--> Job API
+                                                      |-- MCP + HTTP adapters
                                                       |-- profile store
 public job APIs --------------------------------------|-- discovery + scoring
                                                       |-- policy + daily caps
-                                                      |-- application state
+                                                      |-- transactional SQLite state
                                                       |-- confirmation inbox
                                                       |-- receipts + audit events
                                                       |
@@ -45,7 +46,17 @@ opportunity
   -> waiting_confirmation | submitted | failed | manual_review
 ```
 
+Queue claims and execution attempts are durable. Different profiles have independent serial lanes under a global concurrency limit. A claim interrupted before browser execution can be recovered; an interruption after the execution boundary always becomes manual review.
+
 Confirmation items are durable and idempotent. Unknown questions, legal attestations, final approval, CAPTCHA handoffs, and ambiguous outcomes never become silent guesses.
+
+## Opportunity understanding
+
+Discovery normalizes provider data into a versioned canonical opportunity with field-level provenance. Public ATS data and Schema.org `JobPosting` metadata take precedence over deterministic text parsing. Skill matching uses token boundaries and aliases. Optional structured extraction and embeddings can enrich unresolved public job fields and ranking, but deterministic location, authorization, employment-type, compensation, and exclusion gates always win.
+
+## Adaptive execution
+
+Known Playwright adapters remain the default. An optional HTTP-backed adaptive provider can propose a small typed action set for unsupported forms. Worker-owned code validates every action, resolves values only from authoritative profile or approved application data, applies origin and budget limits, and enforces the same preview fingerprint and receipt rules. Before an observation leaves the worker, URL query/fragment data and known applicant, answer, and credential values are removed. Page content is untrusted and cannot authorize submission or request secrets, and success text is accepted only when newly observed after an approved final-submit action. The feature is disabled by default and has global, profile, mode, and domain kill switches.
 
 ## Credential isolation
 

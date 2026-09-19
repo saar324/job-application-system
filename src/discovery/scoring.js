@@ -1,4 +1,5 @@
 import { configuredTitlePriority, preferredTitleGroups } from "./title-preferences.js";
+import { matchSkills } from "./skills.js";
 
 function words(value) {
   return new Set(String(value ?? "").toLowerCase().match(/[a-z0-9+#.]{2,}/g) ?? []);
@@ -120,7 +121,7 @@ function compensationEvidence(opportunity, profile, mode, modePreferences) {
   return { comparable: true };
 }
 
-export function scoreOpportunity(opportunity, profile, mode) {
+export function scoreOpportunity(opportunity, profile, mode, { version = "2" } = {}) {
   const searchable = `${opportunity.title} ${opportunity.description} ${(opportunity.tags ?? []).join(" ")}`.toLowerCase();
   const modePreferences = mode === "freelance"
     ? profile.preferences?.freelance ?? {}
@@ -152,7 +153,11 @@ export function scoreOpportunity(opportunity, profile, mode) {
   if (pay.conflict && !conflicts.includes(pay.conflict)) conflicts.push(pay.conflict);
 
   const skills = profile.skills ?? [];
-  const matchedSkills = skills.filter((skill) => includesPhrase(searchable, skill));
+  const skillEvidence = version === "1"
+    ? skills.filter((skill) => includesPhrase(searchable, skill)).map((skill) => ({ skill, canonical: skill,
+      alias: skill, evidence: "legacy substring match" }))
+    : matchSkills(searchable, skills);
+  const matchedSkills = skillEvidence.map((item) => item.skill);
   const skillDenominator = Math.max(1, Math.min(skills.length, 6));
   const skillScore = Math.min(50, Math.round((matchedSkills.length / skillDenominator) * 50));
   const titleGroups = mode === "freelance"
@@ -181,15 +186,20 @@ export function scoreOpportunity(opportunity, profile, mode) {
   const ageDays = Number.isFinite(posted) ? Math.max(0, (Date.now() - posted) / 86_400_000) : 30;
   const recencyScore = ageDays <= 3 ? 10 : ageDays >= 14 ? 0 : Math.round(10 * (14 - ageDays) / 11);
   const compensationScore = !opportunity.compensation ? 3 : pay.comparable ? 5 : 0;
+  const semanticScore = Number(opportunity.semanticScore);
+  const semanticContribution = version !== "1" && Number.isFinite(semanticScore)
+    ? Math.max(0, Math.min(10, Math.round((semanticScore > 1 ? semanticScore / 100 : semanticScore) * 10))) : 0;
   const score = exclusions.length ? 0
-    : Math.min(100, skillScore + titleScore + locationScore + recencyScore + compensationScore);
+    : Math.min(100, skillScore + titleScore + locationScore + recencyScore + compensationScore + semanticContribution);
   return {
     score, conflicts,
     scoreDetails: {
+      scorerVersion: version === "1" ? "1.0.0" : "2.0.0",
       hardExclusion: exclusions[0], hardExclusions: exclusions,
-      conflicts, matchedSkills, skillScore, titleScore, titlePriority, rolePriority,
+      conflicts, matchedSkills, skillEvidence, skillScore, titleScore, titlePriority, rolePriority,
       compensationComparable: pay.comparable === true,
-      locationScore, recencyScore, compensationScore
+      locationScore, recencyScore, compensationScore, semanticContribution,
+      uncertainties: opportunity.uncertainties ?? []
     }
   };
 }
