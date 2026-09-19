@@ -15,13 +15,17 @@ Start with [Getting started](docs/getting-started.md). It separates a five-minut
 - profile-bound bearer credentials and isolated applicant data
 - configurable full-time and freelance workflows
 - normalized discovery adapters with explainable scoring and deduplication
-- durable opportunity, application, confirmation, receipt, and audit records
+- transactional SQLite opportunity, application, attempt, confirmation, receipt, and audit records
+- profile-scoped MCP tools at `/mcp` for compatible agent clients
+- Schema.org `JobPosting` normalization, boundary-aware skills, and optional semantic ranking
+- privacy-safe OpenTelemetry instrumentation and structured operational health
 - Playwright-based handling for standard and multi-step application forms
 - manual-review handoff for CAPTCHAs, legal attestations, unknown answers, and unsupported forms
 - encrypted, profile-scoped, domain-bound site credentials
 - verified-submission receipts instead of assuming a button click succeeded
 - an agent-oriented HTTP API, reusable skill, and profile-aware reference CLI
 - simulation mode and browser fixtures for safe development
+- optional deterministic-first adaptive form fallback with action and cost limits
 
 ## Primary operating model
 
@@ -55,7 +59,7 @@ GitHub Actions runs the syntax, test, dependency-lock, and repository privacy ch
 
 ## Quick start
 
-Requirements: Node.js 22 or newer.
+Requirements: Node.js 22.5 or newer.
 
 ```bash
 npm ci
@@ -73,6 +77,8 @@ node bin/jobctl.js profile
 ```
 
 Simulation mode never performs a live submission.
+
+New installations use `data/state.sqlite`. If `data/state.json` exists and its durable import marker is absent, startup validates the legacy relationships, creates a timestamped backup, and imports it transactionally. This safely resumes after an empty or partially initialized database file was left behind. Operators can preview the same process with `npm run state:migrate -- --dry-run`.
 
 ## Configure an applicant
 
@@ -132,7 +138,7 @@ Systemd templates and the deployment script use dedicated `jobapp-api` and `joba
 
 ## Agent clients
 
-The system is agent-runtime agnostic. The reusable skill lives in `skills/job-application` and is exposed at `.agents/skills/job-application` for compatible agents. A custom agent can call the same bearer-authenticated API or invoke `jobctl` as a subprocess. Install one skill and profile-bound token per applicant.
+The system is agent-runtime agnostic. The reusable skill lives in `skills/job-application` and is exposed at `.agents/skills/job-application` for compatible agents. A custom agent can call the same bearer-authenticated API, connect to the Streamable HTTP MCP endpoint at `/mcp`, or invoke `jobctl` as a subprocess. Install one skill and profile-bound token per applicant. MCP identity is always derived from that bearer token; profile IDs in tool arguments are not accepted as authority.
 
 OpenClaw is one supported runtime, not a prerequisite. `scripts/bootstrap-openclaw.js` can connect an existing installation without printing its generated credential:
 
@@ -155,4 +161,8 @@ See [OpenClaw integration](docs/openclaw.md) for the isolation model.
 - Credentials, documents, source preferences, and application state stay out of Git.
 - Live submission is opt-in; repository defaults remain simulation-only and approval-gated.
 
-See [Contributing](CONTRIBUTING.md) before proposing changes and [Security](SECURITY.md) before reporting a vulnerability. No license is included yet. Public visibility permits inspection and GitHub collaboration but does not grant general reuse or redistribution rights; choose an explicit license before encouraging downstream reuse.
+See [Contributing](CONTRIBUTING.md) before proposing changes and [Security](SECURITY.md) before reporting a vulnerability.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE). You may use, modify, and distribute the project under its terms. Contributions submitted to this repository are licensed on the same basis.

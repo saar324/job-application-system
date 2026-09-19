@@ -1,20 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { evaluatePolicy } from "./policy.js";
 import { NeedsInputError, NeedsReviewError } from "./adapters/errors.js";
+import { telemetry as defaultTelemetry } from "./telemetry.js";
 
 function now() { return new Date().toISOString(); }
 const inactive = (item) => ["skipped", "rejected", "failed"].includes(item.status);
 
 export class ApplicationService {
-  #runner = Promise.resolve();
+  #profileRunners = new Map();
+  #activeExecutions = 0;
+  #executionWaiters = [];
 
-  constructor({ store, config, adapter, profiles, documentStager, credentialVault }) {
+  constructor({ store, config, adapter, profiles, documentStager, credentialVault, telemetry = defaultTelemetry }) {
     this.store = store;
     this.config = config;
     this.adapter = adapter;
     this.profiles = profiles;
     this.documentStager = documentStager;
     this.credentialVault = credentialVault;
+    this.telemetry = telemetry;
   }
 
   list(collection, profileId) {
@@ -55,7 +59,21 @@ export class ApplicationService {
         (entry) => entry.profileId === identity.profileId
           && (entry.dedupKey === dedupKey || normalizedApplicationUrl(entry.applyUrl) === applicationUrl)
       );
-      if (existing) return existing;
+      if (existing) {
+        if (input.userRequested === true) {
+          existing.userRequested = true;
+          existing.direct = true;
+          existing.score = Math.max(100, Number(existing.score ?? 0));
+          existing.sourceHistory = [...new Set([...(existing.sourceHistory ?? []), existing.source, input.source]
+            .filter(Boolean))];
+          existing.directRequestedAt = now();
+          existing.updatedAt = now();
+          audit(state, identity, "opportunity.direct_intent_recorded", existing.id, {
+            priorSource: existing.source, normalizedUrl: applicationUrl
+          });
+        }
+        return existing;
+      }
       const item = {
         ...input, id: randomUUID(), profileId: identity.profileId, dedupKey,
         mode: input.mode ?? this.config.defaultMode, source: input.source ?? "agent",
@@ -172,6 +190,7 @@ export class ApplicationService {
       audit(state, identity, "application.requested", application.id, { status: application.status });
       return application;
     });
+    this.telemetry.count("applications.admitted", 1, { mode, status: saved.status });
     if (saved.status === "queued") this.enqueue(saved.id);
     return saved;
   }
@@ -344,18 +363,57 @@ export class ApplicationService {
   }
 
   enqueue(applicationId) {
-    this.#runner = this.#runner.then(() => this.execute(applicationId))
-      .catch((error) => console.error("application queue error", error));
+    const application = this.store.snapshot().applications.find((item) => item.id === applicationId);
+    if (!application) return;
+    const profileId = application.profileId;
+    const previous = this.#profileRunners.get(profileId) ?? Promise.resolve();
+    const runner = previous.then(() => this.#withGlobalSlot(() => this.execute(applicationId)))
+      .catch((error) => console.error("application queue error", error))
+      .finally(() => {
+        if (this.#profileRunners.get(profileId) === runner) this.#profileRunners.delete(profileId);
+      });
+    this.#profileRunners.set(profileId, runner);
   }
 
-  async waitForIdle() { await this.#runner; }
+  async waitForIdle() {
+    while (this.#profileRunners.size) await Promise.all([...this.#profileRunners.values()]);
+  }
+
+  async #withGlobalSlot(fn) {
+    const limit = Math.max(1, Number(this.config.execution?.concurrency ?? 2));
+    if (this.#activeExecutions >= limit) await new Promise((resolve) => this.#executionWaiters.push(resolve));
+    this.#activeExecutions += 1;
+    try { return await fn(); }
+    finally {
+      this.#activeExecutions -= 1;
+      this.#executionWaiters.shift()?.();
+    }
+  }
 
   async recover() {
     const queued = await this.store.mutate(async (state) => {
       const ids = [];
       for (const item of state.applications) {
-        if (item.status === "queued") ids.push(item.id);
-        if (item.status !== "submitting") continue;
+        if (item.status === "queued") {
+          ids.push(item.id);
+          continue;
+        }
+        if (item.status === "claimed" && !item.claim?.executionStartedAt) {
+          const attempt = state.attempts?.find((entry) => entry.id === item.claim?.attemptId);
+          if (attempt) Object.assign(attempt, {
+            status: "recovered", completedAt: now(), errorCode: "pre_execution_recovered"
+          });
+          item.status = "queued";
+          item.claim = undefined;
+          item.updatedAt = now();
+          ids.push(item.id);
+          continue;
+        }
+        if (!(["claimed", "submitting"].includes(item.status))) continue;
+        const attempt = state.attempts?.find((entry) => entry.id === item.claim?.attemptId);
+        if (attempt) Object.assign(attempt, {
+          status: "uncertain", completedAt: now(), errorCode: "submission_interrupted"
+        });
         item.status = "waiting_confirmation";
         item.updatedAt = now();
         const exists = state.confirmations.some(
@@ -374,18 +432,33 @@ export class ApplicationService {
   }
 
   async execute(applicationId) {
+    const executionStarted = performance.now();
     const claimed = await this.store.mutate(async (state) => {
       const application = state.applications.find((item) => item.id === applicationId);
       if (!application || application.status !== "queued") return null;
       const opportunity = state.opportunities.find((item) => item.id === application.opportunityId);
-      application.status = "submitting";
+      const attemptId = randomUUID();
+      const claimedAt = now();
+      application.status = "claimed";
+      application.claim = {
+        attemptId,
+        owner: `${process.pid}`,
+        claimedAt,
+        leaseExpiresAt: new Date(Date.now() + Number(this.config.execution?.claimLeaseMs ?? 60_000)).toISOString()
+      };
       application.updatedAt = now();
       const identity = { actorId: application.requestedBy ?? "system-runner", profileId: application.profileId };
-      audit(state, identity, "application.submitting", application.id, { adapter: this.adapter.name });
-      return { application, opportunity, identity };
+      state.attempts ??= [];
+      state.attempts.push({
+        id: attemptId, applicationId: application.id, profileId: application.profileId,
+        status: "claimed", claimedAt, leaseExpiresAt: application.claim.leaseExpiresAt
+      });
+      audit(state, identity, "application.claimed", application.id, { adapter: this.adapter.name, attemptId });
+      return { application, opportunity, identity, attemptId };
     });
     if (!claimed) return null;
-    const { application, opportunity, identity } = claimed;
+    const { application, opportunity, identity, attemptId } = claimed;
+    let verifiedReceipt;
     try {
       let profile = this.profiles ? await this.profiles.get(identity.profileId) : undefined;
       if (profile && this.documentStager) profile = await this.documentStager.stage(application, profile);
@@ -396,34 +469,83 @@ export class ApplicationService {
           : await this.credentialVault.get(identity.profileId, origin);
         if (credential) profile.siteCredential = credential;
       }
-      const receipt = await this.adapter.submit({ application, opportunity, profile, actor: identity.actorId });
-      return this.store.mutate(async (state) => {
+      const executable = await this.store.mutate(async (state) => {
         const item = state.applications.find((entry) => entry.id === applicationId);
-        item.status = "submitted";
-        item.receipt = receipt;
-        item.updatedAt = now();
-        audit(state, identity, "application.submitted", item.id, { receipt });
+        if (!item || item.status !== "claimed" || item.claim?.attemptId !== attemptId) return null;
+        const executionStartedAt = now();
+        item.status = "submitting";
+        item.claim.executionStartedAt = executionStartedAt;
+        item.updatedAt = executionStartedAt;
+        const attempt = state.attempts.find((entry) => entry.id === attemptId);
+        if (attempt) Object.assign(attempt, { status: "submitting", executionStartedAt });
+        audit(state, identity, "application.submitting", item.id, { adapter: this.adapter.name, attemptId });
         return item;
       });
+      if (!executable) return null;
+      application.status = executable.status;
+      application.claim = executable.claim;
+      verifiedReceipt = await this.adapter.submit({ application, opportunity, profile, actor: identity.actorId });
+      const submitted = await this.#persistSubmitted(applicationId, identity, attemptId, verifiedReceipt);
+      this.telemetry.count("applications.submitted", 1, { mode: submitted.mode, adapter: this.adapter.name });
+      this.telemetry.observe("applications.workflow_duration_ms", Date.now() - Date.parse(submitted.createdAt),
+        { mode: submitted.mode });
+      return submitted;
     } catch (error) {
-      if (error instanceof NeedsInputError) return this.#needsInput(applicationId, identity, error);
-      if (error instanceof NeedsReviewError) return this.#needsReview(applicationId, identity, error);
+      if (verifiedReceipt) {
+        try {
+          const submitted = await this.#persistSubmitted(applicationId, identity, attemptId, verifiedReceipt);
+          this.telemetry.count("applications.submitted", 1, { mode: submitted.mode, adapter: this.adapter.name });
+          return submitted;
+        } catch {
+          throw error;
+        }
+      }
+      if (error instanceof NeedsInputError) return this.#needsInput(applicationId, identity, error, attemptId);
+      if (error instanceof NeedsReviewError) return this.#needsReview(applicationId, identity, error, attemptId);
       await this.store.mutate(async (state) => {
         const item = state.applications.find((entry) => entry.id === applicationId);
         item.status = "failed";
         item.error = error.message;
+        item.claim = undefined;
         item.updatedAt = now();
+        const attempt = state.attempts?.find((entry) => entry.id === attemptId);
+        if (attempt) Object.assign(attempt, { status: "failed", completedAt: item.updatedAt, errorCode: "execution_failed" });
         audit(state, identity, "application.failed", item.id, { error: error.message });
       });
+      this.telemetry.count("applications.failed", 1, { adapter: this.adapter.name, reason: "execution_failed" });
       throw error;
+    } finally {
+      this.telemetry.observe("applications.attempt_duration_ms", performance.now() - executionStarted,
+        { adapter: this.adapter.name });
     }
   }
 
-  async #needsInput(applicationId, identity, error) {
+  async #persistSubmitted(applicationId, identity, attemptId, receipt) {
     return this.store.mutate(async (state) => {
       const item = state.applications.find((entry) => entry.id === applicationId);
-      item.status = "waiting_confirmation";
+      if (!item) throw new Error("application disappeared while persisting its receipt");
+      item.status = "submitted";
+      item.receipt = receipt;
+      item.claim = undefined;
+      item.error = undefined;
       item.updatedAt = now();
+      const attempt = state.attempts.find((entry) => entry.id === attemptId);
+      if (attempt) Object.assign(attempt, { status: "submitted", completedAt: item.updatedAt });
+      const recorded = state.audit.some((entry) => entry.action === "application.submitted"
+        && entry.subjectId === item.id && entry.details?.attemptId === attemptId);
+      if (!recorded) audit(state, identity, "application.submitted", item.id, { receipt, attemptId });
+      return item;
+    });
+  }
+
+  async #needsInput(applicationId, identity, error, attemptId) {
+    const result = await this.store.mutate(async (state) => {
+      const item = state.applications.find((entry) => entry.id === applicationId);
+      item.status = "waiting_confirmation";
+      item.claim = undefined;
+      item.updatedAt = now();
+      const attempt = state.attempts?.find((entry) => entry.id === attemptId);
+      if (attempt) Object.assign(attempt, { status: "input_required", completedAt: item.updatedAt });
       for (const requirement of error.requirements) {
         const duplicate = state.confirmations.some(
           (entry) => entry.applicationId === item.id && entry.status === "pending" && entry.kind === requirement.kind
@@ -434,19 +556,28 @@ export class ApplicationService {
       audit(state, identity, "application.input_required", item.id, { requirements: error.requirements });
       return item;
     });
+    this.telemetry.count("applications.confirmation_required", 1,
+      { reason: error.requirements[0]?.kind ?? "missing_input" });
+    return result;
   }
 
-  async #needsReview(applicationId, identity, error) {
-    return this.store.mutate(async (state) => {
+  async #needsReview(applicationId, identity, error, attemptId) {
+    const result = await this.store.mutate(async (state) => {
       const item = state.applications.find((entry) => entry.id === applicationId);
       item.status = "waiting_confirmation";
+      item.claim = undefined;
       item.updatedAt = now();
+      const attempt = state.attempts?.find((entry) => entry.id === attemptId);
+      if (attempt) Object.assign(attempt, { status: "review_required", completedAt: item.updatedAt });
       for (const requirement of error.requirements.length ? error.requirements : [{}]) {
         addConfirmation(state, item, { ...requirement, action: "manual_review" }, error.message);
       }
       audit(state, identity, "application.review_required", item.id, { requirements: error.requirements });
       return item;
     });
+    this.telemetry.count("applications.manual_review", 1,
+      { reason: error.requirements[0]?.kind ?? "review_required" });
+    return result;
   }
 }
 

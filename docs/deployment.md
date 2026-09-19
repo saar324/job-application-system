@@ -58,3 +58,7 @@ OpenClaw installation is deliberately separate. Provision each applicant only af
 ## Upgrades and recovery
 
 Back up `/var/lib/job-application`, `/etc/job-application`, private applicant documents, and external OpenClaw reference files. Run `npm run check` on the candidate revision, deploy, then verify health, profile binding, credential isolation, and worker authentication before enabling discovery or live submission.
+
+Before the first SQLite upgrade, stop the API and run the importer in dry-run mode. Deployment sets `JOB_SERVER_DATABASE=/var/lib/job-application/state.sqlite`; while the legacy import marker is absent, startup transactionally imports `state.json` and leaves a timestamped backup. An empty database file left by an interrupted startup is safe to resume; a non-empty unmarked database that differs from the JSON is rejected instead of overwritten. Verify the `/health` storage kind and schema version, opportunity/application/confirmation counts, queued recovery, and one simulation flow before live work. Rollback consists of stopping the service, retaining the failed database for diagnosis, restoring the pre-migration JSON backup, removing or relocating the new SQLite file, and starting the previous release.
+
+Keep semantic enrichment and adaptive execution disabled during the storage migration. Enable them separately only after deterministic operation, telemetry redaction, and fixture evaluations pass.

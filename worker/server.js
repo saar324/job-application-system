@@ -5,6 +5,8 @@ import { createUrlPolicy } from "./url-policy.js";
 import { validateWorkerPayload } from "./document-policy.js";
 import { ReceiptStore } from "./receipts.js";
 import { executeInFreshContext } from "./execution.js";
+import { createAdaptiveControllerFromEnv } from "./adaptive.js";
+import { createValidatedEgressProxy } from "./egress-proxy.js";
 
 async function readJson(request) {
   const chunks = [];
@@ -32,7 +34,11 @@ const urlPolicy = createUrlPolicy();
 const artifactsDirectory = path.resolve(process.env.WORKER_ARTIFACTS ?? "./data/artifacts");
 const documentRoot = path.resolve(process.env.WORKER_DOCUMENT_ROOT ?? "./data/documents");
 const receiptStore = new ReceiptStore(process.env.WORKER_RECEIPTS ?? "./data/receipts");
-const browser = await chromium.launch({ headless: process.env.WORKER_HEADLESS !== "false" });
+const egressProxy = await createValidatedEgressProxy(urlPolicy);
+const browser = await chromium.launch({
+  headless: process.env.WORKER_HEADLESS !== "false", args: ["--disable-quic"]
+});
+const adaptiveController = createAdaptiveControllerFromEnv();
 
 const server = createServer(async (request, response) => {
   try {
@@ -48,7 +54,7 @@ const server = createServer(async (request, response) => {
     const payload = await validateWorkerPayload(await readJson(request), documentRoot);
     const profile = payload.profile;
     const result = await receiptStore.run(payload, async () => {
-      return executeInFreshContext({ browser, payload, urlPolicy, artifactsDirectory });
+      return executeInFreshContext({ browser, payload, urlPolicy, artifactsDirectory, adaptiveController, egressProxy });
     });
     return send(response, result.status === "submitted" ? 200 : 409, result);
   } catch (error) {
@@ -64,6 +70,7 @@ server.listen(port, host, () => console.log(`application worker listening on htt
 async function shutdown() {
   server.close();
   await browser.close();
+  await egressProxy.close();
 }
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);

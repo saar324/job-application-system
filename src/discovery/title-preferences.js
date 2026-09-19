@@ -20,13 +20,11 @@ export function configuredTitlePriority(title, profile) {
   const groups = preferredTitleGroups(profile);
   if (groups.primary.some((candidate) => matchesConfiguredTitle(title, candidate))) return "primary";
   if (groups.secondary.some((candidate) => matchesConfiguredTitle(title, candidate))) return "secondary";
-  if (/\b(ai|machine learning|automation|full.?stack|front.?end|back.?end|software engineer|software developer|python|gis|geospatial)\b/i.test(String(title ?? ""))
-    && !/\bmanager\b/i.test(String(title ?? ""))) return "primary";
   return undefined;
 }
 
 export function discoveryTitleRelevant(title, profile) {
-  const value = String(title ?? "");
-  if (/\b(qa|quality assurance|test engineer|sdet|director|account executive)\b/i.test(value)) return false;
-  return Boolean(configuredTitlePriority(value, profile));
+  const preferences = profile?.preferences?.fullTime ?? {};
+  if ((preferences.excludedTitles ?? []).some((candidate) => matchesConfiguredTitle(title, candidate))) return false;
+  return Boolean(configuredTitlePriority(title, profile));
 }

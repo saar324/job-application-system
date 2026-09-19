@@ -24,7 +24,7 @@ test("profile status reports only genuinely missing onboarding fields", async ()
     },
     documents: { resume: "/secure/resume.pdf" },
     skills: ["TypeScript"],
-    preferences: { locations: ["remote"], fullTime: { jobTitles: ["Software Engineer"] } }
+    preferences: { locations: ["remote"], fullTime: { jobTitles: ["Example Role"] } }
   });
   assert.equal(after.readyToApply, true);
   assert.equal(after.readyToSearch, true);

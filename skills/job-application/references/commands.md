@@ -34,7 +34,7 @@ The external agent runtime schedules the next cycle. Do not implement an unbound
 After the owner or agent verifies a submission in an external browser, record the result and any form answers:
 
 ```bash
-printf '%s' '{"manuallyVerified":true,"finalUrl":"https://company.example/application/complete","company":"Example","title":"Software Engineer","questionsAndAnswers":[{"field":"work_authorization","question":"Are you authorized to work here?","answer":"Yes"}]}' \
+printf '%s' '{"manuallyVerified":true,"finalUrl":"https://company.example/application/complete","company":"Example","title":"Example Role","questionsAndAnswers":[{"field":"work_authorization","question":"Are you authorized to work here?","answer":"Yes"}]}' \
   | $JOBCLI record-submission APPLICATION_ID
 ```
 

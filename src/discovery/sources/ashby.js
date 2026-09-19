@@ -1,4 +1,5 @@
 import { discoveryTitleRelevant } from "../title-preferences.js";
+import { normalizeApplicationQuestions } from "../normalization.js";
 
 function configuredBoards(sourceConfig) {
   const boards = sourceConfig?.boards ?? [];
@@ -14,8 +15,9 @@ function locationOf(job) {
 
 export const ashby = {
   id: "ashby",
-  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig }) {
-    const settled = await Promise.allSettled(configuredBoards(sourceConfig).map(async (board) => {
+  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, onError = () => {} }) {
+    const boards = configuredBoards(sourceConfig);
+    const settled = await Promise.allSettled(boards.map(async (board) => {
       const response = await fetchImpl(`https://api.ashbyhq.com/posting-api/job-board/${board.slug}`, {
         headers: { "user-agent": "job-application-system/0.1" },
         signal: AbortSignal.timeout(20_000)
@@ -24,6 +26,9 @@ export const ashby = {
       const body = await response.json();
       return (body.jobs ?? []).map((job) => ({ board, job }));
     }));
+    settled.forEach((result, index) => {
+      if (result.status === "rejected") onError({ board: boards[index]?.slug, error: result.reason.message });
+    });
     return settled
       .flatMap((result) => result.status === "fulfilled" ? result.value : [])
       .filter(({ job }) => job?.id && job?.title && job?.applyUrl && job.isRemote
@@ -42,7 +47,10 @@ export const ashby = {
         location: locationOf(job) || "Remote",
         remote: true,
         employmentType: job.employmentType || "Full-Time",
-        postedAt: job.publishedAt
+        postedAt: job.publishedAt,
+        applicationQuestions: normalizeApplicationQuestions(
+          job.applicationQuestions ?? job.applicationForm?.questions ?? job.questions ?? []
+        )
       }));
   }
 };

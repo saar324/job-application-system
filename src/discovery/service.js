@@ -6,15 +6,18 @@ import { greenhouse } from "./sources/greenhouse.js";
 import { ashby } from "./sources/ashby.js";
 import { lever } from "./sources/lever.js";
 import { scoreOpportunity } from "./scoring.js";
+import { telemetry } from "../telemetry.js";
+import { normalizeOpportunity } from "./normalization.js";
 
 const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever].map((source) => [source.id, source]));
 
 export class DiscoveryService {
-  constructor({ applicationService, profiles, config, fetchImpl = fetch }) {
+  constructor({ applicationService, profiles, config, fetchImpl = fetch, enricher = null }) {
     this.applicationService = applicationService;
     this.profiles = profiles;
     this.config = config;
     this.fetchImpl = fetchImpl;
+    this.enricher = enricher;
   }
 
   async scan(input, identity) {
@@ -46,14 +49,16 @@ export class DiscoveryService {
       if (!source) throw Object.assign(new Error(`unknown discovery source: ${id}`), { status: 400 });
       return source;
     });
+    const internalErrors = [];
     const settled = await Promise.allSettled(selected.map((source) => source.search({
       limit: requestedLimit,
       fetchImpl: this.fetchImpl,
       profile,
-      sourceConfig: this.config.discovery?.sourceOptions?.[source.id] ?? {}
+      sourceConfig: this.config.discovery?.sourceOptions?.[source.id] ?? {},
+      onError: (error) => internalErrors.push({ source: source.id, ...error })
     })));
 
-    const errors = [];
+    const errors = [...internalErrors];
     const found = [];
     for (let index = 0; index < settled.length; index += 1) {
       const result = settled[index];
@@ -61,10 +66,37 @@ export class DiscoveryService {
       else found.push(...result.value);
     }
 
+    const normalizedFound = found.map((raw) => normalizeOpportunity(raw));
+    const scorerVersion = String(modePreferences.scorerVersion
+      ?? this.config.discovery?.scorerVersion ?? "2");
+    const shadowScorerVersion = this.config.discovery?.shadowScorerVersion
+      ? String(this.config.discovery.shadowScorerVersion) : null;
+    const preliminary = normalizedFound.map((raw, index) => ({
+      index, result: scoreOpportunity(raw, profile, mode, { version: scorerVersion })
+    }));
+    const maximumSemantic = Math.max(0, Number(this.config.discovery?.semantic?.maxCandidates ?? 20));
+    const semanticCandidates = new Set(preliminary
+      .filter((entry) => !entry.result.scoreDetails.hardExclusion)
+      .sort((left, right) => right.result.score - left.result.score)
+      .slice(0, maximumSemantic).map((entry) => entry.index));
     const qualifying = [];
     let excluded = 0;
-    for (const raw of found) {
-      const scored = { ...raw, mode, ...scoreOpportunity(raw, profile, mode) };
+    for (let index = 0; index < normalizedFound.length; index += 1) {
+      let raw = normalizedFound[index];
+      if (this.enricher && semanticCandidates.has(index)) {
+        try { raw = await this.enricher.enrich(raw, profile); }
+        catch (error) {
+          errors.push({ source: raw.source, stage: "semantic_enrichment", error: error.message });
+          telemetry.count("discovery.enrichment_failures", 1, { source: raw.source });
+        }
+      }
+      const score = scoreOpportunity(raw, profile, mode, { version: scorerVersion });
+      const shadow = shadowScorerVersion
+        ? scoreOpportunity(raw, profile, mode, { version: shadowScorerVersion }) : null;
+      const scored = { ...raw, mode, ...score,
+        ...(shadow ? { scoreComparison: { activeVersion: scorerVersion, activeScore: score.score,
+          shadowVersion: shadowScorerVersion, shadowScore: shadow.score,
+          changedEligibility: Boolean(score.scoreDetails.hardExclusion) !== Boolean(shadow.scoreDetails.hardExclusion) } } : {}) };
       const opportunistic = scored.scoreDetails.rolePriority === "opportunistic";
       const opportunisticRules = modePreferences.opportunisticRoles ?? {};
       const opportunisticQualified = opportunistic
@@ -92,6 +124,9 @@ export class DiscoveryService {
       }
       qualifying.push(entry);
     }
+    telemetry.count("discovery.scans", 1, { mode, sourceCount: requestedSources.length });
+    telemetry.count("discovery.source_failures", errors.length, { mode });
+    telemetry.observe("discovery.jobs_found", found.length, { mode });
     return {
       mode,
       sources: requestedSources,

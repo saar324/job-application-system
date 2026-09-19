@@ -1,4 +1,5 @@
 import { discoveryTitleRelevant } from "../title-preferences.js";
+import { normalizeApplicationQuestions } from "../normalization.js";
 
 function configuredSites(sourceConfig) {
   const sites = sourceConfig?.sites ?? [];
@@ -14,8 +15,9 @@ function descriptionOf(job) {
 
 export const lever = {
   id: "lever",
-  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig }) {
-    const settled = await Promise.allSettled(configuredSites(sourceConfig).map(async (site) => {
+  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, onError = () => {} }) {
+    const sites = configuredSites(sourceConfig);
+    const settled = await Promise.allSettled(sites.map(async (site) => {
       const response = await fetchImpl(`https://api.lever.co/v0/postings/${site.slug}?mode=json`, {
         headers: { "user-agent": "job-application-system/0.1" },
         signal: AbortSignal.timeout(20_000)
@@ -24,6 +26,9 @@ export const lever = {
       const jobs = await response.json();
       return jobs.map((job) => ({ site, job }));
     }));
+    settled.forEach((result, index) => {
+      if (result.status === "rejected") onError({ board: sites[index]?.slug, error: result.reason.message });
+    });
     return settled
       .flatMap((result) => result.status === "fulfilled" ? result.value : [])
       .filter(({ job }) => job?.id && job?.text && job?.applyUrl && job.workplaceType === "remote"
@@ -42,7 +47,8 @@ export const lever = {
         location: (job.categories?.allLocations ?? [job.categories?.location]).filter(Boolean).join(", ") || "Remote",
         remote: true,
         employmentType: job.categories?.commitment || "Full-Time",
-        postedAt: job.createdAt
+        postedAt: job.createdAt,
+        applicationQuestions: normalizeApplicationQuestions(job.applicationQuestions ?? job.questions ?? [])
       }));
   }
 };
