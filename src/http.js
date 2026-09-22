@@ -117,6 +117,13 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
           async () => ({ status: 200, body: await service.approvePreparedBatch(body.entries, identity) }));
         return send(response, saved.status, saved.body);
       }
+      const refreshPreview = url.pathname.match(/^\/v1\/applications\/([^/]+)\/refresh-preview$/);
+      if (request.method === "POST" && refreshPreview) {
+        const saved = await idempotentHttp(service, request, identity, "refresh_final_preview",
+          { applicationId: refreshPreview[1] },
+          async () => ({ status: 202, body: await service.refreshFinalPreview(refreshPreview[1], identity) }));
+        return send(response, saved.status, saved.body);
+      }
 
       const apply = url.pathname.match(/^\/v1\/opportunities\/([^/]+)\/apply$/);
       if (request.method === "POST" && apply) {

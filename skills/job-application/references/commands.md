@@ -44,6 +44,12 @@ printf '%s' '{"manuallyVerified":true,"finalUrl":"https://company.example/applic
 
 Use this only after the site shows reliable submission evidence. Never include passwords, tokens, or one-time codes. The server redacts credential-like values if they are supplied by mistake.
 
+If a final preview is found incomplete before owner approval, supersede only that pending preview and queue a fresh inspection. This does not approve or submit the application:
+
+```bash
+$JOBCLI refresh-preview APPLICATION_ID
+```
+
 Record an employer-side status without changing the application's submission state:
 
 ```bash

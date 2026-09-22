@@ -79,6 +79,57 @@ test("invisible reCAPTCHA badge does not block final review", async () => {
   assert.equal(result.requirements[0].preview.filled[0].value, "Ada");
 });
 
+test("Ashby custom required controls cannot be omitted from final approval", async () => {
+  const result = await run(`<form>
+    <div class="ashby-application-form-field-entry" data-field-path="location-id">
+      <label class="ashby-application-form-question-title _required_a1" for="location-id">Location</label>
+      <input role="combobox" placeholder="Start typing...">
+    </div>
+    <fieldset class="ashby-application-form-input-radio-group">
+      <label class="ashby-application-form-question-title _required_a1" for="source-id">How did you hear about us?</label>
+      <input type="radio" name="source-id" id="source-job"><label for="source-job">Job board</label>
+    </fieldset>
+    <div class="ashby-application-form-field-entry" data-field-path="degree-id">
+      <label class="ashby-application-form-question-title _required_a1" for="degree-id">Completed degree?</label>
+      <div class="ashby-application-form-input-yesno"><button data-option="yes">Yes</button>
+        <button data-option="no">No</button></div>
+    </div>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, profile, { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.deepEqual(result.requirements.map((item) => item.fields[0]),
+    ["location-id", "degree-id", "source-id"]);
+  assert.ok(result.requirements.every((item) => item.kind !== "final_submission_approval"));
+});
+
+test("Ashby custom answers are selected, verified, and shown in final preview", async () => {
+  const result = await run(`<form>
+    <div class="ashby-application-form-field-entry" data-field-path="location-id">
+      <label class="ashby-application-form-question-title _required_a1">Location</label>
+      <p class="ashby-application-form-question-description">Country you're currently residing in</p>
+      <input role="combobox" aria-expanded="false" oninput="this.setAttribute('aria-expanded','true');document.querySelector('#choices').hidden=false">
+      <div id="choices" role="listbox" hidden><div role="option" onclick="document.querySelector('[role=combobox]').value='Bulgaria';document.querySelector('[role=combobox]').setAttribute('aria-expanded','false');this.parentNode.hidden=true">Bulgaria</div></div>
+    </div>
+    <fieldset class="ashby-application-form-input-radio-group">
+      <label class="ashby-application-form-question-title _required_a1" for="source-id">How did you hear about us?</label>
+      <input type="radio" name="source-id" id="source-job"><label for="source-job">Job board</label>
+    </fieldset>
+    <div class="ashby-application-form-field-entry" data-field-path="degree-id">
+      <label class="ashby-application-form-question-title _required_a1">Completed degree?</label>
+      <div class="ashby-application-form-input-yesno">
+        <button type="button" data-option="yes" aria-pressed="false" onclick="this.setAttribute('aria-pressed','true')">Yes</button>
+        <button type="button" data-option="no" aria-pressed="false">No</button>
+      </div>
+    </div>
+    <button type="submit">Submit Application</button>
+  </form>`, { "degree-id": "yes", "source-id": "Job board" },
+  { ...profile, contact: { ...profile.contact, country: "Bulgaria" } }, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled
+    .filter((field) => field.type === "ashby_custom").map((field) => [field.label, field.value]),
+  [["Location", "Bulgaria"], ["Completed degree?", "Yes"], ["How did you hear about us?", "Job board"]]);
+});
+
 test("an explicit missing employer posting stops without a form review", async () => {
   const result = await run(`<main><h1>Job not found</h1><p>The job you requested was not found.</p>
     <button>Cookie Management</button></main>`);
