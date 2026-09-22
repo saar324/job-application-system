@@ -15,7 +15,8 @@ function descriptionOf(job) {
 
 export const lever = {
   id: "lever",
-  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, query = {}, onError = () => {} }) {
+  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, query = {},
+    isHandled = () => false, onError = () => {} }) {
     const sites = configuredSites(sourceConfig).filter((site) => !query.board || site.slug === query.board);
     const settled = await Promise.allSettled(sites.map(async (site) => {
       const url = new URL(`https://api.lever.co/v0/postings/${site.slug}`);
@@ -38,7 +39,7 @@ export const lever = {
     });
     return settled
       .flatMap((result) => result.status === "fulfilled" ? result.value : [])
-      .filter(({ job }) => job?.id && job?.text && job?.applyUrl && job.workplaceType === "remote"
+      .filter(({ site, job }) => job?.id && job?.text && job?.applyUrl && job.workplaceType === "remote"
         && discoveryTitleRelevant(job.text, profile)
         && ["location", "team", "department", "commitment", "level"].every((key) => {
           if (!query[key]) return true;
@@ -46,7 +47,8 @@ export const lever = {
           const actual = key === "location" ? (job.categories?.allLocations ?? [job.categories?.location])
             : [job.categories?.[key]];
           return actual.some((value) => allowed.includes(value));
-        }))
+        }) && !isHandled({ source: "lever", externalId: `${site.slug}:${job.id}`,
+          applyUrl: job.applyUrl, listingUrl: job.hostedUrl }))
       .sort((left, right) => Date.parse(right.job.createdAt ?? "") - Date.parse(left.job.createdAt ?? ""))
       .slice(0, limit)
       .map(({ site, job }) => ({

@@ -9,6 +9,7 @@ import { scoreOpportunity } from "./scoring.js";
 import { telemetry } from "../telemetry.js";
 import { normalizeOpportunity } from "./normalization.js";
 import { runIdempotent } from "../idempotency.js";
+import { handledRoleIndex, isHandledRole, roleKeys } from "./handled-roles.js";
 
 const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever].map((source) => [source.id, source]));
 
@@ -122,6 +123,13 @@ export class DiscoveryService {
       return source;
     });
     const internalErrors = [];
+    const handledKeys = handledRoleIndex(this.applicationService.store.snapshot(), identity.profileId);
+    const handledMatches = new Set();
+    const isHandled = (role) => {
+      if (!isHandledRole(role, handledKeys)) return false;
+      handledMatches.add([...roleKeys(role)][0] ?? role.applyUrl ?? role.listingUrl);
+      return true;
+    };
     const fetchStarted = performance.now();
     let requestCount = 0;
     const fetchCache = new Map();
@@ -139,6 +147,7 @@ export class DiscoveryService {
       query: query?.filters,
       fetchImpl: cachedFetch,
       profile,
+      isHandled,
       sourceConfig: this.config.discovery?.sourceOptions?.[source.id] ?? {},
       onError: (error) => internalErrors.push({ source: source.id, ...error })
     })));
@@ -153,7 +162,8 @@ export class DiscoveryService {
       else found.push(...result.value);
     }
 
-    const uniqueFound = [...new Map(found.map((raw) => [`${raw.source}:${raw.externalId ?? raw.applyUrl}`, raw])).values()];
+    const uniqueFound = [...new Map(found.filter((raw) => !isHandled(raw))
+      .map((raw) => [`${raw.source}:${raw.externalId ?? raw.applyUrl}`, raw])).values()];
     const normalizedFound = uniqueFound.map((raw) => normalizeOpportunity(raw));
     const scorerVersion = String(modePreferences.scorerVersion
       ?? this.config.discovery?.scorerVersion ?? "2");
@@ -223,6 +233,7 @@ export class DiscoveryService {
       mode,
       sources: requestedSources,
       found: uniqueFound.length,
+      handledFiltered: handledMatches.size,
       qualifying: qualifying.length,
       excluded,
       readyToApply: profileStatus.readyToApply,
