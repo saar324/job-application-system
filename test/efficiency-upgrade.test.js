@@ -5,7 +5,7 @@ import path from "node:path";
 import { createServer } from "node:http";
 import test from "node:test";
 import { chromium } from "playwright";
-import { automateApplication } from "../worker/automation.js";
+import { automateApplication, inventoryFormStep } from "../worker/automation.js";
 import { NeedsInputError, NeedsResearchError, NeedsReviewError } from "../src/adapters/errors.js";
 import { ApplicationService } from "../src/service.js";
 import { DiscoveryService } from "../src/discovery/service.js";
@@ -69,6 +69,19 @@ test("worker replans when a conditional answer removes later controls", async ()
     assert.ok(result.requirements.some((item) => item.kind === "missing_answer"
       && item.fields?.includes("new")));
     assert.equal(result.requirements.some((item) => item.kind === "submission_unverified"), false);
+  } finally { await browser.close(); }
+});
+
+test("inventory omits accessibility backing inputs and Ashby autofill picker", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<form><input name="email" type="email" required>
+      <div class="select-shell"><input required aria-hidden="true" tabindex="-1"></div>
+      <div class="ashby-application-form-autofill-input-root"><input type="file" tabindex="-1"></div>
+      </form>`);
+    assert.deepEqual((await inventoryFormStep(page)).map((field) => field.name), ["email"]);
+    await page.close();
   } finally { await browser.close(); }
 });
 
