@@ -83,3 +83,39 @@ test("campaign scans once, prepares a reserve sequentially, and submits only the
   assert.ok(complete.timing.submissionMs >= 0);
   assert.equal(service.listCampaigns(identity.profileId)[0].campaignId, started.campaignId);
 });
+
+test("campaign rechecks handled ATS identity after a public-board redirect", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-campaign-redirect-"));
+  const profiles = await new ProfileStore(path.join(directory, "profiles.json"), { allowMissing: true }).init();
+  await profiles.patch(identity.profileId, {
+    contact: { firstName: "Applicant", lastName: "Example", email: "applicant@example.test",
+      phone: "+10000000000", location: "Remote" },
+    documents: { resume: "/secure/resume.pdf" }, skills: ["TypeScript", "Node.js"],
+    preferences: { locations: ["Remote"], fullTime: {
+      jobTitles: ["Senior Engineer"], automatedDiscoverySources: ["arbeitnow"], submissionApproval: "always"
+    } }
+  });
+  const config = { defaultMode: "full_time", execution: { concurrency: 1 }, discovery: { limitPerSource: 10 },
+    modes: { full_time: { minimumScore: 0, autoApply: false, autoApplyDiscovered: false,
+      dailyApplicationCap: 20, submissionApproval: "always", sources: ["arbeitnow"], requireConfirmationFor: [] } } };
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  const service = new ApplicationService({ store, config, adapter: { name: "unused", async submit() {} }, profiles });
+  const existing = await service.addOpportunity({ source: "ashby", externalId: "constructor:role-1",
+    company: "Constructor", title: "Senior Engineer", score: 100, mode: "full_time", remote: true,
+    applyUrl: "https://jobs.ashbyhq.com/constructor/11111111-1111-4111-8111-111111111111/application" }, identity);
+  const submitted = await service.requestApplication(existing.id, {}, identity);
+  await service.recordManualSubmission(submitted.id, { manuallyVerified: true,
+    finalUrl: "https://jobs.ashbyhq.com/constructor/11111111-1111-4111-8111-111111111111/application/submitted" }, identity);
+  const discovery = new DiscoveryService({ applicationService: service, profiles, config,
+    fetchImpl: async (url) => String(url).endsWith("/apply")
+      ? new Response(null, { status: 302, headers: { location: existing.applyUrl } })
+      : new Response(JSON.stringify({ data: [{ slug: "aggregated-role", title: "Senior Engineer",
+        company_name: "Constructor", description: "TypeScript Node.js", tags: ["TypeScript"],
+        job_types: ["full_time"], location: "Remote", remote: true,
+        url: "https://www.arbeitnow.com/jobs/companies/constructor/aggregated-role" }] })) });
+
+  const result = await discovery.startCampaign({ target: 1, reserve: 0 }, identity);
+  assert.equal(result.status, "insufficient_candidates");
+  assert.equal(result.scan.handledFiltered, 1);
+  assert.equal(result.applications.length, 0);
+});
