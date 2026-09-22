@@ -15,8 +15,8 @@ function locationOf(job) {
 
 export const ashby = {
   id: "ashby",
-  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, onError = () => {} }) {
-    const boards = configuredBoards(sourceConfig);
+  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, query = {}, onError = () => {} }) {
+    const boards = configuredBoards(sourceConfig).filter((board) => !query.board || board.slug === query.board);
     const settled = await Promise.allSettled(boards.map(async (board) => {
       const response = await fetchImpl(`https://api.ashbyhq.com/posting-api/job-board/${board.slug}`, {
         headers: { "user-agent": "job-application-system/0.1" },
@@ -32,7 +32,9 @@ export const ashby = {
     return settled
       .flatMap((result) => result.status === "fulfilled" ? result.value : [])
       .filter(({ job }) => job?.id && job?.title && job?.applyUrl && job.isRemote
-        && discoveryTitleRelevant(job.title, profile))
+        && job.isListed !== false && discoveryTitleRelevant(job.title, profile)
+        && (!query.title || job.title.toLowerCase().includes(query.title.toLowerCase()))
+        && (!query.location || locationOf(job).toLowerCase().includes(query.location.toLowerCase())))
       .sort((left, right) => Date.parse(right.job.publishedAt ?? "") - Date.parse(left.job.publishedAt ?? ""))
       .slice(0, limit)
       .map(({ board, job }) => ({

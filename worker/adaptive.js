@@ -1,6 +1,4 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { captureReceipt, waitForSubmissionEvidence } from "./automation.js";
 
 const FINAL_ACTION = /submit(?: application)?|send application|complete application/i;
 const SAFE_CLICK = /apply|start application|next|continue|review|submit|send application|complete application|sign in|log in|create account|register|sign up/i;
@@ -127,27 +125,8 @@ export async function runAdaptiveApplication({ page, profile, opportunity, appli
         }
         const final = FINAL_ACTION.test(label);
         if (final) {
-          const preview = await adaptivePreview(page);
-          const fingerprint = createHash("sha256").update(JSON.stringify(preview)).digest("hex");
-          if (application.finalApprovalRequired
-            && application.finalSubmissionApproval?.previewFingerprint !== fingerprint) {
-            return {
-              status: "needs_input", message: "Review all fields before the adaptive final submission",
-              requirements: [{ kind: "final_submission_approval", message: "Ready for your approval before Submit",
-                fields: [], preview, previewFingerprint: fingerprint, recommendation: "approve" }],
-              adaptive: { trace, tokens, costUsd }
-            };
-          }
-          const previousUrl = page.url();
-          const previousBody = (await page.locator("body").innerText().catch(() => "")).slice(0, 50_000);
-          await locator.click({ noWaitAfter: true });
-          await page.waitForTimeout(750);
-          const verified = await waitForSubmissionEvidence(page, previousUrl, previousBody);
-          if (!verified) return review("adaptive_submission_unverified",
-            "The adaptive submit action did not produce verifiable confirmation", trace, { tokens, costUsd });
-          const receipt = await captureReceipt(page, artifactsDirectory, application.id);
-          receipt.adaptive = { provider: "http", steps: trace.length, tokens, costUsd };
-          return { status: "submitted", receipt };
+          return review("adaptive_final_manual",
+            "The unsupported form needs a human final review and submission", trace, { tokens, costUsd });
         }
         await locator.click({ noWaitAfter: true });
         await page.waitForTimeout(500);
@@ -228,7 +207,7 @@ function authoritativeValues(profile, application, currentUrl) {
   for (const [group, fields] of Object.entries({ contact: profile.contact ?? {}, links: profile.links ?? {}, documents: profile.documents ?? {} })) {
     for (const [key, value] of Object.entries(fields)) if (value !== undefined && value !== "") values.set(`${group}.${key}`, value);
   }
-  for (const [key, value] of Object.entries(profile.applicationAnswers ?? {})) values.set(`applicationAnswers.${key}`, value);
+  // Legacy unscoped answers cannot be reused for a new employer or jurisdiction.
   if (profile.siteCredential) {
     try {
       if (new URL(profile.siteCredential.origin).hostname === new URL(currentUrl).hostname) {
@@ -247,6 +226,9 @@ async function targetMatchesKey(locator, key, actionType) {
       element.getAttribute("placeholder")].filter(Boolean).join(" ").toLowerCase()
   })).catch(() => null);
   if (!target) return false;
+  if (key.startsWith("contact.") && /company|employer|referr|manager|supervisor|school/.test(target.text)) {
+    return false;
+  }
   if (actionType === "upload") return target.type === "file" && /resume|cv|cover|document/.test(`${key} ${target.text}`);
   if (key === "credential.password") return target.type === "password";
   if (key === "credential.username") return /user|email|login/.test(target.text);
@@ -258,20 +240,6 @@ async function targetMatchesKey(locator, key, actionType) {
         : leaf === "postalcode" ? ["postal code", "zip", "postcode"]
           : [leaf];
   return aliases.some((alias) => alias && normalizedTarget.includes(alias));
-}
-
-async function adaptivePreview(page) {
-  const fields = await page.locator("input, textarea, select").evaluateAll((elements) => elements.slice(0, 200).map((element) => {
-    const type = (element.getAttribute("type") ?? element.tagName).toLowerCase();
-    const label = element.getAttribute("aria-label") || element.getAttribute("name") || element.id || "Unlabelled field";
-    const secret = type === "password";
-    const file = type === "file";
-    const value = secret ? "[stored securely]" : file ? "[staged document]" : String(element.value ?? "").slice(0, 240);
-    return { key: element.getAttribute("name") || element.id || label, label, type,
-      required: element.required === true, status: value ? "filled" : "unfilled", ...(value ? { value, source: "authoritative input" } : {}) };
-  }));
-  return { destination: page.url(), filled: fields.filter((field) => field.status === "filled"),
-    unfilled: fields.filter((field) => field.status === "unfilled") };
 }
 
 function review(reasonCode, message, trace, usage) {

@@ -24,16 +24,20 @@ const routes = {
   health: ["GET", "/health"], me: ["GET", "/v1/me"], opportunities: ["GET", "/v1/opportunities"],
   profile: ["GET", "/v1/profile/status"], "profile-update": ["PATCH", "/v1/profile"],
   scan: ["POST", "/v1/discovery/scan"],
+  sources: ["GET", "/v1/discovery/sources"], query: ["POST", "/v1/discovery/query"],
   direct: ["POST", "/v1/direct-applications"],
   applications: ["GET", "/v1/applications"], "application-log": ["GET", "/v1/application-log"],
+  "application-metrics": ["GET", "/v1/application-metrics"],
   inbox: ["GET", "/v1/confirmations"],
+  "approve-batch": ["POST", "/v1/confirmations/approve-batch"],
+  research: ["POST", `/v1/applications/${id}/research`],
   add: ["POST", "/v1/opportunities"], apply: ["POST", `/v1/opportunities/${id}/apply`],
   "record-submission": ["POST", `/v1/applications/${id}/manual-submission`],
   "record-employer-status": ["POST", `/v1/applications/${id}/employer-status`],
   confirm: ["POST", `/v1/confirmations/${id}`], reject: ["POST", `/v1/confirmations/${id}`]
 };
-if ((!routes[command] && command !== "callback") || (["apply", "record-submission", "record-employer-status", "confirm", "reject", "callback"].includes(command) && !id)) {
-  console.error("usage: jobctl <health|me|profile|profile-update|scan|direct|opportunities|applications|application-log|inbox|add|apply ID|record-submission ID|record-employer-status ID|confirm ID|reject ID|callback DATA>");
+if ((!routes[command] && command !== "callback") || (["apply", "research", "record-submission", "record-employer-status", "confirm", "reject", "callback"].includes(command) && !id)) {
+  console.error("usage: jobctl <health|me|profile|profile-update|sources|scan|query|direct|opportunities|applications|application-log|application-metrics|inbox|approve-batch|research ID|add|apply ID|record-submission ID|record-employer-status ID|confirm ID|reject ID|callback DATA>");
   process.exit(2);
 }
 
@@ -53,7 +57,7 @@ async function request(method, pathname, body) {
     ...(body ? { "content-type": "application/json" } : {})
   },
   ...(body ? { body: JSON.stringify(body) } : {}),
-    signal: AbortSignal.timeout(command === "scan" ? 60_000 : 30_000)
+    signal: AbortSignal.timeout(["scan", "query"].includes(command) ? 60_000 : 30_000)
   });
   const text = await response.text();
   if (!response.ok) {

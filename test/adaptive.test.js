@@ -21,7 +21,7 @@ test("adaptive rollout respects profile, mode, and exact-domain allowlists", () 
   assert.equal(controller.canRun({ ...payload, opportunity: { applyUrl: "https://evil.example/apply" } }), false);
 });
 
-test("adaptive provider never receives credential values and cannot bypass final approval", async () => {
+test("adaptive provider never receives credential values and cannot click final submit", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -41,8 +41,8 @@ test("adaptive provider never receives credential values and cannot bypass final
       } }, opportunity: { applyUrl: "https://example.test/apply" },
       application: { id: "app-one", answers: {}, finalApprovalRequired: true },
       artifactsDirectory: "/tmp", limits: { maxSteps: 2, timeoutMs: 10_000, maxTokens: 1000, maxCostUsd: 1 } });
-    assert.equal(result.status, "needs_input");
-    assert.equal(result.requirements[0].kind, "final_submission_approval");
+    assert.equal(result.status, "needs_human");
+    assert.equal(result.requirements[0].reasonCode, "adaptive_final_manual");
     assert.equal(await page.evaluate(() => window.submitted === true), false);
     assert.equal(calls, 1);
   } finally { await context.close(); await browser.close(); }

@@ -1,8 +1,10 @@
 import http from "node:http";
 import net from "node:net";
 
-export async function createValidatedEgressProxy(urlPolicy) {
+export async function createValidatedEgressProxy(urlPolicy, { connectImpl = net.connect } = {}) {
   const server = http.createServer(async (request, response) => {
+    request.on("error", () => response.destroy());
+    response.on("error", () => request.destroy());
     try {
       const target = new URL(request.url);
       if (target.protocol !== "http:" || !urlPolicy.allowHttp) throw new Error("plain HTTP proxying is disabled");
@@ -13,15 +15,25 @@ export async function createValidatedEgressProxy(urlPolicy) {
         headers: { ...request.headers, host: target.host }
       }, (upstreamResponse) => {
         response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+        upstreamResponse.on("error", () => response.destroy());
         upstreamResponse.pipe(response);
       });
-      upstream.on("error", () => { if (!response.headersSent) response.writeHead(502); response.end(); });
+      upstream.on("error", () => {
+        if (!response.destroyed) {
+          if (!response.headersSent) response.writeHead(502);
+          response.end();
+        }
+      });
+      response.on("close", () => upstream.destroy());
       request.pipe(upstream);
     } catch {
       response.writeHead(403); response.end();
     }
   });
   server.on("connect", async (request, clientSocket, head) => {
+    let upstream;
+    clientSocket.on("error", () => upstream?.destroy());
+    clientSocket.on("close", () => upstream?.destroy());
     try {
       const separator = request.url.lastIndexOf(":");
       if (separator < 1) throw new Error("invalid CONNECT destination");
@@ -29,15 +41,18 @@ export async function createValidatedEgressProxy(urlPolicy) {
       const port = Number(request.url.slice(separator + 1));
       if (port !== 443) throw new Error("only HTTPS CONNECT destinations are allowed");
       const [destination] = await urlPolicy.resolvePublicHost(hostname);
-      const upstream = net.connect({ host: destination.address, family: destination.family, port });
+      if (clientSocket.destroyed) return;
+      upstream = connectImpl({ host: destination.address, family: destination.family, port });
       upstream.setTimeout(45_000, () => upstream.destroy());
+      upstream.on("error", () => clientSocket.destroy());
+      upstream.on("close", () => clientSocket.destroy());
       upstream.once("connect", () => {
+        if (clientSocket.destroyed) { upstream.destroy(); return; }
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length) upstream.write(head);
         upstream.pipe(clientSocket); clientSocket.pipe(upstream);
       });
-      upstream.once("error", () => clientSocket.destroy());
-    } catch { clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); }
+    } catch { if (!clientSocket.destroyed) clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); }
   });
   await new Promise((resolve, reject) => {
     server.once("error", reject);

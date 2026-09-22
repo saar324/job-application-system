@@ -84,6 +84,20 @@ test("HTTP routes reject missing auth, malformed JSON, and short idempotency key
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
+test("application metrics require profile authentication", async () => {
+  const { server, base } = await fixture();
+  try {
+    assert.equal((await fetch(`${base}/v1/application-metrics`)).status, 401);
+    const response = await fetch(`${base}/v1/application-metrics`, {
+      headers: { authorization: "Bearer profile-one-token" }
+    });
+    assert.equal(response.status, 200);
+    const metrics = await response.json();
+    assert.equal(metrics.attempts, 0);
+    assert.equal(metrics.worker.activeMs.medianMs, null);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
 test("Streamable HTTP MCP uses the same profile-bound bearer authentication", async () => {
   const { server, base } = await fixture();
   const client = new Client({ name: "http-test", version: "1" });

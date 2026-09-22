@@ -49,6 +49,10 @@ services:
       WORKER_ADAPTIVE_MODES: ${WORKER_ADAPTIVE_MODES:-}
       WORKER_ADAPTIVE_DOMAINS: ${WORKER_ADAPTIVE_DOMAINS:-}
       WORKER_ADAPTIVE_KILL_SWITCH_FILE: ${WORKER_ADAPTIVE_KILL_SWITCH_FILE:-/app/data/disable-adaptive}
+      WORKER_DRAFT_ENABLED: ${WORKER_DRAFT_ENABLED:-false}
+      WORKER_DRAFT_ENDPOINT: ${WORKER_DRAFT_ENDPOINT:-}
+      WORKER_DRAFT_TOKEN: ${WORKER_DRAFT_TOKEN:-}
+      WORKER_DRAFT_TIMEOUT_MS: ${WORKER_DRAFT_TIMEOUT_MS:-20000}
     volumes:
       - ./data/artifacts:/app/data/artifacts
       - ./data/receipts:/app/data/receipts

@@ -1,3 +1,5 @@
+> **Owner direction, 2026-09-21:** Same-profile concurrency in this proposal is deferred. Keep one application agent and one active application at a time. See [`single-lane-application-efficiency`](../single-lane-application-efficiency/proposal.md) for the current priority and migration plan.
+
 ## Why
 
 The system preserves application quality, but it spends avoidable time and model budget in three places. Semantic discovery can enrich up to twenty candidates sequentially, repeats the same profile embedding, and loses its in-memory cache on restart. The scheduler serializes all work for one profile even when isolated browser capacity is available. Adaptive execution sends a full observation and requests one action per model round trip. These costs reduce applications completed per hour without improving eligibility, answer accuracy, approval safety, or receipt confidence.

@@ -1,0 +1,39 @@
+[
+  {
+    "id": "short-skill-boundaries",
+    "profile": {
+      "skills": ["AI", "Go"],
+      "preferences": { "locations": ["Worldwide"], "fullTime": { "jobTitles": ["Systems Engineer"], "allowedLocations": ["Worldwide"] } }
+    },
+    "opportunity": {
+      "title": "Systems Engineer", "description": "Maintain Google email systems", "remote": true,
+      "location": "Worldwide", "employmentType": "full_time", "postedAt": "2026-09-19T00:00:00.000Z"
+    },
+    "expected": { "matchedSkills": [], "hardExcluded": false }
+  },
+  {
+    "id": "canonical-alias",
+    "profile": {
+      "skills": ["Node.js"],
+      "preferences": { "locations": ["Worldwide"], "fullTime": { "jobTitles": ["Service Engineer"], "allowedLocations": ["Worldwide"] } }
+    },
+    "opportunity": {
+      "title": "Service Engineer", "description": "Build services with NodeJS", "remote": true,
+      "location": "Worldwide", "employmentType": "full_time", "postedAt": "2026-09-19T00:00:00.000Z"
+    },
+    "expected": { "matchedSkills": ["Node.js"], "hardExcluded": false }
+  },
+  {
+    "id": "hard-gate-dominates",
+    "profile": {
+      "skills": ["Node.js"],
+      "preferences": { "locations": ["Canada"], "fullTime": { "jobTitles": ["Service Engineer"], "allowedLocations": ["Canada"] } }
+    },
+    "opportunity": {
+      "title": "Service Engineer", "description": "Node.js platform", "remote": true,
+      "location": "United States only", "employmentType": "full_time", "semanticScore": 1,
+      "postedAt": "2026-09-19T00:00:00.000Z"
+    },
+    "expected": { "matchedSkills": ["Node.js"], "hardExcluded": true }
+  }
+]

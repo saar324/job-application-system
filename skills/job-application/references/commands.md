@@ -13,9 +13,11 @@ $JOBCLI health
 $JOBCLI me
 $JOBCLI profile
 $JOBCLI scan
+$JOBCLI sources
 $JOBCLI opportunities
 $JOBCLI applications
 $JOBCLI application-log
+$JOBCLI application-metrics
 $JOBCLI inbox
 ```
 
@@ -30,6 +32,8 @@ For each recurring cycle, use this order:
 The external agent runtime schedules the next cycle. Do not implement an unbounded shell polling loop, overlap cycles for one profile, or repeat a mutation after an ambiguous timeout.
 
 `application-log` joins each durable application with its opportunity. It reports the company, role, URLs, status, timestamps, receipt, and structured questions with answers. Credential-like values are redacted.
+
+`application-metrics` returns profile-bound aggregate attempt counts and p50/p95 queue, execution, owner-wait, and worker-stage durations. Every duration includes a sample count; unavailable token counts are `null`, not zero.
 
 After the owner or agent verifies a submission in an external browser, record the result and any form answers:
 
@@ -113,3 +117,26 @@ $JOBCLI callback 'jobapp:CONFIRMATION_UUID:custom'
 `custom` leaves the confirmation pending. After the owner types an answer, pass the field from the confirmation as JSON to `confirm`. Existing site credentials use `site_username` and `site_password`; never print either value after the call.
 
 For a manual-review confirmation, approve with `{"answers":{"retry":true}}` only when a retry is safe. If the owner verifies that the site already submitted, use `{"answers":{"submitted":true,"finalUrl":"...","externalId":"..."}}` instead. Treat a `submitted` receipt with `simulated: true` as a test result, never as a real application.
+
+Run bounded source queries only after inspecting `sources`. A scan-cycle key can be reused only for an identical plan; use a new cycle ID for a fresh search:
+
+```bash
+printf '%s' '{"source":"ashby","scanCycleId":"cycle-2026-09-21","idempotencyKey":"ashby-engineering-1","queries":[{"filters":{"title":"Engineer"},"limit":50}]}' | $JOBCLI query
+```
+
+If a result has `applicationBlockedBySource: "employer_application_url_required"`, its
+`applyUrl` is still the Himalayas listing. Verify the employer's application URL before
+calling `direct` with that URL, and retain the Himalayas listing for attribution. Do
+not retry a listing-page browser challenge as though it were an application form.
+
+When an application is `waiting_research`, verify a public official company page and attach a short relevant excerpt. The same agent then resumes the queued application:
+
+```bash
+printf '%s' '{"url":"https://company.example/about","excerpt":"Official company description relevant to the question.","officialSourceConfirmed":true}' | $JOBCLI research APPLICATION_ID
+```
+
+After the owner explicitly approves the exact complete previews listed in a batch, submit their IDs and fingerprints together. Other pending questions must be resolved first:
+
+```bash
+printf '%s' '{"entries":[{"applicationId":"APPLICATION_UUID","previewFingerprint":"64_HEX_CHARACTERS"}]}' | $JOBCLI approve-batch
+```

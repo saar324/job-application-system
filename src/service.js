@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { evaluatePolicy } from "./policy.js";
-import { NeedsInputError, NeedsReviewError } from "./adapters/errors.js";
+import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailableError } from "./adapters/errors.js";
 import { telemetry as defaultTelemetry } from "./telemetry.js";
 
 function now() { return new Date().toISOString(); }
@@ -46,6 +46,41 @@ export class ApplicationService {
         confirmations.get(application.id) ?? []
       ))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  applicationMetrics(profileId) {
+    const state = this.store.snapshot();
+    const attempts = (state.attempts ?? []).filter((item) => item.profileId === profileId);
+    const confirmations = state.confirmations.filter((item) => item.profileId === profileId);
+    const durations = (values) => {
+      const sorted = values.filter((value) => Number.isFinite(value) && value >= 0)
+        .sort((left, right) => left - right);
+      return { samples: sorted.length,
+        medianMs: sorted.length ? sorted[Math.ceil(sorted.length * 0.5) - 1] : null,
+        p95Ms: sorted.length ? sorted[Math.ceil(sorted.length * 0.95) - 1] : null };
+    };
+    const elapsed = (start, end) => start && end
+      ? Date.parse(end) - Date.parse(start) : null;
+    const workerKeys = ["loadMs", "planFillMs", "draftMs", "transitionMs", "receiptMs", "activeMs"];
+    return {
+      schemaVersion: 1,
+      attempts: attempts.length,
+      outcomes: Object.fromEntries([...new Set(attempts.map((item) => item.status))]
+        .map((status) => [status, attempts.filter((item) => item.status === status).length])),
+      queue: durations(attempts.map((item) => item.queueMs)),
+      execution: durations(attempts.map((item) => elapsed(item.executionStartedAt, item.completedAt))),
+      ownerWait: durations(confirmations.map((item) => elapsed(item.createdAt, item.resolvedAt))),
+      worker: Object.fromEntries(workerKeys.map((key) => [key,
+        durations(attempts.map((item) => item.workerMetrics?.[key]))])),
+      draftCalls: {
+        samples: attempts.filter((item) => Number.isInteger(item.workerMetrics?.draftCalls)).length,
+        total: attempts.some((item) => Number.isInteger(item.workerMetrics?.draftCalls))
+          ? attempts.reduce((sum, item) => sum + (item.workerMetrics?.draftCalls ?? 0), 0) : null
+      },
+      modelInputTokens: null,
+      modelOutputTokens: null,
+      coordinatorTokens: null
+    };
   }
 
   async addOpportunity(input, identity) {
@@ -180,6 +215,7 @@ export class ApplicationService {
           : decision.confirmations.length || !decision.autoApply ? "waiting_confirmation" : "queued",
         decision, createdAt: now(), updatedAt: now()
       };
+      if (application.status === "queued") application.queuedAt = application.createdAt;
       state.applications.push(application);
       for (const requirement of decision.confirmations) addConfirmation(state, application, requirement);
       if (!decision.autoApply && decision.eligible && !decision.confirmations.length) {
@@ -200,6 +236,44 @@ export class ApplicationService {
       (item) => item.id === confirmationId && item.profileId === identity.profileId
     );
     if (!target) throw new ClientError(404, "confirmation not found");
+    let requireApprovalOnRetry = false;
+    if (["submission_unverified", "submission_recovery"].includes(target.kind)
+      && input.approved === true && input.answers?.retry === true && this.adapter.attemptStatus) {
+      const priorApplication = this.store.snapshot().applications.find((item) => item.id === target.applicationId
+        && item.profileId === identity.profileId);
+      const mode = priorApplication?.mode ?? this.config.defaultMode;
+      const profile = this.profiles ? await this.profiles.get(identity.profileId) : null;
+      const modePreferences = mode === "freelance"
+        ? profile?.preferences?.freelance : profile?.preferences?.fullTime;
+      requireApprovalOnRetry = (modePreferences?.submissionApproval
+        ?? this.config.modes[mode]?.submissionApproval) === "always";
+      let worker;
+      try { worker = await this.adapter.attemptStatus(target.applicationId); }
+      catch { throw new ClientError(409, "worker status is unavailable; verify that the old attempt has stopped before retrying"); }
+      if (worker.status === "active") {
+        throw new ClientError(409, "the previous browser attempt is still running");
+      }
+      if (worker.status === "final_action_started") {
+        throw new ClientError(409, "the previous final action may have run; verify the employer outcome before retrying");
+      }
+      if (worker.status === "submitted" && worker.receipt?.submittedAt && worker.receipt?.finalUrl) {
+        return this.store.mutate(async (state) => {
+          const application = state.applications.find((item) => item.id === target.applicationId
+            && item.profileId === identity.profileId);
+          const confirmation = state.confirmations.find((item) => item.id === confirmationId
+            && item.status === "pending");
+          if (!application || !confirmation) throw new ClientError(409, "confirmation is no longer pending");
+          application.status = "submitted";
+          application.receipt = worker.receipt;
+          application.updatedAt = now();
+          confirmation.status = "approved";
+          confirmation.resolvedAt = now();
+          confirmation.resolvedBy = identity.actorId;
+          audit(state, identity, "application.late_receipt_reconciled", application.id, {});
+          return application;
+        });
+      }
+    }
     let safeAnswers = structuredClone(input.answers ?? {});
     if (target.kind === "account_credentials") {
       if (input.approved === true) {
@@ -237,6 +311,11 @@ export class ApplicationService {
       confirmation.response = safeAnswers;
       confirmation.resolvedBy = identity.actorId;
       const application = state.applications.find((item) => item.id === confirmation.applicationId);
+      if (requireApprovalOnRetry) {
+        application.finalApprovalRequired = true;
+        application.submissionApproval = "always";
+        application.finalSubmissionApproval = undefined;
+      }
       if (confirmation.kind === "final_submission_approval" && input.approved === true) {
         application.finalSubmissionApproval = {
           approvedAt: now(), previewFingerprint: confirmation.previewFingerprint
@@ -254,7 +333,10 @@ export class ApplicationService {
             submittedAt: now(), finalUrl: safeAnswers.finalUrl,
             externalId: safeAnswers.externalId, manuallyVerified: true
           };
-        } else application.status = "queued";
+        } else {
+          application.status = "queued";
+          application.queuedAt = now();
+        }
       }
       application.updatedAt = now();
       audit(state, identity, "confirmation.resolved", confirmation.id, { status: confirmation.status });
@@ -262,6 +344,46 @@ export class ApplicationService {
     });
     if (result.status === "queued") this.enqueue(result.id);
     return result;
+  }
+
+  async approvePreparedBatch(entries, identity) {
+    if (!Array.isArray(entries) || entries.length < 1 || entries.length > 50
+      || new Set(entries.map((entry) => entry?.applicationId)).size !== entries.length) {
+      throw new ClientError(400, "batch must contain 1 to 50 distinct applications");
+    }
+    const approved = await this.store.mutate(async (state) => {
+      const matches = entries.map((entry) => {
+        const application = state.applications.find((item) => item.id === entry.applicationId
+          && item.profileId === identity.profileId && item.status === "waiting_confirmation");
+        const confirmation = state.confirmations.find((item) => item.applicationId === entry.applicationId
+          && item.profileId === identity.profileId && item.status === "pending"
+          && item.kind === "final_submission_approval"
+          && item.previewFingerprint === entry.previewFingerprint);
+        const others = state.confirmations.some((item) => item.applicationId === entry.applicationId
+          && item.profileId === identity.profileId && item.status === "pending"
+          && item.kind !== "final_submission_approval");
+        if (!application || !confirmation || others) {
+          throw new ClientError(409, `application ${entry.applicationId} is not ready for this exact approval`);
+        }
+        return { application, confirmation };
+      });
+      for (const { application, confirmation } of matches) {
+        confirmation.status = "approved";
+        confirmation.resolvedAt = now();
+        confirmation.resolvedBy = identity.actorId;
+        application.finalSubmissionApproval = {
+          approvedAt: confirmation.resolvedAt, previewFingerprint: confirmation.previewFingerprint
+        };
+        application.status = "queued";
+        application.queuedAt = now();
+        application.updatedAt = now();
+        audit(state, identity, "confirmation.batch_approved", confirmation.id,
+          { applicationId: application.id, previewFingerprint: confirmation.previewFingerprint });
+      }
+      return matches.map(({ application }) => application);
+    });
+    for (const application of approved) this.enqueue(application.id);
+    return { items: approved.map((item) => ({ applicationId: item.id, status: item.status })) };
   }
 
   async recordManualSubmission(applicationId, input, identity) {
@@ -308,6 +430,31 @@ export class ApplicationService {
         state.confirmations.filter((item) => item.applicationId === application.id)
       );
     });
+  }
+
+  async attachResearch(applicationId, input, identity) {
+    const url = validateDirectUrl(input.url);
+    const excerpt = optionalLogText(input.excerpt, "excerpt", 6000);
+    if (!excerpt || input.officialSourceConfirmed !== true) {
+      throw new ClientError(400, "officialSourceConfirmed=true and a nonempty excerpt are required");
+    }
+    const result = await this.store.mutate(async (state) => {
+      const item = state.applications.find((entry) => entry.id === applicationId && entry.profileId === identity.profileId);
+      if (!item) throw new ClientError(404, "application not found");
+      if (item.status !== "waiting_research") throw new ClientError(409, "application is not waiting for research");
+      if ((item.researchEvidence ?? []).length >= 4) throw new ClientError(409, "research budget is exhausted");
+      item.researchEvidence ??= [];
+      item.researchEvidence.push({ url, excerpt,
+        sourceHash: createHash("sha256").update(`${url}\n${excerpt}`).digest("hex"),
+        recordedAt: now() });
+      item.status = "queued";
+      item.queuedAt = now();
+      item.updatedAt = now();
+      audit(state, identity, "application.research_attached", item.id, { url });
+      return item;
+    });
+    this.enqueue(result.id);
+    return result;
   }
 
   async recordEmployerStatus(applicationId, input, identity) {
@@ -404,6 +551,7 @@ export class ApplicationService {
             status: "recovered", completedAt: now(), errorCode: "pre_execution_recovered"
           });
           item.status = "queued";
+          item.queuedAt = now();
           item.claim = undefined;
           item.updatedAt = now();
           ids.push(item.id);
@@ -451,7 +599,8 @@ export class ApplicationService {
       state.attempts ??= [];
       state.attempts.push({
         id: attemptId, applicationId: application.id, profileId: application.profileId,
-        status: "claimed", claimedAt, leaseExpiresAt: application.claim.leaseExpiresAt
+        status: "claimed", claimedAt, leaseExpiresAt: application.claim.leaseExpiresAt,
+        queueMs: application.queuedAt ? Math.max(0, Date.parse(claimedAt) - Date.parse(application.queuedAt)) : null
       });
       audit(state, identity, "application.claimed", application.id, { adapter: this.adapter.name, attemptId });
       return { application, opportunity, identity, attemptId };
@@ -484,7 +633,10 @@ export class ApplicationService {
       if (!executable) return null;
       application.status = executable.status;
       application.claim = executable.claim;
-      verifiedReceipt = await this.adapter.submit({ application, opportunity, profile, actor: identity.actorId });
+      verifiedReceipt = await this.adapter.submit({
+        application, opportunity, profile, actor: identity.actorId,
+        evidencePacket: buildEvidencePacket(application, opportunity, profile)
+      });
       const submitted = await this.#persistSubmitted(applicationId, identity, attemptId, verifiedReceipt);
       this.telemetry.count("applications.submitted", 1, { mode: submitted.mode, adapter: this.adapter.name });
       this.telemetry.observe("applications.workflow_duration_ms", Date.now() - Date.parse(submitted.createdAt),
@@ -501,7 +653,9 @@ export class ApplicationService {
         }
       }
       if (error instanceof NeedsInputError) return this.#needsInput(applicationId, identity, error, attemptId);
+      if (error instanceof NeedsResearchError) return this.#needsResearch(applicationId, identity, error, attemptId);
       if (error instanceof NeedsReviewError) return this.#needsReview(applicationId, identity, error, attemptId);
+      if (error instanceof PostingUnavailableError) return this.#postingUnavailable(applicationId, identity, error, attemptId);
       await this.store.mutate(async (state) => {
         const item = state.applications.find((entry) => entry.id === applicationId);
         item.status = "failed";
@@ -521,7 +675,7 @@ export class ApplicationService {
   }
 
   async #persistSubmitted(applicationId, identity, attemptId, receipt) {
-    return this.store.mutate(async (state) => {
+    const saved = await this.store.mutate(async (state) => {
       const item = state.applications.find((entry) => entry.id === applicationId);
       if (!item) throw new Error("application disappeared while persisting its receipt");
       item.status = "submitted";
@@ -530,22 +684,28 @@ export class ApplicationService {
       item.error = undefined;
       item.updatedAt = now();
       const attempt = state.attempts.find((entry) => entry.id === attemptId);
-      if (attempt) Object.assign(attempt, { status: "submitted", completedAt: item.updatedAt });
+      if (attempt) Object.assign(attempt, { status: "submitted", completedAt: item.updatedAt,
+        workerMetrics: safeWorkerMetrics(receipt.metrics) });
       const recorded = state.audit.some((entry) => entry.action === "application.submitted"
         && entry.subjectId === item.id && entry.details?.attemptId === attemptId);
       if (!recorded) audit(state, identity, "application.submitted", item.id, { receipt, attemptId });
       return item;
     });
+    recordWorkerMetrics(this.telemetry, receipt.metrics, "submitted");
+    return saved;
   }
 
   async #needsInput(applicationId, identity, error, attemptId) {
     const result = await this.store.mutate(async (state) => {
       const item = state.applications.find((entry) => entry.id === applicationId);
       item.status = "waiting_confirmation";
+      item.checkpoint = validatedCheckpoint(error.checkpoint, item.id);
+      item.preparedAnswers = validatedPreparedAnswers(error.preparedAnswers, item.preparedAnswers);
       item.claim = undefined;
       item.updatedAt = now();
       const attempt = state.attempts?.find((entry) => entry.id === attemptId);
-      if (attempt) Object.assign(attempt, { status: "input_required", completedAt: item.updatedAt });
+      if (attempt) Object.assign(attempt, { status: "input_required", completedAt: item.updatedAt,
+        workerMetrics: safeWorkerMetrics(error.metrics) });
       for (const requirement of error.requirements) {
         const duplicate = state.confirmations.some(
           (entry) => entry.applicationId === item.id && entry.status === "pending" && entry.kind === requirement.kind
@@ -558,6 +718,27 @@ export class ApplicationService {
     });
     this.telemetry.count("applications.confirmation_required", 1,
       { reason: error.requirements[0]?.kind ?? "missing_input" });
+    recordWorkerMetrics(this.telemetry, error.metrics, "input_required");
+    return result;
+  }
+
+  async #postingUnavailable(applicationId, identity, error, attemptId) {
+    const result = await this.store.mutate((state) => {
+      const item = state.applications.find((entry) => entry.id === applicationId);
+      item.status = "skipped";
+      item.claim = undefined;
+      item.updatedAt = now();
+      item.decision.reasons.push("employer posting unavailable");
+      const attempt = state.attempts?.find((entry) => entry.id === attemptId);
+      if (attempt) Object.assign(attempt, { status: "posting_unavailable", completedAt: item.updatedAt,
+        errorCode: error.reasonCode ?? "posting_unavailable", workerMetrics: safeWorkerMetrics(error.metrics) });
+      audit(state, identity, "application.posting_unavailable", item.id,
+        { reasonCode: error.reasonCode ?? "posting_unavailable" });
+      return item;
+    });
+    this.telemetry.count("applications.posting_unavailable", 1,
+      { reason: error.reasonCode ?? "posting_unavailable" });
+    recordWorkerMetrics(this.telemetry, error.metrics, "posting_unavailable");
     return result;
   }
 
@@ -565,10 +746,13 @@ export class ApplicationService {
     const result = await this.store.mutate(async (state) => {
       const item = state.applications.find((entry) => entry.id === applicationId);
       item.status = "waiting_confirmation";
+      item.checkpoint = validatedCheckpoint(error.checkpoint, item.id);
+      item.preparedAnswers = validatedPreparedAnswers(error.preparedAnswers, item.preparedAnswers);
       item.claim = undefined;
       item.updatedAt = now();
       const attempt = state.attempts?.find((entry) => entry.id === attemptId);
-      if (attempt) Object.assign(attempt, { status: "review_required", completedAt: item.updatedAt });
+      if (attempt) Object.assign(attempt, { status: "review_required", completedAt: item.updatedAt,
+        workerMetrics: safeWorkerMetrics(error.metrics) });
       for (const requirement of error.requirements.length ? error.requirements : [{}]) {
         addConfirmation(state, item, { ...requirement, action: "manual_review" }, error.message);
       }
@@ -577,8 +761,95 @@ export class ApplicationService {
     });
     this.telemetry.count("applications.manual_review", 1,
       { reason: error.requirements[0]?.kind ?? "review_required" });
+    recordWorkerMetrics(this.telemetry, error.metrics, "review_required");
     return result;
   }
+
+  async #needsResearch(applicationId, identity, error, attemptId) {
+    const saved = await this.store.mutate(async (state) => {
+      const item = state.applications.find((entry) => entry.id === applicationId);
+      item.status = "waiting_research";
+      item.claim = undefined;
+      item.checkpoint = validatedCheckpoint(error.checkpoint, item.id);
+      item.preparedAnswers = validatedPreparedAnswers(error.preparedAnswers, item.preparedAnswers);
+      item.researchQuestions = error.questions.slice(0, 8).map((question) => ({
+        fieldId: String(question.fieldId ?? "").slice(0, 160),
+        question: String(question.question ?? "").slice(0, 1000)
+      }));
+      item.updatedAt = now();
+      const attempt = state.attempts?.find((entry) => entry.id === attemptId);
+      if (attempt) Object.assign(attempt, { status: "research_required", completedAt: item.updatedAt,
+        workerMetrics: safeWorkerMetrics(error.metrics) });
+      audit(state, identity, "application.research_required", item.id,
+        { questionCount: item.researchQuestions.length });
+      return item;
+    });
+    recordWorkerMetrics(this.telemetry, error.metrics, "research_required");
+    return saved;
+  }
+}
+
+function recordWorkerMetrics(telemetry, metrics, outcome) {
+  if (!metrics || typeof metrics !== "object") return;
+  for (const key of ["loadMs", "planFillMs", "draftMs", "transitionMs", "receiptMs", "activeMs"]) {
+    if (Number.isFinite(metrics[key]) && metrics[key] >= 0) {
+      telemetry.observe(`applications.worker.${key}`, metrics[key], { outcome });
+    }
+  }
+  for (const key of ["steps", "fields", "draftCalls"]) {
+    if (Number.isInteger(metrics[key]) && metrics[key] >= 0) {
+      telemetry.count(`applications.worker.${key}`, metrics[key], { outcome });
+    }
+  }
+}
+
+function safeWorkerMetrics(metrics) {
+  if (!metrics || typeof metrics !== "object") return undefined;
+  const keys = ["loadMs", "planFillMs", "draftMs", "transitionMs", "receiptMs", "activeMs",
+    "steps", "fields", "draftCalls"];
+  const safe = Object.fromEntries(keys.filter((key) => Number.isFinite(metrics[key]) && metrics[key] >= 0)
+    .map((key) => [key, metrics[key]]));
+  return Object.keys(safe).length ? safe : undefined;
+}
+
+function validatedCheckpoint(checkpoint, applicationId) {
+  if (!checkpoint) return undefined;
+  if (checkpoint.version !== 1 || checkpoint.applicationId !== applicationId
+    || !Array.isArray(checkpoint.steps) || !Array.isArray(checkpoint.fields)
+    || checkpoint.steps.length > 16 || checkpoint.fields.length > 200
+    || JSON.stringify(checkpoint).length > 64_000) {
+    return undefined;
+  }
+  return checkpoint;
+}
+
+function validatedPreparedAnswers(value, previous = {}) {
+  if (value === undefined) return previous;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).length > 20
+    || Object.entries(value).some(([key, text]) => key.length > 160
+      || typeof text !== "string" || text.length > 5000 || CREDENTIAL_INPUT_KEY.test(key))) return previous;
+  return value;
+}
+
+function buildEvidencePacket(application, opportunity, profile) {
+  const packet = {
+    version: 1,
+    company: String(opportunity.company ?? "").slice(0, 200),
+    title: String(opportunity.title ?? "").slice(0, 200),
+    listing: String(opportunity.description ?? "").slice(0, 8000),
+    listingUrl: opportunity.listingUrl ?? opportunity.applyUrl,
+    research: (application.researchEvidence ?? []).slice(0, 4).map((item) => ({
+      url: item.url, excerpt: item.excerpt, sourceHash: item.sourceHash
+    })),
+    applicant: {
+      skills: (profile?.skills ?? []).slice(0, 30),
+      links: Object.fromEntries(["linkedin", "github", "portfolio"]
+        .filter((key) => /^https:\/\//i.test(profile?.links?.[key] ?? ""))
+        .map((key) => [key, String(profile.links[key]).slice(0, 500)]))
+    }
+  };
+  return packet;
 }
 
 function addConfirmation(state, application, requirement, fallback) {
@@ -613,7 +884,11 @@ function buildPresentation(confirmation) {
       value: `jobapp:${confirmation.id}:custom`
     });
   }
-  return { blocks: [{ type: "text", text }, { type: "buttons", buttons }] };
+  const parts = [];
+  for (let offset = 0; offset < text.length; offset += 3000) {
+    parts.push({ type: "text", text: text.slice(offset, offset + 3000) });
+  }
+  return { blocks: [...(parts.length ? parts : [{ type: "text", text: "" }]), { type: "buttons", buttons }] };
 }
 
 function formatPreview(confirmation) {
@@ -625,7 +900,7 @@ function formatPreview(confirmation) {
   lines.push("", "Not filled:");
   if (!(preview.unfilled ?? []).length) lines.push("• None");
   for (const field of preview.unfilled ?? []) lines.push(`• ${field.label}${field.required ? " (required)" : ""}`);
-  return lines.join("\n").slice(0, 3500);
+  return lines.join("\n");
 }
 
 function audit(state, identity, action, subjectId, details) {

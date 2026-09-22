@@ -1,3 +1,5 @@
+> **Owner direction, 2026-09-21:** Do not implement section 3's same-profile concurrency unless the owner later changes the one-agent-at-a-time preference. Follow [`single-lane-application-efficiency`](../single-lane-application-efficiency/tasks.md) for the current work order.
+
 ## 1. Baseline and Quality Gates
 
 - [ ] 1.1 Add privacy-safe metrics for semantic calls and input size, adaptive calls and tokens, cache and recipe hits, queue duration, browser duration, verified submissions, manual-review reasons, challenges, and duplicate execution
