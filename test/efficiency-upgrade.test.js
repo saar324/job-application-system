@@ -54,6 +54,24 @@ test("complete review preserves long answers and repeated fields on separate ste
   } finally { await browser.close(); }
 });
 
+test("worker replans when a conditional answer removes later controls", async () => {
+  const browser = await chromium.launch();
+  try {
+    const html = `<form><label>Path <select name="path" required
+      onchange="document.querySelector('#old').remove();document.querySelector('#new').hidden=false">
+      <option value="">Choose</option><option value="yes">Yes</option></select></label>
+      <label id="old">Old question <input name="old" required></label>
+      <label>Email <input name="email" type="email" required></label>
+      <label id="new" hidden>New question <input name="new" required></label>
+      <button type="submit">Submit Application</button></form>`;
+    const result = await browserRun(browser, html, { answers: { path: "Yes" }, finalApprovalRequired: true });
+    assert.equal(result.status, "needs_input");
+    assert.ok(result.requirements.some((item) => item.kind === "missing_answer"
+      && item.fields?.includes("new")));
+    assert.equal(result.requirements.some((item) => item.kind === "submission_unverified"), false);
+  } finally { await browser.close(); }
+});
+
 test("draft provider receives only unresolved prose and replay uses the saved draft", async () => {
   const browser = await chromium.launch();
   const html = `<form onsubmit="event.preventDefault();document.body.textContent='Application submitted'">
