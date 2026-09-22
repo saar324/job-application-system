@@ -4,7 +4,8 @@ This is the shared follow-up list for the efficiency upgrade and the 22 Septembe
 
 | Priority | Work | Completion evidence |
 | --- | --- | --- |
-| P0 | Finish the ten verified-submission pilot. Resolve owner facts and browser challenges, review complete previews, submit only with exact approval, and record receipts. | Ten distinct eligible employer receipts; separate attempted, blocked, closed, and submitted counts. |
+| Done | Finish the ten verified-submission pilot. | Ten employer receipts were verified and recorded on 22 September 2026; total wall time was 3 hours 4 minutes 38 seconds. |
+| P0 | Build and validate the [30-second end-to-end campaign flow](30-second-throughput-plan.md), including coordinator timing, candidate reserve, bounded drafting, exact batch review, sequential receipts, and exception continuation. | A fresh ten-role campaign produces ten suitable verified receipts within five minutes, counting search, review, owner wait, failures, and recovery; quality gates remain green. |
 | Done | Exclude already handled roles from every search result using the profile's durable application history and stable ATS role IDs. Keep unattempted discovered roles searchable. | 162 tests and privacy gate pass. Production Ashby query for an already handled Kestra role returned `handledFiltered: 1`, `found: 0`, and no items. |
 | P0 | Recheck official posting status and Bulgaria remote eligibility before preparing a form. | Stale and geographically restricted roles are removed before a browser attempt. |
 | P0 | Fill relevant optional answers when supported by verified applicant evidence; review all filled and unfilled fields. | Dash0-style AI and startup questions receive grounded answers or an explicit owner decision to leave blank; refreshed preview is accurate. |
