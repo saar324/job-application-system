@@ -15,6 +15,9 @@ import { ashby } from "../src/discovery/sources/ashby.js";
 import { jobicy } from "../src/discovery/sources/jobicy.js";
 import { lever } from "../src/discovery/sources/lever.js";
 import { greenhouse } from "../src/discovery/sources/greenhouse.js";
+import { remoteok } from "../src/discovery/sources/remoteok.js";
+import { arbeitnow } from "../src/discovery/sources/arbeitnow.js";
+import { needsEmployerApplyUrl } from "../src/discovery/application-destination.js";
 
 test("full-time discovery scores, ingests, and applies to qualifying jobs", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-discovery-test-"));
@@ -49,7 +52,7 @@ test("full-time discovery scores, ingests, and applies to qualifying jobs", asyn
       id: "123", position: "Senior Node.js Engineer", company: "Example",
       description: "TypeScript Node.js platform", tags: ["TypeScript", "Node.js"],
       location: "Worldwide", date: new Date().toISOString(),
-      url: "https://remoteok.com/jobs/123", apply_url: "https://remoteok.com/jobs/123"
+      url: "https://remoteok.com/jobs/123", apply_url: "https://careers.example.test/apply/123"
     }
   ]), { status: 200, headers: { "content-type": "application/json" } });
   const discovery = new DiscoveryService({ applicationService, profiles, config, fetchImpl });
@@ -490,6 +493,29 @@ test("Himalayas listings wait for an employer application URL before auto-apply"
   assert.equal(result.items[1].application.status, "queued");
   await applicationService.waitForIdle();
   assert.equal(applicationService.list("applications", "applicant-one").length, 1);
+});
+
+test("public boards distinguish board listings from employer application destinations", async () => {
+  assert.equal(needsEmployerApplyUrl("https://jobicy.com/jobs/123", "jobicy.com"), true);
+  assert.equal(needsEmployerApplyUrl("https://www.jobicy.com/jobs/123", "jobicy.com"), true);
+  assert.equal(needsEmployerApplyUrl("https://jobicy.com.evil.example/apply", "jobicy.com"), false);
+  assert.equal(needsEmployerApplyUrl("invalid", "jobicy.com"), true);
+
+  const j = await jobicy.search({ limit: 1, profile: { preferences: { fullTime: { jobTitles: ["Engineer"] } } },
+    fetchImpl: async () => new Response(JSON.stringify({ jobs: [{ id: 1, jobTitle: "Engineer",
+      companyName: "Example", url: "https://jobicy.com/jobs/123" }] })) });
+  assert.equal(j[0].applicationDestinationPending, true);
+
+  const r = await remoteok.search({ limit: 1, fetchImpl: async () => new Response(JSON.stringify([
+    { legal: "metadata" }, { id: 2, position: "Engineer", url: "https://remoteok.com/jobs/2",
+      apply_url: "https://remoteok.com/jobs/2" }
+  ])) });
+  assert.equal(r[0].applicationDestinationPending, true);
+
+  const a = await arbeitnow.search({ limit: 1, fetchImpl: async () => new Response(JSON.stringify({
+    data: [{ slug: "engineer", title: "Engineer", url: "https://www.arbeitnow.com/jobs/engineer" }]
+  })) });
+  assert.equal(a[0].applicationDestinationPending, true);
 });
 
 test("Ashby curated discovery preserves secondary remote locations", async () => {

@@ -7,6 +7,14 @@ Himalayas listing pages. The board's Apply action opened an account sign-up, and
 browser worker stopped on a human challenge before finding an employer form. The
 source had incorrectly treated each listing URL as a ready application destination.
 
+A later Jobicy pilot found the same failure: a qualifying listing was queued using
+its Jobicy URL and the worker stopped at a board account prompt. Jobicy, Remote OK,
+and Arbeitnow now use the same source-host guard. Their source descriptors expose
+the employer-URL handoff, and board-hosted links are recorded as opportunities
+without queuing application preparation. The Jobicy pilot also showed a listing
+whose employer deadline had passed; the coordinator must verify posting status
+at the employer destination before a real application.
+
 The Himalayas adapter now marks board-hosted application links as needing employer
 URL resolution. Discovery still scores and records the role, but it does not queue
 automatic browser preparation for those links. The source descriptor and query

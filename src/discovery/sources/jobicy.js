@@ -1,5 +1,6 @@
 import { plainText } from "../text.js";
 import { preferredTitleGroups } from "../title-preferences.js";
+import { needsEmployerApplyUrl } from "../application-destination.js";
 
 export const jobicy = {
   id: "jobicy",
@@ -39,6 +40,7 @@ export const jobicy = {
       company: row.companyName || "Unknown company",
       listingUrl: row.url,
       applyUrl: row.url,
+      applicationDestinationPending: needsEmployerApplyUrl(row.url, "jobicy.com"),
       description: plainText(row.jobDescription || row.jobExcerpt),
       tags: [...(row.jobIndustry ?? []), ...(row.jobType ?? [])],
       location: row.jobGeo || "Remote",

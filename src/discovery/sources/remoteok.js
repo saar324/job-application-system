@@ -1,4 +1,5 @@
 import { plainText } from "../text.js";
+import { needsEmployerApplyUrl } from "../application-destination.js";
 
 export const remoteok = {
   id: "remoteok",
@@ -16,6 +17,7 @@ export const remoteok = {
       company: row.company || "Unknown company",
       listingUrl: row.url,
       applyUrl: row.apply_url || row.url,
+      applicationDestinationPending: needsEmployerApplyUrl(row.apply_url || row.url, "remoteok.com"),
       description: plainText(row.description),
       tags: row.tags ?? [],
       location: row.location || "Remote",
