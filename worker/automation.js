@@ -10,6 +10,7 @@ const START_BUTTON = /^(?:apply|apply manually)$|apply now|apply for this job|st
 const AUTH_BUTTON = /sign in|log in|create account|register|sign up/i;
 const SIGNUP_BUTTON = /create account|register|sign up/i;
 const SUCCESS_TEXT = /thank you|application (?:has been |was )?(?:successfully )?submitted|application received|received your application/i;
+const BLOCKED_SUBMISSION_TEXT = /we couldn't submit your application[\s\S]*flagged as possible spam/i;
 const CHALLENGE_TEXT = /captcha|verify you are human|security check|unusual traffic|cloudflare/i;
 const VERIFICATION_FIELD = /\b(otp|one.?time|verification code|security code|authenticator|two.?factor|2fa|mfa|passkey)\b/i;
 
@@ -19,6 +20,7 @@ export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSub
   while (Date.now() < deadline) {
     const currentUrl = page.url();
     const body = (await page.locator("body").innerText().catch(() => "")).slice(0, 50_000);
+    if (BLOCKED_SUBMISSION_TEXT.test(body)) return false;
     const confirmationUrl = /confirmation|thank|success|submitted/i.test(currentUrl) && currentUrl !== previousUrl;
     const invalidControls = await page.locator("input:invalid, textarea:invalid, select:invalid").count().catch(() => 0);
     const activeForm = await page.locator("form:visible").count().catch(() => 0);
@@ -69,9 +71,13 @@ function flattenProfile(profile, currentUrl) {
     "zip code": contact.postalCode,
     linkedin: links.linkedin,
     "linkedin profile": links.linkedin,
+    "linkedin url": links.linkedin,
     github: links.github,
+    "github url": links.github,
     portfolio: links.portfolio,
     website: links.portfolio,
+    "personal website": links.portfolio,
+    "website url": links.portfolio,
     resume: documents.resume,
     cv: documents.resume,
     "cover letter": documents.coverLetter,
@@ -873,6 +879,13 @@ export async function automateApplication({ page, profile, opportunity, applicat
       };
       await writeFile(path.join(artifactsDirectory, `${application.id}.unverified.json`),
         JSON.stringify(diagnostic), { mode: 0o600 }).catch(() => undefined);
+      if (BLOCKED_SUBMISSION_TEXT.test(diagnostic.body)) {
+        return pause({
+          status: "needs_human", message: "The employer blocked the submission as possible spam",
+          requirements: [{ kind: "submission_blocked", action: "manual_review",
+            message: "Ashby flagged this application as possible spam. Continue in a regular browser and verify its outcome." }]
+        }, step, "final_action_started");
+      }
       return pause({
         status: "needs_human",
         message: "The submit action ran, but the site did not provide a verifiable confirmation",

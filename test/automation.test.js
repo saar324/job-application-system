@@ -163,6 +163,22 @@ test("optional skill checkboxes use only verified profile skills", async () => {
   assert.deepEqual(result.requirements[0].preview.unfilled.map((field) => field.label), ["Asyncio"]);
 });
 
+test("common link label variants use verified profile URLs", async () => {
+  const result = await run(`<form>
+    <label>LinkedIn URL <input name="linkedin_url"></label>
+    <label>GitHub URL <input name="github_url"></label>
+    <label>Personal Website <input name="personal_website"></label>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile, links: {
+    linkedin: "https://www.linkedin.com/in/example/",
+    github: "https://github.com/example",
+    portfolio: "https://example.com"
+  } }, { finalApprovalRequired: true });
+  assert.deepEqual(result.requirements[0].preview.filled.map((field) => field.value), [
+    "https://www.linkedin.com/in/example/", "https://github.com/example", "https://example.com"
+  ]);
+});
+
 test("Ashby submit waits for the last field save triggered by blur", async () => {
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -189,6 +205,13 @@ test("Ashby success wording records a verified receipt", async () => {
   const result = await run(`<form onsubmit="event.preventDefault();document.body.innerHTML='<h2>Success</h2><p>Your application was successfully submitted. We will contact you if there are next steps.</p>'">
     <button type="submit">Submit Application</button></form>`);
   assert.equal(result.status, "submitted");
+});
+
+test("explicit employer spam rejection is reported as blocked, not uncertain", async () => {
+  const result = await run(`<form onsubmit='event.preventDefault();document.body.textContent="We couldn\\u0027t submit your application. Your application submission was flagged as possible spam."'>
+    <button type="submit">Submit Application</button></form>`);
+  assert.equal(result.status, "needs_human");
+  assert.equal(result.requirements[0].kind, "submission_blocked");
 });
 
 test("worker durably marks final action immediately before clicking submit", async () => {
