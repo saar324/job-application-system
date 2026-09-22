@@ -1,19 +1,13 @@
-# Privacy gate remediation plan
+# Privacy history remediation — 2026-09-22
 
-## Current state (2026-09-22)
+## Completed
 
-PR #3's standard check passes. The trusted private privacy workflow fails on four current tracked paths (`CHANGELOG.md`, `test/discovery.test.js`, `test/efficiency-upgrade.test.js`, and `test/fixtures/ranking-evaluation.json`), eleven older author records, and blobs in those four paths plus two removed source files. The private denylist is supplied by a GitHub Actions secret and is unavailable in the local checkout. The local public-rule scanner passes, which does not supersede the trusted private result.
+The repository owner authorized the history replacement. A private mirror backup of the former refs and release metadata was saved outside the public repository before changing published refs. The old public branch and tags were replaced with a clean-root baseline; two releases pointing to the old commits were removed. PR #3 was closed and superseded by PR #4, which merged as `ba3a1e3`. The trusted private privacy check and the standard test check passed on the replacement PR, and the post-merge `main` check passed. Branch protection was restored with force pushes disabled. The only advertised GitHub head is `main`; there are no advertised tags or forks.
 
-The trusted scanner checks every blob and author reachable from `HEAD`. Editing the current files alone cannot clear historical matches. Disabling the private workflow or changing it to ignore history would hide the finding rather than remediate it. No merge should bypass the failing check.
+The trusted diagnostic reported matches in four current tracked paths and older author/blob history. The current examples and changelog links were revised, and the published branch was rebuilt from a clean baseline so the older matches are not reachable from `main`. The private denylist itself was never copied into repository files or public logs. Production still runs a pinned versioned release with its prior rollback copies; this repository rewrite did not deploy or modify production state.
 
-## Proposed migration, requiring repository-owner approval
+## Remaining GitHub-hosted references
 
-1. Export protected branch names, tags, release commit IDs, open PRs, and deployment refs. Make an immutable backup of all Git refs in a private location. Record who needs to update clones and integrations. Rotate any credential if the private reviewer identifies credential exposure; a history rewrite is not credential rotation.
-2. In a disposable mirror clone, replace the private matches in current files with neutral examples and rewrite historical blobs and author identities using an owner-approved mapping. Preserve source behavior and test coverage. Do not copy the private denylist or real applicant data into the repository.
-3. Run syntax, browser/unit, strict OpenSpec, and the public privacy scanner on the rewritten clone. Run the trusted private scanner against the candidate history in a controlled workflow with access to the existing secret. Iterate on specific failures without publishing private match values in logs.
-4. Present the exact old-to-new ref map, changed file summary, passing checks, and clone-update instructions to the owner. Only then force-update protected refs with a short maintenance window, preserving the backup. Recreate or retarget the PR, tags, and release references as needed, then rerun CI against the published refs.
-5. Verify production still runs its pinned release, update the deployment source ref to the sanitized commit, and retain the prior executable release for rollback. Existing commit URLs and signatures cannot be preserved after rewriting those commits; collaborators must fetch the new history rather than merge old branches back.
+GitHub's read-only `refs/pull/1/head`, `refs/pull/2/head`, and `refs/pull/3/head` still point to old history. Old commit URLs or cached PR views may therefore remain accessible. GitHub documents that repository owners must [contact GitHub Support](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository#fully-removing-the-data-from-github) for eligible removal of affected pull-request refs and cached views. Support decides whether these findings meet its sensitivity criteria. Full historical removal cannot be claimed until Support completes that process. Do not republish the locally retained backup or merge a branch based on the old history.
 
-## Decision needed
-
-The branch-history replacement is an irreversible change for shared Git users and public links. The owner must authorize the specific ref migration after reviewing the prepared mapping and private scanner result. Until then, keep PR #3 unmerged and the deployed versioned release available for rollback.
+The replacement PR and current `main` are verified clean by the trusted gate. Local clones with the old refs need to fetch the new `main` and reset or rebase their work; merging the old branch history would reintroduce it.

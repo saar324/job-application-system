@@ -55,5 +55,5 @@ not evidence of a general throughput improvement.
 
 No real form was submitted in this check. A live form pilot still requires a
 current, eligible employer destination and the owner's approval of the exact
-completed preview. The GitHub PR remains draft while its private history-wide
-privacy gate is unresolved.
+completed preview. The later privacy cleanup and merged replacement PR are
+recorded in [privacy history remediation](privacy-history-remediation.md).
