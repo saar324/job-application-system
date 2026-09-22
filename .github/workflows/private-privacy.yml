@@ -1,0 +1,32 @@
+name: Private privacy gate
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  privacy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch proposed commit without executing it
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags origin "pull/${PR_NUMBER}/head:refs/remotes/origin/privacy-pr"
+      - name: Preserve the trusted scanner and check out the proposal
+        run: |
+          cp scripts/check-repository-privacy.js "$RUNNER_TEMP/check-repository-privacy.mjs"
+          git checkout --detach refs/remotes/origin/privacy-pr
+      - name: Scan proposed history with the private denylist
+        env:
+          PRIVACY_DENYLIST_B64: ${{ secrets.PRIVACY_DENYLIST_B64 }}
+          PRIVACY_DENYLIST_REQUIRED: "true"
+          PRIVACY_REPOSITORY_ROOT: ${{ github.workspace }}
+        run: node "$RUNNER_TEMP/check-repository-privacy.mjs"

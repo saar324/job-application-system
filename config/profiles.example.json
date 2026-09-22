@@ -1,0 +1,43 @@
+{
+  "profiles": [
+    {
+      "id": "applicant-one",
+      "displayName": "Applicant One",
+      "defaultMode": "full_time",
+      "contact": {
+        "firstName": "REPLACE_ME",
+        "lastName": "REPLACE_ME",
+        "email": "applicant@example.test",
+        "phone": "REPLACE_ME",
+        "location": "REPLACE_ME",
+        "city": "REPLACE_ME",
+        "country": "REPLACE_ME"
+      },
+      "links": {
+        "linkedin": "REPLACE_ME",
+        "github": "REPLACE_ME",
+        "portfolio": "REPLACE_ME"
+      },
+      "preferences": {
+        "locations": [],
+        "minimumCompensation": 0,
+        "minimumNetCompensation": 0,
+        "minimumUnspecifiedCompensation": 0,
+        "compensationCurrency": "REPLACE_ME",
+        "compensationPeriod": "month",
+        "minimumHourlyRate": 0,
+        "fullTime": {
+          "jobTitles": [],
+          "automatedDiscoverySources": []
+        },
+        "freelance": {
+          "services": [],
+          "automatedDiscoverySources": []
+        }
+      },
+      "skills": [],
+      "documents": { "resume": "REPLACE_ME" },
+      "applicationAnswers": {}
+    }
+  ]
+}

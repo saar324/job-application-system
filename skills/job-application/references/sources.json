@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "purpose": "Private source catalog template. Add sources only in your private deployment copy.",
+  "tagDefinitions": {
+    "countries": "Countries or regions with listing coverage; this does not prove applicant eligibility.",
+    "employmentTypes": ["full_time", "contract", "freelance", "part_time", "internship"],
+    "fields": [],
+    "seniority": [],
+    "languages": "Languages supported by the source or commonly used in its listings.",
+    "remoteScopes": ["country", "regional", "worldwide", "country_restricted"]
+  },
+  "searchPolicy": {
+    "residenceCountry": "",
+    "preferredSeniority": [],
+    "excludedSeniority": [],
+    "preferredRemoteScopes": [],
+    "targetEmployerRegions": [],
+    "priorityEmployerCountries": [],
+    "acceptableEngagements": [],
+    "screeningRules": []
+  },
+  "autonomousDiscovery": {
+    "priorityOrder": [],
+    "serverAdapters": [],
+    "visibleBrowserSources": []
+  },
+  "userControlled": []
+}
