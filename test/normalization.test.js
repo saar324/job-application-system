@@ -9,7 +9,7 @@ test("JobPosting JSON-LD normalizes location, employment, and compensation with 
     "@context": "https://schema.org", "@type": "JobPosting", title: "Senior Engineer",
     hiringOrganization: { name: "Example" }, description: "Build systems",
     url: "https://example.test/jobs/1", jobLocationType: "TELECOMMUTE",
-    applicantLocationRequirements: { "@type": "Country", name: "Bulgaria" },
+    applicantLocationRequirements: { "@type": "Country", name: "Portugal" },
     employmentType: "FULL_TIME", baseSalary: { currency: "EUR", value: { minValue: 50000, maxValue: 70000, unitText: "YEAR" } }
   })}</script>`);
   assert.equal(result.title, "Senior Engineer");

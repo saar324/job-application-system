@@ -20,11 +20,12 @@ function dataUrl(html) {
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
-async function run(html, answers = {}, profileOverride = profile, applicationOverride = {}) {
+async function run(html, answers = {}, profileOverride = profile, applicationOverride = {}, setup) {
   const context = await browser.newContext();
   const page = await context.newPage();
   const artifactsDirectory = await mkdtemp(path.join(os.tmpdir(), "job-worker-test-"));
   try {
+    if (setup) await setup(page);
     return await automateApplication({
       page, profile: profileOverride,
       opportunity: { applyUrl: dataUrl(html) },
@@ -47,6 +48,35 @@ test("worker pauses for an unknown required answer", async () => {
   `);
   assert.equal(result.status, "needs_input");
   assert.deepEqual(result.requirements[0].fields, ["kotlin_years"]);
+});
+
+test("worker fills safe fields before pausing for an embedded challenge", async () => {
+  const result = await run(`
+    <form>
+      <label>First name <input name="first_name" required></label>
+      <label>Email address <input name="email" type="email" required></label>
+      <button type="submit">Submit Application</button>
+    </form>
+    <iframe src="data:text/html,recaptcha-challenge"></iframe>
+  `);
+  assert.equal(result.status, "needs_human");
+  assert.equal(result.requirements[0].kind, "human_challenge");
+  assert.deepEqual(result.checkpoint.fields.map((field) => [field.key, field.status]),
+    [["first_name", "filled"], ["email", "filled"]]);
+});
+
+test("invisible reCAPTCHA badge does not block final review", async () => {
+  const result = await run(`
+    <form>
+      <label>First name <input name="first_name" required></label>
+      <button type="submit">Submit Application</button>
+    </form>
+    <iframe src="https://www.recaptcha.net/recaptcha/enterprise/anchor?size=invisible"></iframe>
+  `, {}, profile, { finalApprovalRequired: true }, async (page) => {
+    await page.route("https://www.recaptcha.net/**", (route) => route.fulfill({ body: "badge" }));
+  });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.equal(result.requirements[0].preview.filled[0].value, "Ada");
 });
 
 test("an explicit missing employer posting stops without a form review", async () => {
