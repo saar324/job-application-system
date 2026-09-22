@@ -203,6 +203,8 @@ export async function inventoryFormStep(page) {
     // their backing inputs here would mislabel custom selections as raw inputs.
     const ashbyEntry = element.closest(".ashby-application-form-field-entry");
     if (element.closest(".ashby-application-form-input-radio-group")
+      || element.closest(".ashby-application-form-autofill-input-root")
+      || element.getAttribute("aria-hidden") === "true"
       || ashbyEntry && (element.matches('[role="combobox"]')
         || element.closest(".ashby-application-form-input-yesno"))) return null;
     if (element.type === "file" ? !visible(form ?? element.parentElement) : !visible(element)) return null;
