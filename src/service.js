@@ -501,6 +501,11 @@ export class ApplicationService {
           : pendingFinal.length ? "awaiting_batch_review"
             : scan && applications.length < target ? "insufficient_candidates" : "blocked";
     const completedAt = status === "complete" ? submitted[target - 1].receipt.submittedAt : undefined;
+    const lastApplicationUpdate = applications.length
+      ? applications.map((item) => item.updatedAt).sort().at(-1) : undefined;
+    const endedAt = completedAt ?? failed?.at
+      ?? (["insufficient_candidates", "blocked"].includes(status)
+        ? [scan?.at, lastApplicationUpdate].filter(Boolean).sort().at(-1) : undefined);
     const reviewReadyAt = finalConfirmations.length
       ? finalConfirmations.map((item) => item.createdAt).sort().at(-1) : undefined;
     const duration = (end, start) => end && start
@@ -510,7 +515,8 @@ export class ApplicationService {
       campaignId, status, target, reserve: started.details.reserve, mode: started.details.mode,
       startedAt: started.at, ...(scan ? { scanCompletedAt: scan.at, scan: scan.details } : {}),
       ...(completedAt ? { completedAt } : {}),
-      elapsedMs: Math.max(0, Date.parse(completedAt ?? now()) - Date.parse(started.at)),
+      ...(endedAt ? { endedAt } : {}),
+      elapsedMs: Math.max(0, Date.parse(endedAt ?? now()) - Date.parse(started.at)),
       timing: {
         scanMs: duration(scan?.at, started.at),
         preparationMs: duration(!active ? reviewReadyAt : undefined, scan?.at),

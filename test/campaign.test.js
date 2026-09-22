@@ -118,4 +118,8 @@ test("campaign rechecks handled ATS identity after a public-board redirect", asy
   assert.equal(result.status, "insufficient_candidates");
   assert.equal(result.scan.handledFiltered, 1);
   assert.equal(result.applications.length, 0);
+  assert.equal(result.endedAt, result.scanCompletedAt);
+  const elapsed = result.elapsedMs;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(service.campaignStatus(result.campaignId, identity.profileId).elapsedMs, elapsed);
 });
