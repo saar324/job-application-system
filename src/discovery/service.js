@@ -8,6 +8,7 @@ import { lever } from "./sources/lever.js";
 import { scoreOpportunity } from "./scoring.js";
 import { telemetry } from "../telemetry.js";
 import { normalizeOpportunity } from "./normalization.js";
+import { runIdempotent } from "../idempotency.js";
 
 const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever].map((source) => [source.id, source]));
 
@@ -20,7 +21,77 @@ export class DiscoveryService {
     this.enricher = enricher;
   }
 
+  async describeSources(identity, mode) {
+    const profile = await this.profiles.get(identity.profileId);
+    const selectedMode = mode ?? profile?.defaultMode ?? this.config.defaultMode;
+    const settings = this.config.modes[selectedMode];
+    if (!settings) throw Object.assign(new Error(`unknown mode: ${selectedMode}`), { status: 400 });
+    const preference = selectedMode === "freelance"
+      ? profile?.preferences?.freelance : profile?.preferences?.fullTime;
+    const enabled = preference?.automatedDiscoverySources ?? settings.sources ?? [];
+    const capabilities = {
+      lever: { kind: "official_feed", filters: { board: "configured", location: "provider", team: "provider",
+        department: "provider", commitment: "provider", level: "provider" } },
+      himalayas: { kind: "public_board", filters: { q: "provider", country: "provider",
+        worldwide: "provider", exclude_worldwide: "provider", seniority: "provider",
+        employment_type: "provider", company: "provider", timezone: "provider", sort: "provider" } },
+      greenhouse: { kind: "official_feed", filters: { board: "configured", title: "local", location: "local" } },
+      ashby: { kind: "official_feed", filters: { board: "configured", title: "local", location: "local" } }
+    };
+    return { mode: selectedMode, sources: enabled.filter((id) => SOURCES.has(id)).map((id) => ({
+      id, version: 1, ...(capabilities[id] ?? { kind: "public_board", filters: {} }),
+      filterOptions: id === "himalayas" ? {
+        sort: ["relevant", "recent", "salaryAsc", "salaryDesc", "nameAToZ", "nameZToA", "jobs"],
+        seniority: ["Entry-level", "Mid-level", "Senior", "Manager", "Director", "Executive"],
+        employment_type: ["Full Time", "Part Time", "Contractor", "Temporary", "Intern", "Volunteer", "Other"]
+      } : this.config.discovery?.sourceOptions?.[id]?.filterValues ?? {},
+      configuredBoards: (this.config.discovery?.sourceOptions?.[id]?.boards
+        ?? this.config.discovery?.sourceOptions?.[id]?.sites ?? []).map((item) => item.slug ?? item.token),
+      ...(id === "himalayas" ? { applicationFlow: "resolve_employer_url_before_prepare" } : {}),
+      maxQueries: 8, maxResultsPerQuery: 200
+    })) };
+  }
+
+  async query(input, identity) {
+    const descriptor = await this.describeSources(identity, input.mode);
+    const source = descriptor.sources.find((item) => item.id === input.source);
+    if (!source) throw Object.assign(new Error("source is not enabled for this profile and mode"), { status: 400 });
+    if (!Array.isArray(input.queries) || input.queries.length < 1 || input.queries.length > 8
+      || typeof input.scanCycleId !== "string" || input.scanCycleId.length < 1 || input.scanCycleId.length > 100
+      || typeof input.idempotencyKey !== "string" || input.idempotencyKey.length < 8
+      || input.idempotencyKey.length > 200) {
+      throw Object.assign(new Error("a bounded query plan, scanCycleId, and idempotencyKey are required"), { status: 400 });
+    }
+    const queries = input.queries.map((query) => {
+      if (!query || typeof query !== "object" || Array.isArray(query)
+        || !Number.isInteger(query.limit ?? 50) || (query.limit ?? 50) < 1 || (query.limit ?? 50) > 200
+        || !query.filters || typeof query.filters !== "object" || Array.isArray(query.filters)) {
+        throw Object.assign(new Error("each query needs filters and a limit from 1 to 200"), { status: 400 });
+      }
+      for (const [key, value] of Object.entries(query.filters)) {
+        if (!Object.hasOwn(source.filters, key)
+          || (key === "board" && !source.configuredBoards.includes(value))
+          || !(typeof value === "string" || Array.isArray(value) && value.length <= 10
+            && value.every((item) => typeof item === "string"))
+          || (source.id !== "lever" && Array.isArray(value))
+          || (["worldwide", "exclude_worldwide"].includes(key) && !["true", "false"].includes(value))
+          || (source.filterOptions?.[key] && !(Array.isArray(value) ? value : [value])
+            .every((item) => source.filterOptions[key].includes(item)))
+          || JSON.stringify(value).length > 500) {
+          throw Object.assign(new Error(`unsupported filter: ${key}`), { status: 400 });
+        }
+      }
+      return { filters: query.filters, limit: query.limit ?? 50 };
+    });
+    const key = `${input.scanCycleId}:${input.idempotencyKey}`;
+    return runIdempotent({ store: this.applicationService.store, profileId: identity.profileId,
+      action: "discovery.query", key, input: { source: source.id, mode: descriptor.mode, queries },
+      execute: () => this.scan({ mode: descriptor.mode, sources: [source.id], queryPlan: queries,
+        limitPerSource: Math.max(...queries.map((query) => query.limit)) }, identity) });
+  }
+
   async scan(input, identity) {
+    const scanStarted = performance.now();
     const profile = await this.profiles.get(identity.profileId);
     const mode = input.mode ?? profile?.defaultMode ?? this.config.defaultMode;
     const modeConfig = this.config.modes[mode];
@@ -50,23 +121,39 @@ export class DiscoveryService {
       return source;
     });
     const internalErrors = [];
-    const settled = await Promise.allSettled(selected.map((source) => source.search({
-      limit: requestedLimit,
-      fetchImpl: this.fetchImpl,
+    const fetchStarted = performance.now();
+    let requestCount = 0;
+    const fetchCache = new Map();
+    const cachedFetch = async (url, options) => {
+      const key = String(url);
+      if (!fetchCache.has(key)) {
+        requestCount += 1;
+        fetchCache.set(key, Promise.resolve(this.fetchImpl(url, options)));
+      }
+      return (await fetchCache.get(key)).clone();
+    };
+    const requests = selected.flatMap((source) => (input.queryPlan ?? [null]).map((query) => ({ source, query })));
+    const settled = await Promise.allSettled(requests.map(({ source, query }) => source.search({
+      limit: query?.limit ?? requestedLimit,
+      query: query?.filters,
+      fetchImpl: cachedFetch,
       profile,
       sourceConfig: this.config.discovery?.sourceOptions?.[source.id] ?? {},
       onError: (error) => internalErrors.push({ source: source.id, ...error })
     })));
+    telemetry.observe("discovery.fetch_ms", performance.now() - fetchStarted, { mode });
+    telemetry.count("discovery.provider_requests", requestCount, { mode });
 
     const errors = [...internalErrors];
     const found = [];
     for (let index = 0; index < settled.length; index += 1) {
       const result = settled[index];
-      if (result.status === "rejected") errors.push({ source: selected[index].id, error: result.reason.message });
+      if (result.status === "rejected") errors.push({ source: requests[index].source.id, error: result.reason.message });
       else found.push(...result.value);
     }
 
-    const normalizedFound = found.map((raw) => normalizeOpportunity(raw));
+    const uniqueFound = [...new Map(found.map((raw) => [`${raw.source}:${raw.externalId ?? raw.applyUrl}`, raw])).values()];
+    const normalizedFound = uniqueFound.map((raw) => normalizeOpportunity(raw));
     const scorerVersion = String(modePreferences.scorerVersion
       ?? this.config.discovery?.scorerVersion ?? "2");
     const shadowScorerVersion = this.config.discovery?.shadowScorerVersion
@@ -111,7 +198,10 @@ export class DiscoveryService {
       }
       const opportunity = await this.applicationService.addOpportunity(scored, identity);
       const entry = { opportunity };
-      if (modeConfig.autoApplyDiscovered && profileStatus.readyToApply) {
+      if (modeConfig.autoApplyDiscovered && scored.applicationDestinationPending) {
+        entry.applicationBlockedBySource = "employer_application_url_required";
+        telemetry.count("discovery.application_destination_pending", 1, { source: scored.source });
+      } else if (modeConfig.autoApplyDiscovered && profileStatus.readyToApply) {
         try { entry.application = await this.applicationService.requestApplication(opportunity.id, {}, identity); }
         catch (error) {
           if (error.status !== 409) throw error;
@@ -126,11 +216,12 @@ export class DiscoveryService {
     }
     telemetry.count("discovery.scans", 1, { mode, sourceCount: requestedSources.length });
     telemetry.count("discovery.source_failures", errors.length, { mode });
-    telemetry.observe("discovery.jobs_found", found.length, { mode });
+    telemetry.observe("discovery.jobs_found", uniqueFound.length, { mode });
+    telemetry.observe("discovery.scan_ms", performance.now() - scanStarted, { mode });
     return {
       mode,
       sources: requestedSources,
-      found: found.length,
+      found: uniqueFound.length,
       qualifying: qualifying.length,
       excluded,
       readyToApply: profileStatus.readyToApply,

@@ -37,3 +37,34 @@ test("receipt store rejects reuse of an application ID with changed payload", as
   assert.equal(conflict.status, "needs_human");
   assert.equal(conflict.requirements[0].kind, "idempotency_conflict");
 });
+
+test("attempt status exposes a late active run and its durable receipt", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-receipts-test-"));
+  const store = new ReceiptStore(directory);
+  let finish;
+  const gate = new Promise((resolve) => { finish = resolve; });
+  const running = store.run(payload(), async () => {
+    await gate;
+    return { status: "submitted", receipt: { submittedAt: "now", finalUrl: "https://example.test/done" } };
+  });
+  assert.equal((await store.status("application-one")).status, "active");
+  finish();
+  await running;
+  assert.equal((await new ReceiptStore(directory).status("application-one")).status, "submitted");
+});
+
+test("a crashed pre-final attempt remains distinguishable from a started final action", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-receipts-test-"));
+  const store = new ReceiptStore(directory);
+  await assert.rejects(store.run(payload(), async () => { throw new Error("browser crashed during preparation"); }));
+  assert.equal((await new ReceiptStore(directory).status("application-one")).status, "before_final_action");
+  await assert.rejects(store.run(payload(), async (markFinalActionStarted) => {
+    await markFinalActionStarted();
+    throw new Error("browser crashed after final action began");
+  }));
+  assert.equal((await new ReceiptStore(directory).status("application-one")).status, "final_action_started");
+  let retried = false;
+  const fenced = await new ReceiptStore(directory).run(payload(), async () => { retried = true; });
+  assert.equal(retried, false);
+  assert.equal(fenced.requirements[0].kind, "submission_unverified");
+});

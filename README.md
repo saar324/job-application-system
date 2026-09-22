@@ -8,7 +8,7 @@ Agent-first does not mean tied to a particular agent runtime or to a broader per
 
 This repository intentionally contains no real applicant profiles, resumes, application records, credentials, preferred employers, source selections, compensation requirements, or writing preferences. The included defaults are safe templates: discovery and automatic application are disabled until a deployment opts in.
 
-Start with [Getting started](docs/getting-started.md). It separates a five-minute local simulation from authenticated and production deployment, and lists every private file a new operator must create.
+Start with [Getting started](docs/getting-started.md). It separates a five-minute local simulation from authenticated and production deployment, and lists every private file a new operator must create. The single-agent efficiency upgrade is documented in [Application efficiency upgrade](docs/application-efficiency-upgrade.md), with the [2026-09-21 production rollout record](docs/production-rollout-2026-09-21.md) and [2026-09-22 public-board handoff check](docs/public-board-handoff-2026-09-22.md).
 
 ## Capabilities
 

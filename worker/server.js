@@ -6,6 +6,7 @@ import { validateWorkerPayload } from "./document-policy.js";
 import { ReceiptStore } from "./receipts.js";
 import { executeInFreshContext } from "./execution.js";
 import { createAdaptiveControllerFromEnv } from "./adaptive.js";
+import { draftProviderFromEnv } from "./draft-provider.js";
 import { createValidatedEgressProxy } from "./egress-proxy.js";
 
 async function readJson(request) {
@@ -39,6 +40,7 @@ const browser = await chromium.launch({
   headless: process.env.WORKER_HEADLESS !== "false", args: ["--disable-quic"]
 });
 const adaptiveController = createAdaptiveControllerFromEnv();
+const draftProvider = draftProviderFromEnv();
 
 const server = createServer(async (request, response) => {
   try {
@@ -48,13 +50,18 @@ const server = createServer(async (request, response) => {
     if (request.headers.authorization !== `Bearer ${token}`) {
       return send(response, 401, { error: "invalid worker token" });
     }
+    const attempt = request.url?.match(/^\/v1\/attempts\/([a-zA-Z0-9_-]{1,80})$/);
+    if (request.method === "GET" && attempt) {
+      return send(response, 200, await receiptStore.status(attempt[1]));
+    }
     if (request.method !== "POST" || request.url !== "/v1/submit") {
       return send(response, 404, { error: "route not found" });
     }
     const payload = await validateWorkerPayload(await readJson(request), documentRoot);
     const profile = payload.profile;
-    const result = await receiptStore.run(payload, async () => {
-      return executeInFreshContext({ browser, payload, urlPolicy, artifactsDirectory, adaptiveController, egressProxy });
+    const result = await receiptStore.run(payload, async (markFinalActionStarted) => {
+      return executeInFreshContext({ browser, payload, urlPolicy, artifactsDirectory,
+        adaptiveController, draftProvider, egressProxy, markFinalActionStarted });
     });
     return send(response, result.status === "submitted" ? 200 : 409, result);
   } catch (error) {

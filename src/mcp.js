@@ -47,6 +47,24 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
     }
   )));
 
+  server.registerTool("describe_job_sources", {
+    description: "Describe enabled, bounded search filters for the authenticated profile.",
+    inputSchema: { mode: z.enum(["full_time", "freelance"]).optional() },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  }, async ({ mode }) => result(await discovery.describeSources(identity, mode)));
+
+  server.registerTool("query_jobs", {
+    description: "Run a bounded search plan against one enabled public job source.",
+    inputSchema: {
+      mode: z.enum(["full_time", "freelance"]).optional(),
+      source: z.string(),
+      queries: z.array(z.object({ filters: z.record(z.string(), z.union([z.string(), z.array(z.string())])),
+        limit: z.number().int().min(1).max(200).optional() })).min(1).max(8),
+      scanCycleId: z.string().min(1).max(100),
+      idempotencyKey: z.string().min(8).max(200)
+    }, annotations: { openWorldHint: true }
+  }, async (input) => result(await discovery.query(input, identity)));
+
   const listSchema = { cursor: z.string().max(100).optional(), limit: z.number().int().min(1).max(100).optional() };
   server.registerTool("list_opportunities", {
     description: "List opportunities owned by the authenticated profile.", inputSchema: listSchema,
@@ -96,6 +114,27 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
       const value = await service.resolveConfirmation(confirmationId, { approved, answers }, identity);
       return { applicationId: value.id, status: value.status };
     }
+  )));
+  server.registerTool("approve_prepared_batch", {
+    description: "Approve only the exact complete previews explicitly named by the profile owner.",
+    inputSchema: {
+      entries: z.array(z.object({ applicationId: z.string().uuid(),
+        previewFingerprint: z.string().regex(/^[a-f0-9]{64}$/) })).min(1).max(50),
+      idempotencyKey: z.string().min(8).max(200)
+    }, annotations: { openWorldHint: false, destructiveHint: true }
+  }, async ({ entries, idempotencyKey }) => result(await idempotent(
+    service, identity, "approve_prepared_batch", idempotencyKey, { entries },
+    async () => service.approvePreparedBatch(entries, identity)
+  )));
+  server.registerTool("attach_application_research", {
+    description: "Attach an official company excerpt to a waiting application and requeue it.",
+    inputSchema: { applicationId: z.string().uuid(), url: z.string().url(),
+      excerpt: z.string().min(1).max(6000), officialSourceConfirmed: z.literal(true),
+      idempotencyKey: z.string().min(8).max(200) },
+    annotations: { openWorldHint: true, destructiveHint: false }
+  }, async ({ applicationId, idempotencyKey, ...body }) => result(await idempotent(
+    service, identity, "attach_application_research", idempotencyKey, { applicationId, body },
+    async () => service.attachResearch(applicationId, body, identity)
   )));
   return server;
 }

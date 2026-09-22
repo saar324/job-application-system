@@ -15,10 +15,17 @@ function descriptionOf(job) {
 
 export const lever = {
   id: "lever",
-  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, onError = () => {} }) {
-    const sites = configuredSites(sourceConfig);
+  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, query = {}, onError = () => {} }) {
+    const sites = configuredSites(sourceConfig).filter((site) => !query.board || site.slug === query.board);
     const settled = await Promise.allSettled(sites.map(async (site) => {
-      const response = await fetchImpl(`https://api.lever.co/v0/postings/${site.slug}?mode=json`, {
+      const url = new URL(`https://api.lever.co/v0/postings/${site.slug}`);
+      url.searchParams.set("mode", "json");
+      for (const key of ["location", "team", "department", "commitment", "level"]) {
+        for (const value of (Array.isArray(query[key]) ? query[key] : query[key] ? [query[key]] : [])) {
+          url.searchParams.append(key, value);
+        }
+      }
+      const response = await fetchImpl(url, {
         headers: { "user-agent": "job-application-system/0.1" },
         signal: AbortSignal.timeout(20_000)
       });
@@ -32,7 +39,14 @@ export const lever = {
     return settled
       .flatMap((result) => result.status === "fulfilled" ? result.value : [])
       .filter(({ job }) => job?.id && job?.text && job?.applyUrl && job.workplaceType === "remote"
-        && discoveryTitleRelevant(job.text, profile))
+        && discoveryTitleRelevant(job.text, profile)
+        && ["location", "team", "department", "commitment", "level"].every((key) => {
+          if (!query[key]) return true;
+          const allowed = Array.isArray(query[key]) ? query[key] : [query[key]];
+          const actual = key === "location" ? (job.categories?.allLocations ?? [job.categories?.location])
+            : [job.categories?.[key]];
+          return actual.some((value) => allowed.includes(value));
+        }))
       .sort((left, right) => Date.parse(right.job.createdAt ?? "") - Date.parse(left.job.createdAt ?? ""))
       .slice(0, limit)
       .map(({ site, job }) => ({

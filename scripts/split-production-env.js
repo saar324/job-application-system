@@ -28,6 +28,7 @@ const workerKeys = [
   "WORKER_ADAPTIVE_KILL_SWITCH_FILE",
   "WORKER_ADAPTIVE_MAX_STEPS", "WORKER_ADAPTIVE_TIMEOUT_MS", "WORKER_ADAPTIVE_MAX_TOKENS",
   "WORKER_ADAPTIVE_MAX_COST_USD"
+  , "WORKER_DRAFT_ENABLED", "WORKER_DRAFT_ENDPOINT", "WORKER_DRAFT_TOKEN", "WORKER_DRAFT_TIMEOUT_MS"
 ];
 await secureWrite(serverFile, select(serverKeys));
 await secureWrite(workerFile, select(workerKeys));

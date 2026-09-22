@@ -2,7 +2,7 @@ import path from "node:path";
 import { automateApplication } from "./automation.js";
 
 export async function executeInFreshContext({ browser, payload, urlPolicy, artifactsDirectory,
-  automate = automateApplication, adaptiveController, egressProxy }) {
+  automate = automateApplication, adaptiveController, draftProvider, egressProxy, markFinalActionStarted }) {
   const initialHostname = new URL(payload.opportunity.applyUrl).hostname.toLowerCase();
   const requestDomains = payload.opportunity.userRequested === true ? [initialHostname] : [];
   try {
@@ -37,6 +37,7 @@ export async function executeInFreshContext({ browser, payload, urlPolicy, artif
     try {
       const result = await automate({
         page, profile: payload.profile, opportunity: payload.opportunity, application: payload.application,
+        evidencePacket: payload.evidencePacket, draftProvider, markFinalActionStarted,
         artifactsDirectory: path.join(artifactsDirectory, payload.profile.id)
       });
       if (result.status === "needs_human"

@@ -23,6 +23,37 @@ export class ReceiptStore {
 
   constructor(directory) { this.directory = path.resolve(directory); }
 
+  async status(applicationId) {
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(applicationId ?? "")) {
+      throw Object.assign(new Error("invalid application ID"), { status: 400 });
+    }
+    const active = this.#inFlight.has(applicationId);
+    const file = path.join(this.directory, `${applicationId}.json`);
+    const existing = await readFile(file, "utf8").then(JSON.parse).catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (existing?.result?.status === "submitted") return { status: "submitted", receipt: existing.result.receipt };
+    if (active) return { status: "active" };
+    const phase = await this.#readPhase(applicationId);
+    return { status: phase?.phase ?? "unknown" };
+  }
+
+  async #readPhase(id) {
+    return readFile(path.join(this.directory, `${id}.phase.json`), "utf8").then(JSON.parse).catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+  }
+
+  async #writePhase(id, fingerprint, phase) {
+    const file = path.join(this.directory, `${id}.phase.json`);
+    const temporary = `${file}.${process.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify({ fingerprint, phase, updatedAt: new Date().toISOString() })}\n`,
+      { mode: 0o600 });
+    await rename(temporary, file);
+  }
+
   async run(payload, submit) {
     const id = payload.application.id;
     const hash = fingerprint(payload);
@@ -44,7 +75,10 @@ export class ReceiptStore {
       throw error;
     });
     if (existing) return existing.fingerprint === hash ? existing.result : changedPayload();
-    const result = await submit();
+    const prior = await this.#readPhase(id);
+    if (prior?.phase === "final_action_started") return uncertainFinalAction();
+    await this.#writePhase(id, hash, "before_final_action");
+    const result = await submit(async () => this.#writePhase(id, hash, "final_action_started"));
     if (result.status === "submitted") {
       const temporary = `${file}.${process.pid}.tmp`;
       await writeFile(temporary, `${JSON.stringify({ fingerprint: hash, result }, null, 2)}\n`, { mode: 0o600 });
@@ -52,6 +86,15 @@ export class ReceiptStore {
     }
     return result;
   }
+}
+
+function uncertainFinalAction() {
+  return {
+    status: "needs_human",
+    message: "The previous final submission action may have run",
+    requirements: [{ kind: "submission_unverified", action: "manual_review",
+      message: "Verify the employer outcome before another attempt" }]
+  };
 }
 
 function changedPayload() {

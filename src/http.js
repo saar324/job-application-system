@@ -76,6 +76,15 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "POST" && url.pathname === "/v1/discovery/scan") {
         return send(response, 200, await discovery.scan(await jsonBody(request), identity));
       }
+      if (request.method === "GET" && url.pathname === "/v1/discovery/sources") {
+        return send(response, 200, await discovery.describeSources(identity));
+      }
+      if (request.method === "POST" && url.pathname === "/v1/discovery/query") {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "discovery_query", body,
+          async () => ({ status: 200, body: await discovery.query(body, identity) }));
+        return send(response, saved.status, saved.body);
+      }
       if (request.method === "POST" && url.pathname === "/v1/direct-applications") {
         const body = await jsonBody(request);
         const saved = await idempotentHttp(service, request, identity, "direct_application",
@@ -95,9 +104,18 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "GET" && url.pathname === "/v1/application-log") {
         return send(response, 200, { items: service.applicationLog(identity.profileId) });
       }
+      if (request.method === "GET" && url.pathname === "/v1/application-metrics") {
+        return send(response, 200, service.applicationMetrics(identity.profileId));
+      }
       if (request.method === "GET" && url.pathname === "/v1/confirmations") {
         const items = service.list("confirmations", identity.profileId);
         return send(response, 200, { items: items.filter((item) => item.status === "pending") });
+      }
+      if (request.method === "POST" && url.pathname === "/v1/confirmations/approve-batch") {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "approve_prepared_batch", body,
+          async () => ({ status: 200, body: await service.approvePreparedBatch(body.entries, identity) }));
+        return send(response, saved.status, saved.body);
       }
 
       const apply = url.pathname.match(/^\/v1\/opportunities\/([^/]+)\/apply$/);
@@ -127,6 +145,14 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         return send(response, 200, await service.recordEmployerStatus(
           employerStatus[1], await jsonBody(request), identity
         ));
+      }
+      const research = url.pathname.match(/^\/v1\/applications\/([^/]+)\/research$/);
+      if (request.method === "POST" && research) {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "attach_research",
+          { applicationId: research[1], body },
+          async () => ({ status: 200, body: await service.attachResearch(research[1], body, identity) }));
+        return send(response, saved.status, saved.body);
       }
       return send(response, 404, { error: "route not found" });
     } catch (error) {

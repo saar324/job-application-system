@@ -20,6 +20,13 @@ function postedAt(value) {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
 }
 
+function needsEmployerApplyUrl(value) {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase();
+    return hostname === "himalayas.app" || hostname.endsWith(".himalayas.app");
+  } catch { return true; }
+}
+
 function searchQueries(profile) {
   const groups = preferredTitleGroups(profile);
   const preferred = groups.primary.length
@@ -37,19 +44,23 @@ function searchQueries(profile) {
 
 export const himalayas = {
   id: "himalayas",
-  async search({ limit = 50, fetchImpl = fetch, profile }) {
-    const country = candidateCountry(profile);
-    const queries = searchQueries(profile);
+  async search({ limit = 50, fetchImpl = fetch, profile, query = {} }) {
+    const country = query.country ?? candidateCountry(profile);
+    const queries = query.q ? [query.q] : searchQueries(profile);
     if (!queries.length) return [];
     const perQuery = Math.max(1, Math.ceil(Math.min(limit, 200) / queries.length));
     const jobs = [];
-    for (const query of queries) {
+    for (const term of queries) {
       const pages = Math.ceil(perQuery / 20);
       for (let page = 1; page <= pages; page += 1) {
         const url = new URL("https://himalayas.app/jobs/api/search");
         if (country) url.searchParams.set("country", country.toLowerCase());
-        url.searchParams.set("q", query);
-        url.searchParams.set("sort", "recent");
+        url.searchParams.set("q", term);
+        for (const key of ["worldwide", "exclude_worldwide", "seniority", "employment_type",
+          "company", "timezone", "sort"]) {
+          if (query[key]) url.searchParams.set(key, query[key]);
+        }
+        if (!query.sort) url.searchParams.set("sort", "recent");
         url.searchParams.set("page", String(page));
         const response = await fetchImpl(url, {
           headers: { "user-agent": "job-application-server/0.2 (+private personal use)" },
@@ -71,6 +82,7 @@ export const himalayas = {
       company: row.companyName || "Unknown company",
       listingUrl: row.applicationLink,
       applyUrl: row.applicationLink,
+      applicationDestinationPending: needsEmployerApplyUrl(row.applicationLink),
       description: plainText(row.description || row.excerpt),
       tags: [
         ...(row.categories ?? []),

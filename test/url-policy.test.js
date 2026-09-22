@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import net from "node:net";
+import { PassThrough } from "node:stream";
 import { classifyAddress, createUrlPolicy } from "../worker/url-policy.js";
 import { createValidatedEgressProxy } from "../worker/egress-proxy.js";
 
@@ -69,5 +70,25 @@ test("validated egress proxy refuses a CONNECT tunnel to a private DNS answer", 
       socket.on("error", reject);
     });
     assert.match(response, /403 Forbidden/);
+  } finally { await proxy.close(); }
+});
+
+test("validated egress proxy closes a broken CONNECT stream without crashing", async () => {
+  const policy = createUrlPolicy({}, async () => [{ address: "8.8.8.8", family: 4 }]);
+  const upstream = new PassThrough();
+  upstream.setTimeout = () => upstream;
+  const proxy = await createValidatedEgressProxy(policy, { connectImpl: () => {
+    queueMicrotask(() => upstream.emit("connect"));
+    return upstream;
+  } });
+  try {
+    const client = new PassThrough();
+    const connected = new Promise((resolve) => client.on("data", (chunk) => {
+      if (chunk.toString().includes("200 Connection Established")) resolve();
+    }));
+    proxy.server.emit("connect", { url: "careers.example.test:443" }, client, Buffer.alloc(0));
+    await connected;
+    assert.doesNotThrow(() => client.emit("error", new Error("write EPIPE")));
+    assert.equal(upstream.destroyed, true);
   } finally { await proxy.close(); }
 });

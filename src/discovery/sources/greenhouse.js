@@ -21,8 +21,9 @@ function descriptionOf(job) {
 
 export const greenhouse = {
   id: "greenhouse",
-  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, onError = () => {} }) {
-    const settled = await Promise.allSettled(configuredBoards(sourceConfig).map(async (board) => {
+  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, query = {}, onError = () => {} }) {
+    const boards = configuredBoards(sourceConfig).filter((board) => !query.board || board.token === query.board);
+    const settled = await Promise.allSettled(boards.map(async (board) => {
       const url = new URL(`https://boards-api.greenhouse.io/v1/boards/${board.token}/jobs`);
       url.searchParams.set("content", "true");
       const response = await fetchImpl(url, {
@@ -34,15 +35,19 @@ export const greenhouse = {
       return (body.jobs ?? []).map((job) => ({ board, job }));
     }));
     settled.forEach((result, index) => {
-      if (result.status === "rejected") onError({ board: configuredBoards(sourceConfig)[index]?.token, error: result.reason.message });
+      if (result.status === "rejected") onError({ board: boards[index]?.token, error: result.reason.message });
     });
     const rows = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
     const selected = rows
       .filter(({ job }) => job?.id && job?.title && remoteLocation(job.location?.name)
-        && discoveryTitleRelevant(job.title, profile))
+        && discoveryTitleRelevant(job.title, profile)
+        && (!query.title || job.title.toLowerCase().includes(query.title.toLowerCase()))
+        && (!query.location || String(job.location?.name ?? "").toLowerCase().includes(query.location.toLowerCase())))
       .sort((left, right) => Date.parse(right.job.updated_at ?? "") - Date.parse(left.job.updated_at ?? ""))
       .slice(0, limit);
-    if (sourceConfig?.fetchQuestions !== false) {
+    // The live form remains authoritative. Detail requests are opt-in so a
+    // discovery scan does not fan out one request per candidate by default.
+    if (sourceConfig?.fetchQuestions === true) {
       await Promise.all(selected.map(async ({ board, job }) => {
         try {
           const detailUrl = new URL(`https://boards-api.greenhouse.io/v1/boards/${board.token}/jobs/${job.id}`);

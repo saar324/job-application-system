@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { SimulationAdapter } from "../src/adapters/simulation.js";
-import { NeedsInputError, NeedsReviewError } from "../src/adapters/errors.js";
+import { NeedsInputError, NeedsReviewError, PostingUnavailableError } from "../src/adapters/errors.js";
 import { ApplicationService } from "../src/service.js";
 import { JsonStore } from "../src/store.js";
 
@@ -28,6 +28,61 @@ async function opportunity(service, extra = {}) {
     title: "Senior Engineer", company: "Example", applyUrl: "https://example.test/apply", score: 90, ...extra
   }, identity);
 }
+
+test("application metrics retain bounded worker timings and isolate profiles", async () => {
+  const service = await fixture();
+  await service.store.mutate((state) => {
+    state.attempts.push({ id: "first", profileId: "person-one", applicationId: "app-one",
+      status: "review_required", queueMs: 150,
+      executionStartedAt: "2026-09-22T10:00:00.000Z", completedAt: "2026-09-22T10:00:02.000Z",
+      workerMetrics: { activeMs: 1800, draftCalls: 1 } });
+    state.attempts.push({ id: "other", profileId: "person-two", applicationId: "app-two",
+      status: "submitted", queueMs: 9999, workerMetrics: { activeMs: 9999 } });
+    state.confirmations.push({ id: "confirmation", profileId: "person-one", applicationId: "app-one",
+      status: "approved", createdAt: "2026-09-22T10:01:00.000Z",
+      resolvedAt: "2026-09-22T10:02:00.000Z" });
+  });
+  const metrics = service.applicationMetrics("person-one");
+  assert.equal(metrics.attempts, 1);
+  assert.deepEqual(metrics.outcomes, { review_required: 1 });
+  assert.equal(metrics.queue.medianMs, 150);
+  assert.equal(metrics.execution.medianMs, 2000);
+  assert.equal(metrics.ownerWait.medianMs, 60000);
+  assert.equal(metrics.worker.activeMs.p95Ms, 1800);
+  assert.deepEqual(metrics.draftCalls, { samples: 1, total: 1 });
+  assert.equal(metrics.modelInputTokens, null);
+  assert.equal(service.applicationMetrics("unknown").worker.activeMs.medianMs, null);
+});
+
+test("blocked worker attempts persist numeric timings without private payloads", async () => {
+  const service = await fixture();
+  service.adapter.submit = async () => { throw new NeedsReviewError("Review", [{ kind: "unsupported_form" }], {
+    metrics: { loadMs: 40, activeMs: 75, fields: 0, draftCalls: 0, privateValue: "secret" }
+  }); };
+  const job = await opportunity(service);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const attempt = service.store.snapshot().attempts[0];
+  assert.equal(attempt.status, "review_required");
+  assert.deepEqual(attempt.workerMetrics, { loadMs: 40, activeMs: 75, fields: 0, draftCalls: 0 });
+  assert.ok(attempt.queueMs >= 0);
+  assert.equal(service.applicationMetrics(identity.profileId).worker.activeMs.medianMs, 75);
+});
+
+test("an explicit unavailable posting is skipped without approval or submission", async () => {
+  const service = await fixture();
+  service.adapter.submit = async () => { throw new PostingUnavailableError("Job not found", {
+    reasonCode: "posting_not_found", metrics: { activeMs: 250, fields: 0 }
+  }); };
+  const job = await opportunity(service);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const application = service.list("applications", identity.profileId)[0];
+  assert.equal(application.status, "skipped");
+  assert.equal(application.receipt, undefined);
+  assert.deepEqual(service.list("confirmations", identity.profileId), []);
+  assert.equal(service.store.snapshot().attempts[0].workerMetrics.activeMs, 250);
+});
 
 test("full-time is the default and a high-score routine application submits", async () => {
   const service = await fixture();

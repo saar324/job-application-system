@@ -2,7 +2,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const ALLOWED_SECTIONS = new Set([
-  "displayName", "defaultMode", "contact", "links", "skills", "preferences", "documents", "applicationAnswers"
+  "displayName", "defaultMode", "contact", "links", "skills", "preferences", "documents", "applicationAnswers",
+  "approvedAnswers"
 ]);
 const CREDENTIAL_KEY = /(?:^|[_-])(?:password|passwd|passcode|secret|token|api[_-]?key|otp|cookie)(?:$|[_-])/i;
 
@@ -76,6 +77,7 @@ export class ProfileStore {
       if (!ALLOWED_SECTIONS.has(key)) throw Object.assign(new Error(`profile field is not allowed: ${key}`), { status: 400 });
     }
     rejectSensitiveApplicationAnswers(input.applicationAnswers);
+    validateApprovedAnswers(input.approvedAnswers);
     const operation = this.#pending.then(async () => {
       const document = await this.#read();
       const index = document.profiles.findIndex((profile) => profile.id === profileId);
@@ -126,6 +128,26 @@ export class ProfileStore {
     const temporary = `${this.#file}.${process.pid}.tmp`;
     await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
     await rename(temporary, this.#file);
+  }
+}
+
+function validateApprovedAnswers(records) {
+  if (records === undefined) return;
+  if (!Array.isArray(records) || records.length > 200) {
+    throw Object.assign(new Error("approvedAnswers must contain at most 200 records"), { status: 400 });
+  }
+  for (const item of records) {
+    if (!item || typeof item !== "object" || Array.isArray(item)
+      || typeof item.id !== "string" || item.id.length > 100
+      || typeof item.question !== "string" || item.question.length > 1000
+      || typeof item.value !== "string" || item.value.length > 5000
+      || !item.approvedAt || Number.isNaN(Date.parse(item.approvedAt))
+      || item.reviewAfter && Number.isNaN(Date.parse(item.reviewAfter))
+      || item.scope && (typeof item.scope !== "object" || Array.isArray(item.scope)
+        || Object.keys(item.scope).some((key) => !["employer", "role", "jurisdiction"].includes(key)))
+      || CREDENTIAL_KEY.test(item.question)) {
+      throw Object.assign(new Error("approvedAnswers contains an invalid record"), { status: 400 });
+    }
   }
 }
 

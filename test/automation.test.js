@@ -49,6 +49,14 @@ test("worker pauses for an unknown required answer", async () => {
   assert.deepEqual(result.requirements[0].fields, ["kotlin_years"]);
 });
 
+test("an explicit missing employer posting stops without a form review", async () => {
+  const result = await run(`<main><h1>Job not found</h1><p>The job you requested was not found.</p>
+    <button>Cookie Management</button></main>`);
+  assert.equal(result.status, "posting_unavailable");
+  assert.equal(result.reasonCode, "posting_not_found");
+  assert.equal(result.checkpoint.fields.length, 0);
+});
+
 test("worker fills known facts and records a verified submission receipt", async () => {
   const result = await run(`
     <form onsubmit="event.preventDefault(); document.body.innerHTML='<h1>Thank you, your application was submitted</h1>'">
@@ -61,6 +69,25 @@ test("worker fills known facts and records a verified submission receipt", async
   assert.equal(result.status, "submitted");
   assert.equal(result.receipt.simulated, false);
   assert.match(result.receipt.screenshotSha256, /^[a-f0-9]{64}$/);
+});
+
+test("worker durably marks final action immediately before clicking submit", async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const artifactsDirectory = await mkdtemp(path.join(os.tmpdir(), "job-worker-test-"));
+  const html = `<form onsubmit="event.preventDefault(); document.body.textContent='Application submitted'">
+    <button type="submit">Submit Application</button></form>`;
+  const phases = [];
+  try {
+    const result = await automateApplication({ page, profile,
+      opportunity: { applyUrl: dataUrl(html) }, application: { id: "application-one", answers: {} },
+      artifactsDirectory, markFinalActionStarted: async () => {
+        phases.push("marked");
+        assert.equal(await page.locator("form").count(), 1);
+      } });
+    assert.equal(result.status, "submitted");
+    assert.deepEqual(phases, ["marked"]);
+  } finally { await context.close(); }
 });
 
 test("required checkboxes become explicit attestations", async () => {
@@ -122,6 +149,42 @@ test("worker waits for delayed client-side submission confirmation", async () =>
   assert.equal(result.status, "submitted");
 });
 
+test("custom validation after Next requests the field even without native required", async () => {
+  const result = await run(`<form><div>
+    <label for="motivation">Why this company?</label><textarea id="motivation" name="motivation"></textarea>
+    <button type="button" onclick="if (!document.querySelector('textarea').value.trim()) {
+      if (!document.querySelector('.text-red-500')) this.insertAdjacentHTML('beforebegin',
+        '<p class=text-red-500>Please write at least 50 words</p>');
+    } else document.body.textContent='Next step'">Continue</button></div>
+  </form>`);
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "missing_answer");
+  assert.deepEqual(result.requirements[0].fields, ["motivation"]);
+  assert.match(result.requirements[0].message, /at least 50 words/);
+  assert.equal(result.phase, "before_final_action");
+});
+
+test("an optional-looking file field with an inline error blocks final review", async () => {
+  const result = await run(`<form><div><label>CV / Résumé</label>
+    <div><input id="cv-upload" type="file"><label for="cv-upload">Click to upload your CV</label></div>
+    <p class="text-red-500">Please upload your CV</p></div>
+    <button type="submit">Submit application</button></form>`, {}, profile,
+  { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "missing_answer");
+  assert.deepEqual(result.requirements[0].fields, ["cv-upload"]);
+  assert.equal(result.phase, "before_final_action");
+});
+
+test("an unfilled optional file has a stable final preview", async () => {
+  const result = await run(`<form><label>Optional document <input type="file" id="optional-file"></label>
+    <button type="submit">Submit application</button></form>`, {}, profile,
+  { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.equal(result.requirements[0].preview.unfilled[0].key, "optional-file");
+});
+
 test("worker follows Apply Now before inspecting unrelated landing-page forms", async () => {
   const result = await run(`
     <div id="landing">
@@ -135,6 +198,16 @@ test("worker follows Apply Now before inspecting unrelated landing-page forms", 
     </form>
   `);
   assert.equal(result.status, "submitted");
+});
+
+test("a disabled duplicate Apply button does not make the start action ambiguous", async () => {
+  const result = await run(`<button onclick="this.remove();document.querySelector('form').hidden=false">Apply for this job</button>
+    <button disabled>Apply for this job</button>
+    <form hidden><label>First name <input name="first_name" required></label>
+      <button type="submit">Submit application</button></form>`, {}, profile,
+  { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
 });
 
 test("worker follows a plain Apply button and an Apply manually handoff", async () => {
