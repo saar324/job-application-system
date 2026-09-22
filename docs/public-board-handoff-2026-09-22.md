@@ -15,6 +15,13 @@ without queuing application preparation. The Jobicy pilot also showed a listing
 whose employer deadline had passed; the coordinator must verify posting status
 at the employer destination before a real application.
 
+After PR #6 passed both GitHub checks and merged, the API release was staged
+and its 153 tests passed on the production host. A live bounded Jobicy query
+returned 90 listings and one qualifying role. The qualifying board URL was
+reported as `employer_application_url_required`; it queued no application.
+The profile's application count stayed at 1,727. The API service was active
+with zero restarts immediately after cutover; the worker code was unchanged.
+
 The Himalayas adapter now marks board-hosted application links as needing employer
 URL resolution. Discovery still scores and records the role, but it does not queue
 automatic browser preparation for those links. The source descriptor and query
