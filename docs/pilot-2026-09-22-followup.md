@@ -19,6 +19,7 @@ All five are live on official employer or ATS pages and allow remote work from E
 - Server-wide attempt count increased from 32 at the start to 40 at 13:50 UTC. These eight executions include retries; they are not eight distinct applications.
 - The cumulative worker active median was 3.9 seconds over 23 measured executions at 13:50 UTC. The server-wide queue median was 478 ms over 28 samples. Both include earlier work and do not isolate this follow-up batch.
 - The end-to-end wall time is dominated by finding and verifying new eligible roles in a history of over 1,700 applications, plus owner-dependent questions. The form worker itself usually took seconds. The service does not record coordinator discovery time or model token usage; token counters remain unavailable.
+- At the 13:50 checkpoint, wall time divided by five distinct prepared or blocked roles was 8 minutes 54 seconds per role. This is a preparation/attempt ratio that includes debugging and waiting, not a completed-application rate.
 - With zero verified submissions, elapsed time **per completed application** and a normalized 100-submission estimate are undefined. Do not divide the wall time by five attempts or extrapolate it as throughput.
 
 ## Defects repaired during this follow-up
