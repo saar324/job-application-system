@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { companyQuestion, eligibleProseField, needsCompanyResearch } from "./draft-provider.js";
+import { fillAshbyRequiredControls, verifyAshbyRequiredControls } from "./ashby-adapter.js";
 
 const FINAL_BUTTON = /submit(?: application)?|send application|complete application/i;
 const NEXT_BUTTON = /next|continue|save and continue|review/i;
@@ -198,6 +199,12 @@ export async function inventoryFormStep(page) {
       }
       return true;
     };
+    // These controls are planned and verified by the Ashby adapter. Including
+    // their backing inputs here would mislabel custom selections as raw inputs.
+    const ashbyEntry = element.closest(".ashby-application-form-field-entry");
+    if (element.closest(".ashby-application-form-input-radio-group")
+      || ashbyEntry && (element.matches('[role="combobox"]')
+        || element.closest(".ashby-application-form-input-yesno"))) return null;
     if (element.type === "file" ? !visible(form ?? element.parentElement) : !visible(element)) return null;
     const labels = [...(element.labels ?? [])].map((label) => label.innerText.trim()).filter(Boolean);
     const ariaLabelledBy = (element.getAttribute("aria-labelledby") ?? "").split(/\s+/)
@@ -524,6 +531,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
       requirements: [{ kind: "unsupported_control", action: "manual_review",
         message: "Inspect the custom form control before submission" }]
     }, step);
+    const custom = await fillAshbyRequiredControls(surface, profile, application.answers ?? {});
     const planStarted = performance.now();
     let { unresolved, fields, signature, inventory } = await fillVisibleFields(
       surface, profile, opportunity, application.answers ?? {}, preparedAnswers
@@ -606,6 +614,9 @@ export async function automateApplication({ page, profile, opportunity, applicat
     for (const field of fields) observedFields.set(`${step}:${signature}:${field.key}:${field.label}`, {
       ...field, step, stepSignature: signature
     });
+    for (const field of custom.fields) observedFields.set(`${step}:${signature}:${field.key}:${field.label}`, {
+      ...field, step, stepSignature: signature
+    });
     if (await detectChallenge(page)) {
       return pause({
         status: "needs_human",
@@ -613,6 +624,9 @@ export async function automateApplication({ page, profile, opportunity, applicat
         requirements: [{ kind: "human_challenge", action: "manual_review", message: "Complete or inspect the browser challenge" }]
       }, step);
     }
+    if (custom.requirements.length) return pause({ status: "needs_input",
+      message: "Required custom application questions need review",
+      requirements: custom.requirements }, step);
     if (unresolved.length) {
       const verification = unresolved.find((field) => VERIFICATION_FIELD.test(`${field.key} ${field.label}`));
       if (verification) {
@@ -669,6 +683,11 @@ export async function automateApplication({ page, profile, opportunity, applicat
       ? (await surface.locator("body").innerText().catch(() => "")).slice(0, 50_000)
       : "";
     if (action.final) {
+      if (!await verifyAshbyRequiredControls(surface, custom.fields)) return pause({
+        status: "needs_input", message: "A custom answer changed before final submission",
+        requirements: [{ kind: "final_review_changed", fields: custom.fields.map((field) => field.key),
+          message: "Review the custom application answers again before submission" }]
+      }, step);
       const current = await inventoryFormStep(surface);
       if (JSON.stringify(current.map((field) => [field.name, field.id, field.label]))
         !== JSON.stringify(inventory.map((field) => [field.name, field.id, field.label]))) {
@@ -681,6 +700,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
         message: "The application has field errors before final submission",
         requirements: validation }, step);
       for (const field of [...observedFields.values()].filter((item) => item.step === step)) {
+        if (field.type === "ashby_custom") continue;
         const locator = surface.locator(CONTROL_SELECTOR).nth(field.controlIndex);
         const live = await readControl(locator, field);
         const currentValue = field.type === "password" ? "[stored securely]"

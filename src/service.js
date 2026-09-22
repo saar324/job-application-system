@@ -324,7 +324,8 @@ export class ApplicationService {
         application.siteAccountAction = safeAnswers.siteAccountAction;
         application.credentialOrigin = confirmation.origin;
       } else if (safeAnswers) Object.assign(application.answers, safeAnswers);
-      const related = state.confirmations.filter((item) => item.applicationId === application.id);
+      const related = state.confirmations.filter((item) => item.applicationId === application.id
+        && item.status !== "superseded");
       if (related.some((item) => item.status === "rejected")) application.status = "rejected";
       else if (related.every((item) => item.status === "approved")) {
         if (related.some((item) => item.action === "manual_review") && safeAnswers?.submitted === true) {
@@ -344,6 +345,32 @@ export class ApplicationService {
     });
     if (result.status === "queued") this.enqueue(result.id);
     return result;
+  }
+
+  async refreshFinalPreview(applicationId, identity) {
+    const application = await this.store.mutate(async (state) => {
+      const item = state.applications.find((entry) => entry.id === applicationId
+        && entry.profileId === identity.profileId && entry.status === "waiting_confirmation"
+        && !entry.receipt);
+      if (!item) throw new ClientError(409, "application is not waiting for a final preview");
+      const pending = state.confirmations.filter((entry) => entry.applicationId === item.id
+        && entry.profileId === identity.profileId && entry.status === "pending");
+      if (pending.length !== 1 || pending[0].kind !== "final_submission_approval") {
+        throw new ClientError(409, "only a sole pending final preview can be refreshed");
+      }
+      pending[0].status = "superseded";
+      pending[0].resolvedAt = now();
+      pending[0].resolvedBy = identity.actorId;
+      item.finalSubmissionApproval = undefined;
+      item.status = "queued";
+      item.queuedAt = now();
+      item.updatedAt = item.queuedAt;
+      audit(state, identity, "application.final_preview_refreshed", item.id,
+        { oldConfirmationId: pending[0].id });
+      return item;
+    });
+    this.enqueue(application.id);
+    return application;
   }
 
   async approvePreparedBatch(entries, identity) {

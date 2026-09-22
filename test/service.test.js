@@ -272,6 +272,41 @@ test("worker-discovered questions create resumable confirmations", async () => {
   assert.equal(attempts, 2);
 });
 
+test("an incomplete final preview can be superseded without approval or submission", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  let attempts = 0;
+  const adapter = { name: "test-worker", async submit() {
+    attempts += 1;
+    if (attempts === 1) throw new NeedsInputError("Review", [{
+      kind: "final_submission_approval", previewFingerprint: "a".repeat(64),
+      preview: { destination: "https://example.test/apply", filled: [], unfilled: [] }
+    }]);
+    throw new NeedsInputError("Custom question", [{
+      kind: "missing_answer", message: "Required custom question", fields: ["custom"]
+    }]);
+  } };
+  const service = new ApplicationService({ store, config, adapter });
+  const job = await opportunity(service);
+  const application = await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const oldApproval = service.list("confirmations", identity.profileId)[0];
+  assert.equal(oldApproval.kind, "final_submission_approval");
+  await assert.rejects(service.refreshFinalPreview(application.id,
+    { actorId: "other", profileId: "other" }), /not waiting/);
+  const queued = await service.refreshFinalPreview(application.id, identity);
+  assert.equal(queued.status, "queued");
+  await service.waitForIdle();
+  const confirmations = service.list("confirmations", identity.profileId);
+  assert.equal(confirmations.find((item) => item.id === oldApproval.id).status, "superseded");
+  assert.equal(confirmations.find((item) => item.status === "pending").kind, "missing_answer");
+  assert.equal(service.list("applications", identity.profileId)[0].receipt, undefined);
+  assert.equal(attempts, 2);
+  await assert.rejects(service.approvePreparedBatch([
+    { applicationId: application.id, previewFingerprint: "a".repeat(64) }
+  ], identity), /not ready/);
+});
+
 test("unverified submission review cannot accidentally retry", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();

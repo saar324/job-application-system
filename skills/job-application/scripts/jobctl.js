@@ -31,13 +31,14 @@ const routes = {
   inbox: ["GET", "/v1/confirmations"],
   "approve-batch": ["POST", "/v1/confirmations/approve-batch"],
   research: ["POST", `/v1/applications/${id}/research`],
+  "refresh-preview": ["POST", `/v1/applications/${id}/refresh-preview`],
   add: ["POST", "/v1/opportunities"], apply: ["POST", `/v1/opportunities/${id}/apply`],
   "record-submission": ["POST", `/v1/applications/${id}/manual-submission`],
   "record-employer-status": ["POST", `/v1/applications/${id}/employer-status`],
   confirm: ["POST", `/v1/confirmations/${id}`], reject: ["POST", `/v1/confirmations/${id}`]
 };
-if ((!routes[command] && command !== "callback") || (["apply", "research", "record-submission", "record-employer-status", "confirm", "reject", "callback"].includes(command) && !id)) {
-  console.error("usage: jobctl <health|me|profile|profile-update|sources|scan|query|direct|opportunities|applications|application-log|application-metrics|inbox|approve-batch|research ID|add|apply ID|record-submission ID|record-employer-status ID|confirm ID|reject ID|callback DATA>");
+if ((!routes[command] && command !== "callback") || (["apply", "research", "refresh-preview", "record-submission", "record-employer-status", "confirm", "reject", "callback"].includes(command) && !id)) {
+  console.error("usage: jobctl <health|me|profile|profile-update|sources|scan|query|direct|opportunities|applications|application-log|application-metrics|inbox|approve-batch|research ID|refresh-preview ID|add|apply ID|record-submission ID|record-employer-status ID|confirm ID|reject ID|callback DATA>");
   process.exit(2);
 }
 
