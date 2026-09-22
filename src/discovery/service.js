@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveEmployerApplicationUrl } from "./application-destination.js";
 import { remoteok } from "./sources/remoteok.js";
 import { arbeitnow } from "./sources/arbeitnow.js";
 import { jobicy } from "./sources/jobicy.js";
@@ -243,7 +244,7 @@ export class DiscoveryService {
       const score = scoreOpportunity(raw, profile, mode, { version: scorerVersion });
       const shadow = shadowScorerVersion
         ? scoreOpportunity(raw, profile, mode, { version: shadowScorerVersion }) : null;
-      const scored = { ...raw, mode, ...score,
+      let scored = { ...raw, mode, ...score,
         ...(shadow ? { scoreComparison: { activeVersion: scorerVersion, activeScore: score.score,
           shadowVersion: shadowScorerVersion, shadowScore: shadow.score,
           changedEligibility: Boolean(score.scoreDetails.hardExclusion) !== Boolean(shadow.scoreDetails.hardExclusion) } } : {}) };
@@ -258,6 +259,12 @@ export class DiscoveryService {
         || (opportunistic ? !opportunisticQualified : scored.score < modeConfig.minimumScore)) {
         excluded += 1;
         continue;
+      }
+      if (scored.applicationDestinationPending) {
+        try { scored = await resolveEmployerApplicationUrl(scored, cachedFetch); }
+        catch (error) {
+          errors.push({ source: scored.source, stage: "application_destination", error: error.message });
+        }
       }
       const opportunity = await this.applicationService.addOpportunity({
         ...scored, ...(input.campaignId ? { lastCampaignId: input.campaignId } : {})
