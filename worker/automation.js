@@ -245,12 +245,19 @@ async function readControl(locator, field) {
   });
 }
 
+function inventoryStamp(fields) {
+  return JSON.stringify(fields.map((field) => [field.index, field.formIndex,
+    field.name, field.id, field.label, field.type, field.required]));
+}
+
 async function fillVisibleFields(page, profile, opportunity, answers, preparedAnswers = {}) {
   const controls = page.locator(CONTROL_SELECTOR);
   const inventory = await inventoryFormStep(page);
   const profileValues = flattenProfile(profile, page.url());
   const unresolved = [];
   const fields = [];
+  const sameInventory = (current) => inventoryStamp(current) === inventoryStamp(inventory);
+  const changedPlan = () => ({ unresolved, fields, inventory, signature: null, formChanged: true });
   const seenRadioGroups = new Set();
   // Resolve the complete step from one DOM snapshot before changing any value.
   // Later readback is deliberately separate from this answer plan.
@@ -268,9 +275,18 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
     answerPlan.entries.push({ field, answer });
   }
   for (const { field, answer } of answerPlan.entries) {
+    if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
     const locator = controls.nth(field.index);
     if (!answer || answer.value === undefined || answer.value === "") {
-      const observed = await readControl(locator, field);
+      let observed;
+      try { observed = await readControl(locator, field); }
+      catch (error) {
+        if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
+        unresolved.push({ key: field.name || field.id || normalize(field.label), label: field.label,
+          required: field.required, type: field.type, problem: error.message });
+        fields.push(fieldSummary(field, undefined, undefined));
+        continue;
+      }
       const prefilled = Array.isArray(observed) ? observed.length > 0
         : typeof observed === "boolean" ? observed : String(observed ?? "").trim() !== "";
       fields.push(fieldSummary(field,
@@ -304,6 +320,7 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
       if (!matches || !validity.valid) throw new Error(validity.problem || "live value did not match the planned answer");
       fields.push(fieldSummary(field, answer, observed));
     } catch (error) {
+      if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
       unresolved.push({
         key: field.name || field.id || normalize(field.label), label: field.label,
         required: field.required,
@@ -533,16 +550,20 @@ export async function automateApplication({ page, profile, opportunity, applicat
     }, step);
     const custom = await fillAshbyRequiredControls(surface, profile, application.answers ?? {});
     const planStarted = performance.now();
-    let { unresolved, fields, signature, inventory } = await fillVisibleFields(
+    let { unresolved, fields, signature, inventory, formChanged } = await fillVisibleFields(
       surface, profile, opportunity, application.answers ?? {}, preparedAnswers
     );
     for (let pass = 0; pass < 3; pass += 1) {
       const current = await inventoryFormStep(surface);
-      if (JSON.stringify(current.map((field) => [field.name, field.id, field.label]))
-        === JSON.stringify(inventory.map((field) => [field.name, field.id, field.label]))) break;
-      ({ unresolved, fields, signature, inventory } = await fillVisibleFields(
+      if (!formChanged && inventoryStamp(current) === inventoryStamp(inventory)) break;
+      ({ unresolved, fields, signature, inventory, formChanged } = await fillVisibleFields(
         surface, profile, opportunity, application.answers ?? {}, preparedAnswers
       ));
+    }
+    if (formChanged || inventoryStamp(await inventoryFormStep(surface)) !== inventoryStamp(inventory)) {
+      return pause({ status: "needs_human", message: "The application form kept changing during entry",
+      requirements: [{ kind: "unstable_form", action: "manual_review",
+        message: "Inspect the current form before continuing" }] }, step);
     }
     timings.planFillMs += performance.now() - planStarted;
     timings.fields += inventory.length;
