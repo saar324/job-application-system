@@ -122,6 +122,9 @@ function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, appr
   if (field.type === "file" && /\bcover letter\b/.test(label) && profileValues["cover letter"]) {
     return { value: profileValues["cover letter"], source: "profile" };
   }
+  // Profile links are URLs. Never pass one to a file chooser just because its
+  // label (for example, "Portfolio") matches an optional upload control.
+  if (field.type === "file") return undefined;
   const normalizedCandidates = new Set(candidates.map(normalize));
   for (const [key, value] of Object.entries(profileValues)) {
     if (value !== undefined && value !== "" && (label === key || normalizedCandidates.has(key))) {
