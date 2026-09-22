@@ -11,7 +11,10 @@ remaining target; receipts remain sequential and verified. HTTP, MCP, and `jobct
 retries support idempotency keys.
 
 The five-minute acceptance result is still unproven until a fresh real campaign produces ten suitable verified receipts.
-Candidate availability, owner review time, prose drafting, and anti-bot handoffs remain inside that acceptance clock.
+The first production acceptance check is recorded in [the campaign rollout report](campaign-rollout-2026-09-22.md): the
+final fresh scan made its complete decision in 13.181 seconds but found no new role with both a passing quality decision and
+a verified employer application destination. Candidate availability, owner review time, prose drafting, and anti-bot
+handoffs remain inside the eventual acceptance clock.
 
 ## Decision and measurement
 

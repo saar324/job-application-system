@@ -15,9 +15,10 @@ This is the shared follow-up list for the efficiency upgrade and the 22 Septembe
 | P1 | Measure discovery, eligibility checks, owner wait, drafting, browser work, token use, and receipts as distinct stages. | Comparable time and token cost per verified submission, including blocked and failed outcomes. |
 | P2 | Run the broader fixture and browser-tool comparison from the original upgrade plan. | Same cases and quality gates for Playwright, CLI/MCP, and adaptive alternatives; measured gain before changing the production worker. |
 
-The handled-role filter is deployed to the production API. The campaign control path is implemented locally with HTTP,
-MCP, and CLI support and a 175-test regression gate; production deployment and a fresh acceptance campaign are recorded
-separately. The follow-up pilot is recorded in [the second pilot report](pilot-2026-09-22-followup.md). The other items remain
-open unless their completion evidence is recorded here.
+The handled-role filter and campaign control path are deployed to production with HTTP, MCP, and CLI support. The
+[production campaign check](campaign-rollout-2026-09-22.md) passed 178 tests and made a fresh scan decision in 13.181
+seconds, but the cohort had no new role that passed both quality and employer-destination gates, so the ten-receipt timing
+target remains open. The follow-up pilot is recorded in [the second pilot report](pilot-2026-09-22-followup.md). The other
+items remain open unless their completion evidence is recorded here.
 
 The follow-up pilot exposed one additional performance blocker: production prose drafting is disabled (`draftCalls: 0`), so every company-specific answer reaches the owner. Evaluate a securely configured draft provider with factual grounding and final review before counting any time gain. The optional-portfolio upload mapping was fixed and deployed in `1dfcaf4`.
