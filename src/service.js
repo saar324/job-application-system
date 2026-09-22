@@ -159,12 +159,17 @@ export class ApplicationService {
       ? await this.profiles.status(identity.profileId, mode, this.config.defaultMode) : null;
     const modePreferences = mode === "freelance"
       ? profile?.preferences?.freelance : profile?.preferences?.fullTime;
-    const submissionApproval = modePreferences?.submissionApproval ?? modeConfig.submissionApproval ?? "automatic";
+    const submissionApproval = input.forceFinalApproval === true
+      ? "always"
+      : modePreferences?.submissionApproval ?? modeConfig.submissionApproval ?? "automatic";
     if (!["automatic", "always"].includes(submissionApproval)) {
       throw new ClientError(400, `invalid submissionApproval for ${mode}`);
     }
 
     const saved = await this.store.mutate(async (state) => {
+      if (input.campaignId && !campaignStart(state, String(input.campaignId), identity.profileId)) {
+        throw new ClientError(404, "campaign not found");
+      }
       const opportunity = state.opportunities.find(
         (item) => item.id === opportunityId && item.profileId === identity.profileId
       );
@@ -209,6 +214,7 @@ export class ApplicationService {
       const application = {
         id: randomUUID(), opportunityId, profileId: identity.profileId, mode,
         requestedBy: identity.actorId, answers: input.answers ?? {},
+        ...(input.campaignId ? { campaignId: String(input.campaignId) } : {}),
         submissionApproval,
         finalApprovalRequired: submissionApproval === "always",
         status: !decision.eligible ? "skipped"
@@ -411,6 +417,146 @@ export class ApplicationService {
     });
     for (const application of approved) this.enqueue(application.id);
     return { items: approved.map((item) => ({ applicationId: item.id, status: item.status })) };
+  }
+
+  async createCampaign(input, identity) {
+    if (!/^[a-f0-9-]{36}$/.test(input.id ?? "")
+      || !Number.isInteger(input.target) || input.target < 1 || input.target > 50
+      || !Number.isInteger(input.reserve) || input.reserve < 0 || input.reserve > 50) {
+      throw new ClientError(400, "campaign requires an id, target from 1 to 50, and reserve from 0 to 50");
+    }
+    return this.store.mutate(async (state) => {
+      if (state.audit.some((item) => item.profileId === identity.profileId
+        && item.action === "campaign.started" && item.subjectId === input.id)) {
+        throw new ClientError(409, "campaign already exists");
+      }
+      audit(state, identity, "campaign.started", input.id, {
+        target: input.target, reserve: input.reserve, mode: input.mode,
+        sources: input.sources ?? [], queryPlan: input.queryPlan ?? []
+      });
+      return this.campaignStatus(input.id, identity.profileId, state);
+    });
+  }
+
+  async recordCampaignScan(campaignId, input, identity) {
+    return this.store.mutate(async (state) => {
+      const started = campaignStart(state, campaignId, identity.profileId);
+      if (!started) throw new ClientError(404, "campaign not found");
+      audit(state, identity, "campaign.scan_completed", campaignId, {
+        found: input.found, qualifying: input.qualifying, excluded: input.excluded,
+        handledFiltered: input.handledFiltered, selectedOpportunityIds: input.selectedOpportunityIds ?? [],
+        destinationPending: input.destinationPending ?? 0,
+        applicationIds: input.applicationIds ?? [], errors: input.errors ?? []
+      });
+      return this.campaignStatus(campaignId, identity.profileId, state);
+    });
+  }
+
+  async recordCampaignFailure(campaignId, error, identity) {
+    return this.store.mutate(async (state) => {
+      if (!campaignStart(state, campaignId, identity.profileId)) throw new ClientError(404, "campaign not found");
+      audit(state, identity, "campaign.failed", campaignId, {
+        error: String(error?.message ?? error).slice(0, 1000)
+      });
+      return this.campaignStatus(campaignId, identity.profileId, state);
+    });
+  }
+
+  listCampaigns(profileId) {
+    const state = this.store.snapshot();
+    return state.audit.filter((item) => item.profileId === profileId && item.action === "campaign.started")
+      .map((item) => this.campaignStatus(item.subjectId, profileId, state))
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+  }
+
+  campaignStatus(campaignId, profileId, snapshot = this.store.snapshot()) {
+    const started = campaignStart(snapshot, campaignId, profileId);
+    if (!started) throw new ClientError(404, "campaign not found");
+    const events = snapshot.audit.filter((item) => item.profileId === profileId && item.subjectId === campaignId
+      && item.action.startsWith("campaign.")).sort((left, right) => left.at.localeCompare(right.at));
+    const scan = events.findLast((item) => item.action === "campaign.scan_completed");
+    const failed = events.findLast((item) => item.action === "campaign.failed");
+    const approval = events.find((item) => item.action === "campaign.batch_approved");
+    const applications = snapshot.applications.filter((item) => item.profileId === profileId
+      && item.campaignId === campaignId);
+    const applicationIds = new Set(applications.map((item) => item.id));
+    const opportunities = new Map(snapshot.opportunities.filter((item) => item.profileId === profileId)
+      .map((item) => [item.id, item]));
+    const attempts = (snapshot.attempts ?? []).filter((item) => item.profileId === profileId
+      && applicationIds.has(item.applicationId));
+    const finalConfirmations = snapshot.confirmations.filter((item) => item.profileId === profileId
+      && item.kind === "final_submission_approval" && applicationIds.has(item.applicationId));
+    const pendingFinal = snapshot.confirmations.filter((item) => item.profileId === profileId
+      && item.status === "pending" && item.kind === "final_submission_approval"
+      && applicationIds.has(item.applicationId));
+    const counts = Object.fromEntries([...new Set(applications.map((item) => item.status))]
+      .map((status) => [status, applications.filter((item) => item.status === status).length]));
+    const submitted = applications.filter((item) => item.status === "submitted" && item.receipt?.submittedAt)
+      .sort((left, right) => left.receipt.submittedAt.localeCompare(right.receipt.submittedAt));
+    const target = started.details.target;
+    const active = applications.some((item) => ["queued", "claimed", "submitting"].includes(item.status));
+    const status = failed ? "failed"
+      : submitted.length >= target ? "complete"
+        : active ? "running"
+          : pendingFinal.length ? "awaiting_batch_review"
+            : scan && applications.length < target ? "insufficient_candidates" : "blocked";
+    const completedAt = status === "complete" ? submitted[target - 1].receipt.submittedAt : undefined;
+    const reviewReadyAt = finalConfirmations.length
+      ? finalConfirmations.map((item) => item.createdAt).sort().at(-1) : undefined;
+    const duration = (end, start) => end && start
+      ? Math.max(0, Date.parse(end) - Date.parse(start)) : null;
+    const activeWorkerMs = attempts.reduce((sum, item) => sum + Number(item.workerMetrics?.activeMs ?? 0), 0);
+    return {
+      campaignId, status, target, reserve: started.details.reserve, mode: started.details.mode,
+      startedAt: started.at, ...(scan ? { scanCompletedAt: scan.at, scan: scan.details } : {}),
+      ...(completedAt ? { completedAt } : {}),
+      elapsedMs: Math.max(0, Date.parse(completedAt ?? now()) - Date.parse(started.at)),
+      timing: {
+        scanMs: duration(scan?.at, started.at),
+        preparationMs: duration(!active ? reviewReadyAt : undefined, scan?.at),
+        approvalWaitMs: duration(approval?.at, reviewReadyAt),
+        submissionMs: duration(completedAt, approval?.at),
+        workerActiveMs: activeWorkerMs,
+        workerAttempts: attempts.length
+      },
+      counts, submitted: submitted.length,
+      readyForReview: pendingFinal.length,
+      reviewEntries: pendingFinal.map((item) => {
+        const application = applications.find((entry) => entry.id === item.applicationId);
+        const opportunity = opportunities.get(application?.opportunityId);
+        return {
+          applicationId: item.applicationId, previewFingerprint: item.previewFingerprint,
+          company: opportunity?.company, title: opportunity?.title,
+          destination: opportunity?.applyUrl ?? opportunity?.listingUrl,
+          presentation: item.presentation
+        };
+      }),
+      applications: applications.map((item) => ({
+        company: opportunities.get(item.opportunityId)?.company,
+        title: opportunities.get(item.opportunityId)?.title,
+        destination: opportunities.get(item.opportunityId)?.applyUrl
+          ?? opportunities.get(item.opportunityId)?.listingUrl,
+        applicationId: item.id, opportunityId: item.opportunityId, status: item.status,
+        createdAt: item.createdAt, updatedAt: item.updatedAt, submittedAt: item.receipt?.submittedAt
+      }))
+    };
+  }
+
+  async approveCampaign(campaignId, entries, identity) {
+    const campaign = this.campaignStatus(campaignId, identity.profileId);
+    const remaining = Math.max(0, campaign.target - campaign.submitted);
+    if (!remaining || !Array.isArray(entries) || entries.length < 1 || entries.length > remaining) {
+      throw new ClientError(400, `campaign approval must contain 1 to ${remaining} applications`);
+    }
+    const allowed = new Set(campaign.applications.map((item) => item.applicationId));
+    if (entries.some((entry) => !allowed.has(entry.applicationId))) {
+      throw new ClientError(409, "campaign approval contains an application from another campaign");
+    }
+    const result = await this.approvePreparedBatch(entries, identity);
+    await this.store.mutate(async (state) => audit(state, identity, "campaign.batch_approved", campaignId, {
+      applicationIds: entries.map((entry) => entry.applicationId)
+    }));
+    return { ...result, campaign: this.campaignStatus(campaignId, identity.profileId) };
   }
 
   async recordManualSubmission(applicationId, input, identity) {
@@ -937,6 +1083,11 @@ function audit(state, identity, action, subjectId, details) {
   });
 }
 
+function campaignStart(state, campaignId, profileId) {
+  return state.audit.find((item) => item.profileId === profileId
+    && item.action === "campaign.started" && item.subjectId === campaignId);
+}
+
 const CONTROL_ANSWER_KEYS = new Set(["retry", "submitted", "finalUrl", "externalId"]);
 const SENSITIVE_KEY = /(?:^|[_-])(?:password|passwd|passcode|secret|token|api[_-]?key|otp|cookie|session)(?:$|[_-])/i;
 const CREDENTIAL_INPUT_KEY = /(?:^|[_-])(?:password|passwd|passcode|secret|token|api[_-]?key|otp|cookie)(?:$|[_-])/i;
@@ -995,6 +1146,7 @@ function buildApplicationLogEntry(application, opportunity = {}, confirmations =
     listingUrl: opportunity.listingUrl,
     source: opportunity.source,
     mode: application.mode,
+    campaignId: application.campaignId,
     status: application.status,
     createdAt: application.createdAt,
     updatedAt: application.updatedAt,

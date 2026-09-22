@@ -1,5 +1,18 @@
 # Thirty-second end-to-end application throughput
 
+## Implementation status — 22 September 2026
+
+The campaign control path is implemented and passes the full 175-test and privacy gates. One authenticated command now
+starts a fresh structured scan, removes handled roles and listings without an employer application destination, ranks the
+remaining roles, and sequentially prepares the target plus a reserve. Campaign state is durable and profile-bound. It
+returns one exact review list with company, role, destination, full preview, fingerprint, blockers, outcomes, and separate
+scan, preparation, approval-wait, submission, and active-worker timings. Approval can submit only named previews up to the
+remaining target; receipts remain sequential and verified. HTTP, MCP, and `jobctl` interfaces are available, and mutation
+retries support idempotency keys.
+
+The five-minute acceptance result is still unproven until a fresh real campaign produces ten suitable verified receipts.
+Candidate availability, owner review time, prose drafting, and anti-bot handoffs remain inside that acceptance clock.
+
 ## Decision and measurement
 
 Target **ten new, suitable, verified submissions in at most five minutes of wall time**, starting with a fresh source scan and ending at the tenth employer receipt. The target is an average of 30 seconds per submission, not a promise that every individual form finishes in 30 seconds. Count every search, suitability check, model call, form preparation, review, approval wait, failed attempt, browser fallback, and receipt check inside that clock. Report attempted, blocked, rejected, and submitted roles separately. Keep one coordinating application agent and one sequential submission lane.

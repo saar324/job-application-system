@@ -85,6 +85,27 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
           async () => ({ status: 200, body: await discovery.query(body, identity) }));
         return send(response, saved.status, saved.body);
       }
+      if (request.method === "POST" && url.pathname === "/v1/campaigns") {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "start_campaign", body,
+          async () => ({ status: 202, body: await discovery.startCampaign(body, identity) }));
+        return send(response, saved.status, saved.body);
+      }
+      if (request.method === "GET" && url.pathname === "/v1/campaigns") {
+        return send(response, 200, { items: service.listCampaigns(identity.profileId) });
+      }
+      const campaign = url.pathname.match(/^\/v1\/campaigns\/([^/]+)$/);
+      if (request.method === "GET" && campaign) {
+        return send(response, 200, service.campaignStatus(campaign[1], identity.profileId));
+      }
+      const campaignApproval = url.pathname.match(/^\/v1\/campaigns\/([^/]+)\/approve$/);
+      if (request.method === "POST" && campaignApproval) {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "approve_campaign", body,
+          async () => ({ status: 200,
+            body: await service.approveCampaign(campaignApproval[1], body.entries, identity) }));
+        return send(response, saved.status, saved.body);
+      }
       if (request.method === "POST" && url.pathname === "/v1/direct-applications") {
         const body = await jsonBody(request);
         const saved = await idempotentHttp(service, request, identity, "direct_application",

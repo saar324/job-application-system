@@ -19,12 +19,19 @@ async function fixture() {
   const service = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
   const profiles = { async get(profileId) { return { id: profileId }; },
     async status() { return { readyToApply: true, missingForApplications: [] }; } };
-  const discovery = { async scan() { return { items: [] }; } };
+  const campaignId = "11111111-1111-4111-8111-111111111111";
+  const discovery = {
+    async scan() { return { items: [] }; },
+    async startCampaign(input, identity) {
+      return service.createCampaign({ id: campaignId, target: input.target ?? 10,
+        reserve: input.reserve ?? 10, mode: "full_time" }, identity);
+    }
+  };
   const authenticate = (request) => request.headers.authorization === "Bearer profile-one-token"
     ? { actorId: "agent-one", profileId: "profile-one" } : null;
   const server = createHttpServer({ service, discovery, profiles, authenticate, config });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { server, service, base: `http://127.0.0.1:${server.address().port}` };
+  return { server, service, campaignId, base: `http://127.0.0.1:${server.address().port}` };
 }
 
 test("HTTP authentication fixes profile identity and mutation retries are idempotent", async () => {
@@ -95,6 +102,28 @@ test("application metrics require profile authentication", async () => {
     const metrics = await response.json();
     assert.equal(metrics.attempts, 0);
     assert.equal(metrics.worker.activeMs.medianMs, null);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test("campaign HTTP start is idempotent and campaign reads stay profile-bound", async () => {
+  const { server, service, campaignId, base } = await fixture();
+  const send = () => fetch(`${base}/v1/campaigns`, {
+    method: "POST", headers: { authorization: "Bearer profile-one-token", "content-type": "application/json",
+      "idempotency-key": "campaign-request-key" },
+    body: JSON.stringify({ target: 10, reserve: 5 })
+  });
+  try {
+    const first = await send(); const replay = await send();
+    assert.equal(first.status, 202); assert.equal(replay.status, 202);
+    assert.equal((await first.json()).campaignId, campaignId);
+    assert.equal((await replay.json()).campaignId, campaignId);
+    assert.equal(service.listCampaigns("profile-one").length, 1);
+    assert.equal(service.listCampaigns("profile-two").length, 0);
+    const status = await fetch(`${base}/v1/campaigns/${campaignId}`, {
+      headers: { authorization: "Bearer profile-one-token" }
+    });
+    assert.equal(status.status, 200);
+    assert.equal((await status.json()).target, 10);
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
