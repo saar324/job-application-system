@@ -266,6 +266,15 @@ test("an unfilled optional file has a stable final preview", async () => {
   assert.equal(result.requirements[0].preview.unfilled[0].key, "optional-file");
 });
 
+test("a portfolio URL is not uploaded into an optional portfolio file control", async () => {
+  const result = await run(`<form><label>Attach Portfolio <input type="file" name="portfolio"></label>
+    <button type="submit">Submit application</button></form>`, {},
+  { ...profile, links: { portfolio: "https://example.test/portfolio" } },
+  { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.equal(result.requirements[0].preview.unfilled[0].key, "portfolio");
+});
+
 test("worker follows Apply Now before inspecting unrelated landing-page forms", async () => {
   const result = await run(`
     <div id="landing">
