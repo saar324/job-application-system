@@ -266,6 +266,10 @@ export class DiscoveryService {
           errors.push({ source: scored.source, stage: "application_destination", error: error.message });
         }
       }
+      if (isHandled(scored)) {
+        excluded += 1;
+        continue;
+      }
       const opportunity = await this.applicationService.addOpportunity({
         ...scored, ...(input.campaignId ? { lastCampaignId: input.campaignId } : {})
       }, identity);
