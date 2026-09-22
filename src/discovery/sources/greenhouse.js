@@ -21,7 +21,8 @@ function descriptionOf(job) {
 
 export const greenhouse = {
   id: "greenhouse",
-  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, query = {}, onError = () => {} }) {
+  async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, query = {},
+    isHandled = () => false, onError = () => {} }) {
     const boards = configuredBoards(sourceConfig).filter((board) => !query.board || board.token === query.board);
     const settled = await Promise.allSettled(boards.map(async (board) => {
       const url = new URL(`https://boards-api.greenhouse.io/v1/boards/${board.token}/jobs`);
@@ -39,10 +40,12 @@ export const greenhouse = {
     });
     const rows = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
     const selected = rows
-      .filter(({ job }) => job?.id && job?.title && remoteLocation(job.location?.name)
+      .filter(({ board, job }) => job?.id && job?.title && remoteLocation(job.location?.name)
         && discoveryTitleRelevant(job.title, profile)
         && (!query.title || job.title.toLowerCase().includes(query.title.toLowerCase()))
-        && (!query.location || String(job.location?.name ?? "").toLowerCase().includes(query.location.toLowerCase())))
+        && (!query.location || String(job.location?.name ?? "").toLowerCase().includes(query.location.toLowerCase()))
+        && !isHandled({ source: "greenhouse", externalId: `${board.token}:${job.id}`,
+          applyUrl: `https://job-boards.greenhouse.io/${board.token}/jobs/${job.id}` }))
       .sort((left, right) => Date.parse(right.job.updated_at ?? "") - Date.parse(left.job.updated_at ?? ""))
       .slice(0, limit);
     // The live form remains authoritative. Detail requests are opt-in so a

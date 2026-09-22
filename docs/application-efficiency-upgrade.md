@@ -1,6 +1,6 @@
 # Application efficiency upgrade: implementation guide
 
-The [OpenSpec change](../openspec/changes/single-lane-application-efficiency/proposal.md) records the design and acceptance criteria. This guide records the audit, implemented contracts, and remaining rollout evidence. No production throughput improvement has been measured yet.
+The [OpenSpec change](../openspec/changes/single-lane-application-efficiency/proposal.md) records the design and acceptance criteria. This guide records the audit, implemented contracts, and remaining rollout evidence. The current follow-ups are tracked together in [the backlog](backlog.md). No production throughput improvement has been measured yet.
 
 ## Implementation status, 2026-09-22
 
