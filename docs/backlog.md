@@ -5,7 +5,7 @@ This is the shared follow-up list for the efficiency upgrade and the 22 Septembe
 | Priority | Work | Completion evidence |
 | --- | --- | --- |
 | P0 | Finish the ten verified-submission pilot. Resolve owner facts and browser challenges, review complete previews, submit only with exact approval, and record receipts. | Ten distinct eligible employer receipts; separate attempted, blocked, closed, and submitted counts. |
-| P0 | Exclude already handled roles from every search result using the profile's durable application history and stable ATS role IDs. Keep unattempted discovered roles searchable. | Cross-source, cross-host, per-profile, and result-limit regressions; deployed search query shows no handled roles. |
+| Done | Exclude already handled roles from every search result using the profile's durable application history and stable ATS role IDs. Keep unattempted discovered roles searchable. | 162 tests and privacy gate pass. Production Ashby query for an already handled Kestra role returned `handledFiltered: 1`, `found: 0`, and no items. |
 | P0 | Recheck official posting status and Bulgaria remote eligibility before preparing a form. | Stale and geographically restricted roles are removed before a browser attempt. |
 | P0 | Fill relevant optional answers when supported by verified applicant evidence; review all filled and unfilled fields. | Dash0-style AI and startup questions receive grounded answers or an explicit owner decision to leave blank; refreshed preview is accurate. |
 | P1 | Reuse confirmed links, facts, and employer-scoped answers without treating unreviewed drafts as facts. | Fewer repeated owner questions and no incorrect cross-employer answer reuse. |
@@ -14,4 +14,4 @@ This is the shared follow-up list for the efficiency upgrade and the 22 Septembe
 | P1 | Measure discovery, eligibility checks, owner wait, drafting, browser work, token use, and receipts as distinct stages. | Comparable time and token cost per verified submission, including blocked and failed outcomes. |
 | P2 | Run the broader fixture and browser-tool comparison from the original upgrade plan. | Same cases and quality gates for Playwright, CLI/MCP, and adaptive alternatives; measured gain before changing the production worker. |
 
-The handled-role filter is implemented locally with regression tests. It still needs production deployment and a live query check. The other items remain open unless their completion evidence is recorded here.
+The handled-role filter is deployed to the production API. The other items remain open unless their completion evidence is recorded here.
