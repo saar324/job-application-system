@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { companyQuestion, eligibleProseField, needsCompanyResearch } from "./draft-provider.js";
 import { fillAshbyRequiredControls, verifyAshbyRequiredControls } from "./ashby-adapter.js";
@@ -9,7 +9,7 @@ const NEXT_BUTTON = /next|continue|save and continue|review/i;
 const START_BUTTON = /^(?:apply|apply manually)$|apply now|apply for this job|start application/i;
 const AUTH_BUTTON = /sign in|log in|create account|register|sign up/i;
 const SIGNUP_BUTTON = /create account|register|sign up/i;
-const SUCCESS_TEXT = /thank you|application (?:has been |was )?submitted|application received|received your application/i;
+const SUCCESS_TEXT = /thank you|application (?:has been |was )?(?:successfully )?submitted|application received|received your application/i;
 const CHALLENGE_TEXT = /captcha|verify you are human|security check|unusual traffic|cloudflare/i;
 const VERIFICATION_FIELD = /\b(otp|one.?time|verification code|security code|authenticator|two.?factor|2fa|mfa|passkey)\b/i;
 
@@ -59,6 +59,7 @@ function flattenProfile(profile, currentUrl) {
     phone: contact.phone,
     "phone number": contact.phone,
     location: contact.location,
+    "current location": contact.location,
     city: contact.city,
     country: contact.country,
     address: contact.address,
@@ -87,7 +88,7 @@ function flattenProfile(profile, currentUrl) {
   return values;
 }
 
-function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, approvedAnswers = [], opportunity = {}) {
+function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, approvedAnswers = [], opportunity = {}, skills = []) {
   const candidates = [field.name, field.id, field.label].filter(Boolean);
   for (const candidate of candidates) {
     if (Object.hasOwn(answers, candidate)) return { value: answers[candidate], source: "application answer" };
@@ -111,6 +112,12 @@ function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, appr
     return true;
   });
   if (approved) return { value: approved.value, source: `approved answer:${approved.id}` };
+  if (field.type === "checkbox" && !field.required && Array.isArray(skills)) {
+    const compact = (value) => normalize(value).replace(/\s+/g, "");
+    if (skills.some((skill) => compact(skill) === compact(field.label))) {
+      return { value: true, source: "profile skill" };
+    }
+  }
   // A generic name or email attribute is not enough when the label identifies
   // another person or organization.
   const unrelated = /company|employer|referr|manager|supervisor|emergency|school|recruiter|contact person/i
@@ -162,7 +169,20 @@ async function describe(locator) {
 
 async function fillControl(locator, field, value, surface) {
   if (field.type === "file") {
+    const isAshby = new URL(surface.url()).hostname === "jobs.ashbyhq.com";
+    const rootPage = typeof surface.page === "function" ? surface.page() : surface;
+    const fileAcknowledged = isAshby ? rootPage.waitForResponse((response) =>
+      response.url().includes("/api/non-user-graphql")
+        && response.request().method() === "POST"
+        && response.request().postData()?.includes("setFormValueToFile"), { timeout: 20_000 }) : null;
     await locator.setInputFiles(String(value));
+    if (fileAcknowledged) {
+      const response = await fileAcknowledged;
+      const render = (await response.json()).data?.setFormValueToFile;
+      if (!render || render.errorMessages?.length || render.formErrors?.length) {
+        throw new Error(`file upload was not acknowledged for ${field.label}`);
+      }
+    }
   } else if (field.tag === "select") {
     const desired = normalize(value);
     const option = field.options.find((item) => normalize(item.label) === desired || normalize(item.value) === desired);
@@ -290,7 +310,7 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
     const answer = field.type === "checkbox" && field.required
       ? resolveAnswer(field, answers, {})
       : resolveAnswer(field, answers, profileValues, preparedAnswers,
-        Array.isArray(profile.approvedAnswers) ? profile.approvedAnswers : [], opportunity);
+        Array.isArray(profile.approvedAnswers) ? profile.approvedAnswers : [], opportunity, profile.skills);
     answerPlan.entries.push({ field, answer });
   }
   for (const { field, answer } of answerPlan.entries) {
@@ -719,6 +739,12 @@ export async function automateApplication({ page, profile, opportunity, applicat
       }, step);
     }
     const previousUrl = surface.url();
+    if (action.final && new URL(surface.url()).hostname === "jobs.ashbyhq.com") {
+      // Ashby saves text/select answers on blur. Clicking Submit while the
+      // focused field's save is still in flight can silently do nothing.
+      await surface.locator("body").evaluate((body) => body.ownerDocument.activeElement?.blur());
+      await page.waitForLoadState("networkidle", { timeout: 10_000 });
+    }
     const bodyBeforeSubmit = action.final
       ? (await surface.locator("body").innerText().catch(() => "")).slice(0, 50_000)
       : "";
@@ -761,8 +787,16 @@ export async function automateApplication({ page, profile, opportunity, applicat
         }
       }
       const preview = previewOf(observedFields, surface.url(), opportunity);
+      // A fresh ATS render can assign different DOM IDs or reorder hidden
+      // backing controls. Approval binds to the reviewed answers and files,
+      // while the live readback above checks the current form before Submit.
+      const approvedContent = {
+        ...preview,
+        filled: preview.filled.map(({ controlIndex, stepSignature, ...field }) => field),
+        unfilled: preview.unfilled.map(({ controlIndex, stepSignature, ...field }) => field)
+      };
       const previewFingerprint = createHash("sha256").update(JSON.stringify({
-        preview,
+        preview: approvedContent,
         privateFingerprints: [...observedFields.values()].map((field) => [
           field.step, field.key, field.secretFingerprint, field.stagedPathFingerprint
         ])
@@ -785,6 +819,30 @@ export async function automateApplication({ page, profile, opportunity, applicat
     // navigations while DOM-only transitions can continue immediately.
     const priorBody = await surface.locator("body").innerText().catch(() => "");
     const transitionStarted = performance.now();
+    const networkEvents = [];
+    const networkBodies = [];
+    const consoleErrors = [];
+    if (action.final) {
+      page.on("response", (response) => {
+        const url = response.url();
+        if (!/ashbyhq\.com|comeet\.co|splitmetrics\.com/.test(url)) return;
+        const event = { status: response.status(), method: response.request().method(),
+          url: new URL(url).origin + new URL(url).pathname };
+        networkEvents.push(event);
+        if (event.method === "POST" && event.url.endsWith("/api/non-user-graphql")) {
+          networkBodies.push(response.text().then((body) => { event.body = body.slice(0, 4000); })
+            .catch(() => undefined));
+        }
+      });
+      page.on("requestfailed", (request) => {
+        const url = request.url();
+        networkEvents.push({ failed: request.failure()?.errorText, method: request.method(),
+          url: new URL(url).origin + new URL(url).pathname });
+      });
+      page.on("console", (message) => {
+        if (message.type() === "error") consoleErrors.push(message.text().slice(0, 300));
+      });
+    }
     if (action.final) await markFinalActionStarted?.();
     await action.locator.click({ noWaitAfter: true });
     if (!action.final) await waitForStepChange(surface, priorBody);
@@ -799,6 +857,22 @@ export async function automateApplication({ page, profile, opportunity, applicat
     const verified = await waitForSubmissionEvidence(surface, previousUrl, bodyBeforeSubmit);
     timings.receiptMs += performance.now() - transitionStarted;
     if (!verified) {
+      await Promise.allSettled(networkBodies);
+      await mkdir(artifactsDirectory, { recursive: true, mode: 0o700 });
+      await page.screenshot({ path: path.join(artifactsDirectory, `${application.id}.unverified.png`),
+        fullPage: true }).catch(() => undefined);
+      const diagnostic = {
+        url: surface.url(),
+        body: (await surface.locator("body").innerText().catch(() => "")).slice(0, 8000),
+        invalid: await surface.locator("input:invalid, textarea:invalid, select:invalid")
+          .evaluateAll((elements) => elements.map((element) => ({
+            name: element.name, type: element.type, message: element.validationMessage
+          }))).catch(() => []),
+        visibleForms: await surface.locator("form:visible").count().catch(() => 0),
+        networkEvents: networkEvents.slice(-40), consoleErrors: consoleErrors.slice(-20)
+      };
+      await writeFile(path.join(artifactsDirectory, `${application.id}.unverified.json`),
+        JSON.stringify(diagnostic), { mode: 0o600 }).catch(() => undefined);
       return pause({
         status: "needs_human",
         message: "The submit action ran, but the site did not provide a verifiable confirmation",

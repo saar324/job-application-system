@@ -152,6 +152,45 @@ test("worker fills known facts and records a verified submission receipt", async
   assert.match(result.receipt.screenshotSha256, /^[a-f0-9]{64}$/);
 });
 
+test("optional skill checkboxes use only verified profile skills", async () => {
+  const result = await run(`<form>
+    <label><input name="fast-api" type="checkbox">Fast.api</label>
+    <label><input name="asyncio" type="checkbox">Asyncio</label>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile, skills: ["FastAPI"] }, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled.map((field) => field.label), ["Fast.api"]);
+  assert.deepEqual(result.requirements[0].preview.unfilled.map((field) => field.label), ["Asyncio"]);
+});
+
+test("Ashby submit waits for the last field save triggered by blur", async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const artifactsDirectory = await mkdtemp(path.join(os.tmpdir(), "job-worker-test-"));
+  await page.route("https://jobs.ashbyhq.com/test/application", (route) => route.fulfill({
+    contentType: "text/html", body: `<form onsubmit="event.preventDefault();if(window.saved)document.body.innerHTML='<h1>Application submitted</h1>'">
+      <label>Name <input name="name" required></label>
+      <label>Email <input name="email" type="email" required onblur="fetch('/api/non-user-graphql',{method:'POST'}).then(()=>window.saved=true)"></label>
+      <button type="submit">Submit Application</button></form>`
+  }));
+  await page.route("https://jobs.ashbyhq.com/api/non-user-graphql", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await route.fulfill({ contentType: "application/json", body: "{}" });
+  });
+  try {
+    const result = await automateApplication({ page, profile,
+      opportunity: { applyUrl: "https://jobs.ashbyhq.com/test/application" },
+      application: { id: "application-one", answers: {} }, artifactsDirectory });
+    assert.equal(result.status, "submitted");
+  } finally { await context.close(); }
+});
+
+test("Ashby success wording records a verified receipt", async () => {
+  const result = await run(`<form onsubmit="event.preventDefault();document.body.innerHTML='<h2>Success</h2><p>Your application was successfully submitted. We will contact you if there are next steps.</p>'">
+    <button type="submit">Submit Application</button></form>`);
+  assert.equal(result.status, "submitted");
+});
+
 test("worker durably marks final action immediately before clicking submit", async () => {
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -384,6 +423,18 @@ test("changed form invalidates an earlier final approval", async () => {
   } });
   assert.equal(changed.status, "needs_input");
   assert.notEqual(changed.requirements[0].previewFingerprint, first.requirements[0].previewFingerprint);
+});
+
+test("approval survives a fresh render that changes a control ID", async () => {
+  const html = `<form onsubmit="event.preventDefault(); document.body.textContent='Application submitted'">
+    <label>First name <input name="first_name" required></label>
+    <button type="submit">Submit Application</button></form>
+    <script>document.querySelector('input').id = Math.random().toString(36).slice(2)</script>`;
+  const first = await run(html, {}, profile, { finalApprovalRequired: true });
+  assert.equal(first.requirements[0].kind, "final_submission_approval");
+  const second = await run(html, {}, profile, { finalApprovalRequired: true,
+    finalSubmissionApproval: { previewFingerprint: first.requirements[0].previewFingerprint } });
+  assert.equal(second.status, "submitted");
 });
 
 test("unknown select questions include options and recommend a typed answer", async () => {
