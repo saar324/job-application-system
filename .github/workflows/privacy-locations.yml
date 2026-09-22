@@ -1,0 +1,26 @@
+name: Temporary private privacy locations
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  locations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Preserve trusted diagnostic and inspect proposed files
+        run: |
+          cp scripts/private-privacy-locations.js "$RUNNER_TEMP/private-privacy-locations.mjs"
+          git fetch --no-tags origin refs/heads/codex/single-lane-application-efficiency:refs/remotes/origin/privacy-candidate
+          git checkout --detach refs/remotes/origin/privacy-candidate
+      - name: Report only matching file and line
+        env:
+          PRIVACY_DENYLIST_B64: ${{ secrets.PRIVACY_DENYLIST_B64 }}
+        run: node "$RUNNER_TEMP/private-privacy-locations.mjs"
