@@ -381,7 +381,12 @@ async function inlineValidationQuestions(surface, inventory) {
 
 async function detectChallenge(page) {
   const body = (await page.locator("body").innerText().catch(() => "")).slice(0, 50_000);
-  const challengeFrame = page.frames().some((frame) => /recaptcha|hcaptcha|turnstile/i.test(frame.url()));
+  // Greenhouse mounts an invisible reCAPTCHA badge on ordinary forms. It is
+  // not a human challenge unless the site later opens an interactive frame.
+  const challengeFrame = page.frames().some((frame) =>
+    frame !== page.mainFrame() && /recaptcha|hcaptcha|turnstile/i.test(frame.url())
+      && !(/recaptcha\/[^?]*\/anchor\?/i.test(frame.url())
+        && /[?&]size=invisible(?:&|$)/i.test(frame.url())));
   return challengeFrame || CHALLENGE_TEXT.test(body);
 }
 
@@ -494,13 +499,6 @@ export async function automateApplication({ page, profile, opportunity, applicat
   for (let step = 0; step < 16; step += 1) {
     timings.steps = step + 1;
     surface = await activeSurface(page);
-    if (await detectChallenge(page)) {
-      return pause({
-        status: "needs_human",
-        message: "The application site presented a human verification challenge",
-        requirements: [{ kind: "human_challenge", action: "manual_review", message: "Complete or inspect the browser challenge" }]
-      }, step);
-    }
     const landingAction = await findAction(surface);
     if (landingAction?.ambiguous) return pause({
       status: "needs_human", message: "Multiple competing application actions were found",
@@ -608,6 +606,13 @@ export async function automateApplication({ page, profile, opportunity, applicat
     for (const field of fields) observedFields.set(`${step}:${signature}:${field.key}:${field.label}`, {
       ...field, step, stepSignature: signature
     });
+    if (await detectChallenge(page)) {
+      return pause({
+        status: "needs_human",
+        message: "The application site presented a human verification challenge",
+        requirements: [{ kind: "human_challenge", action: "manual_review", message: "Complete or inspect the browser challenge" }]
+      }, step);
+    }
     if (unresolved.length) {
       const verification = unresolved.find((field) => VERIFICATION_FIELD.test(`${field.key} ${field.label}`));
       if (verification) {

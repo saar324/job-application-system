@@ -22,7 +22,11 @@ export async function executeInFreshContext({ browser, payload, urlPolicy, artif
     const requestUrl = route.request().url();
     try {
       if (/^https?:/i.test(requestUrl)) await urlPolicy.assertPublic(requestUrl);
-      if (route.request().isNavigationRequest()) urlPolicy.assertAllowed(requestUrl, requestDomains);
+      // Embedded challenge frames may navigate to their own public hosts. Only the
+      // application page's top-level navigation needs the application allowlist.
+      if (route.request().isNavigationRequest() && route.request().frame().parentFrame() === null) {
+        urlPolicy.assertAllowed(requestUrl, requestDomains);
+      }
       else if (/^https?:/i.test(requestUrl)) urlPolicy.assertNetworkSafe(requestUrl);
       await route.continue();
     } catch (error) {

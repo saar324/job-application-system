@@ -31,3 +31,34 @@ test("fresh browser context closes after an automation error", async () => {
   await assert.rejects(executeInFreshContext({ ...item, artifactsDirectory: "/tmp" }), /fixture failure/);
   assert.equal(item.closes(), 1);
 });
+
+test("public challenge iframe navigation does not replace the application destination", async () => {
+  const item = fixture({ status: "needs_human" });
+  const allowed = [];
+  const publicUrls = [];
+  let handler;
+  item.browser.newContext = async () => ({
+    async route(_pattern, callback) { handler = callback; },
+    async newPage() { return {}; },
+    async close() {}
+  });
+  item.urlPolicy.assertAllowed = (url) => { allowed.push(url); };
+  item.urlPolicy.assertPublic = async (url) => { publicUrls.push(url); };
+  await executeInFreshContext({ ...item, artifactsDirectory: "/tmp" });
+  const navigate = async (url, parentFrame) => {
+    let continued = false;
+    await handler({
+      request: () => ({ url: () => url, isNavigationRequest: () => true,
+        frame: () => ({ parentFrame: () => parentFrame }) }),
+      continue: async () => { continued = true; },
+      abort: async () => { throw new Error("unexpected block"); }
+    });
+    assert.equal(continued, true);
+  };
+  await navigate("https://job-boards.greenhouse.io/example", null);
+  await navigate("https://www.recaptcha.net/recaptcha/api2/anchor", {});
+  assert.deepEqual(allowed, [item.payload.opportunity.applyUrl,
+    "https://job-boards.greenhouse.io/example"]);
+  assert.deepEqual(publicUrls, [item.payload.opportunity.applyUrl,
+    "https://job-boards.greenhouse.io/example", "https://www.recaptcha.net/recaptcha/api2/anchor"]);
+});
