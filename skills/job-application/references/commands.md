@@ -18,7 +18,25 @@ $JOBCLI opportunities
 $JOBCLI applications
 $JOBCLI application-log
 $JOBCLI application-metrics
+$JOBCLI campaigns
 $JOBCLI inbox
+```
+
+Start one timed campaign from a fresh scan. It deterministically excludes handled roles and listings without an
+employer application destination, then prepares the target plus reserve sequentially for one exact batch review:
+
+```bash
+printf '%s' '{"target":10,"reserve":10,"idempotencyKey":"campaign-2026-09-22-01"}' | $JOBCLI campaign-start
+$JOBCLI campaign-status CAMPAIGN_UUID
+```
+
+The status response includes scan, preparation, approval-wait, submission, and worker-active timing; every ready
+review entry includes the company, role, destination, full presentation, application ID, and preview fingerprint.
+After the owner explicitly approves the exact entries shown by that campaign, submit only those entries:
+
+```bash
+printf '%s' '{"idempotencyKey":"campaign-approval-2026-09-22-01","entries":[{"applicationId":"APPLICATION_UUID","previewFingerprint":"64_HEX_CHARACTERS"}]}' \
+  | $JOBCLI campaign-approve CAMPAIGN_UUID
 ```
 
 For each recurring cycle, use this order:

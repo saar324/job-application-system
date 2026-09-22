@@ -25,6 +25,9 @@ const routes = {
   profile: ["GET", "/v1/profile/status"], "profile-update": ["PATCH", "/v1/profile"],
   scan: ["POST", "/v1/discovery/scan"],
   sources: ["GET", "/v1/discovery/sources"], query: ["POST", "/v1/discovery/query"],
+  "campaign-start": ["POST", "/v1/campaigns"], "campaigns": ["GET", "/v1/campaigns"],
+  "campaign-status": ["GET", `/v1/campaigns/${id}`],
+  "campaign-approve": ["POST", `/v1/campaigns/${id}/approve`],
   direct: ["POST", "/v1/direct-applications"],
   applications: ["GET", "/v1/applications"], "application-log": ["GET", "/v1/application-log"],
   "application-metrics": ["GET", "/v1/application-metrics"],
@@ -37,8 +40,8 @@ const routes = {
   "record-employer-status": ["POST", `/v1/applications/${id}/employer-status`],
   confirm: ["POST", `/v1/confirmations/${id}`], reject: ["POST", `/v1/confirmations/${id}`]
 };
-if ((!routes[command] && command !== "callback") || (["apply", "research", "refresh-preview", "record-submission", "record-employer-status", "confirm", "reject", "callback"].includes(command) && !id)) {
-  console.error("usage: jobctl <health|me|profile|profile-update|sources|scan|query|direct|opportunities|applications|application-log|application-metrics|inbox|approve-batch|research ID|refresh-preview ID|add|apply ID|record-submission ID|record-employer-status ID|confirm ID|reject ID|callback DATA>");
+if ((!routes[command] && command !== "callback") || (["apply", "campaign-status", "campaign-approve", "research", "refresh-preview", "record-submission", "record-employer-status", "confirm", "reject", "callback"].includes(command) && !id)) {
+  console.error("usage: jobctl <health|me|profile|profile-update|sources|scan|query|campaign-start|campaigns|campaign-status ID|campaign-approve ID|direct|opportunities|applications|application-log|application-metrics|inbox|approve-batch|research ID|refresh-preview ID|add|apply ID|record-submission ID|record-employer-status ID|confirm ID|reject ID|callback DATA>");
   process.exit(2);
 }
 
@@ -55,10 +58,11 @@ async function request(method, pathname, body) {
   method,
   headers: {
     ...(token ? { authorization: `Bearer ${token}` } : {}),
+    ...(body?.idempotencyKey ? { "idempotency-key": String(body.idempotencyKey) } : {}),
     ...(body ? { "content-type": "application/json" } : {})
   },
   ...(body ? { body: JSON.stringify(body) } : {}),
-    signal: AbortSignal.timeout(["scan", "query"].includes(command) ? 60_000 : 30_000)
+    signal: AbortSignal.timeout(["scan", "query", "campaign-start"].includes(command) ? 90_000 : 30_000)
   });
   const text = await response.text();
   if (!response.ok) {

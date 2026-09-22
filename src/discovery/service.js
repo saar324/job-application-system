@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { remoteok } from "./sources/remoteok.js";
 import { arbeitnow } from "./sources/arbeitnow.js";
 import { jobicy } from "./sources/jobicy.js";
@@ -90,6 +91,57 @@ export class DiscoveryService {
       action: "discovery.query", key, input: { source: source.id, mode: descriptor.mode, queries },
       execute: () => this.scan({ mode: descriptor.mode, sources: [source.id], queryPlan: queries,
         limitPerSource: Math.max(...queries.map((query) => query.limit)) }, identity) });
+  }
+
+  async startCampaign(input, identity) {
+    const target = Number(input.target ?? 10);
+    const reserve = Number(input.reserve ?? Math.min(10, target));
+    if (!Number.isInteger(target) || target < 1 || target > 50
+      || !Number.isInteger(reserve) || reserve < 0 || reserve > 50) {
+      throw Object.assign(new Error("target must be 1 to 50 and reserve must be 0 to 50"), { status: 400 });
+    }
+    const campaignId = randomUUID();
+    const mode = input.mode ?? (await this.profiles.get(identity.profileId))?.defaultMode ?? this.config.defaultMode;
+    await this.applicationService.createCampaign({
+      id: campaignId, target, reserve, mode, sources: input.sources, queryPlan: input.queryPlan
+    }, identity);
+    try {
+      const scan = await this.scan({
+        mode, sources: input.sources, queryPlan: input.queryPlan,
+        limitPerSource: input.limitPerSource, prepareApplications: false, campaignId
+      }, identity);
+      if (!scan.readyToApply) {
+        throw Object.assign(new Error(`profile is missing application fields: ${scan.missingForApplications.join(", ")}`),
+          { status: 409 });
+      }
+      const ready = scan.items.filter((entry) => !entry.opportunity.applicationDestinationPending
+        && /^https:\/\//i.test(entry.opportunity.applyUrl ?? ""));
+      const selected = [...ready]
+        .sort((left, right) => Number(right.opportunity.score ?? 0) - Number(left.opportunity.score ?? 0)
+          || Date.parse(right.opportunity.postedAt ?? 0) - Date.parse(left.opportunity.postedAt ?? 0))
+        .slice(0, target + reserve);
+      const applicationIds = [];
+      for (const entry of selected) {
+        try {
+          const application = await this.applicationService.requestApplication(entry.opportunity.id, {
+            campaignId, forceFinalApproval: true
+          }, identity);
+          applicationIds.push(application.id);
+        } catch (error) {
+          if (error.status !== 409) throw error;
+        }
+      }
+      return await this.applicationService.recordCampaignScan(campaignId, {
+        found: scan.found, qualifying: scan.qualifying, excluded: scan.excluded,
+        handledFiltered: scan.handledFiltered,
+        destinationPending: scan.items.length - ready.length,
+        selectedOpportunityIds: selected.map((entry) => entry.opportunity.id),
+        applicationIds, errors: scan.errors
+      }, identity);
+    } catch (error) {
+      await this.applicationService.recordCampaignFailure(campaignId, error, identity);
+      throw error;
+    }
   }
 
   async scan(input, identity) {
@@ -207,12 +259,15 @@ export class DiscoveryService {
         excluded += 1;
         continue;
       }
-      const opportunity = await this.applicationService.addOpportunity(scored, identity);
+      const opportunity = await this.applicationService.addOpportunity({
+        ...scored, ...(input.campaignId ? { lastCampaignId: input.campaignId } : {})
+      }, identity);
       const entry = { opportunity };
-      if (modeConfig.autoApplyDiscovered && scored.applicationDestinationPending) {
+      const autoApplyDiscovered = input.prepareApplications === false ? false : modeConfig.autoApplyDiscovered;
+      if (autoApplyDiscovered && scored.applicationDestinationPending) {
         entry.applicationBlockedBySource = "employer_application_url_required";
         telemetry.count("discovery.application_destination_pending", 1, { source: scored.source });
-      } else if (modeConfig.autoApplyDiscovered && profileStatus.readyToApply) {
+      } else if (autoApplyDiscovered && profileStatus.readyToApply) {
         try { entry.application = await this.applicationService.requestApplication(opportunity.id, {}, identity); }
         catch (error) {
           if (error.status !== 409) throw error;
@@ -220,7 +275,7 @@ export class DiscoveryService {
             .find((item) => item.opportunityId === opportunity.id);
         }
       }
-      if (modeConfig.autoApplyDiscovered && !profileStatus.readyToApply) {
+      if (autoApplyDiscovered && !profileStatus.readyToApply) {
         entry.applicationBlockedByProfile = profileStatus.missingForApplications;
       }
       qualifying.push(entry);

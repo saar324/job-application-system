@@ -65,6 +65,34 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
     }, annotations: { openWorldHint: true }
   }, async (input) => result(await discovery.query(input, identity)));
 
+  server.registerTool("start_application_campaign", {
+    description: "Start one timed campaign that scans, ranks, and sequentially prepares a target plus reserve roles for exact batch review.",
+    inputSchema: {
+      mode: z.enum(["full_time", "freelance"]).optional(),
+      target: z.number().int().min(1).max(50).default(10),
+      reserve: z.number().int().min(0).max(50).optional(),
+      sources: z.array(z.string()).max(20).optional(),
+      limitPerSource: z.number().int().min(1).max(200).optional(),
+      queryPlan: z.array(z.object({ filters: z.record(z.string(), z.union([z.string(), z.array(z.string())])),
+        limit: z.number().int().min(1).max(200).optional() })).min(1).max(8).optional(),
+      idempotencyKey: z.string().min(8).max(200)
+    }, annotations: { openWorldHint: true, destructiveHint: false }
+  }, async ({ idempotencyKey, ...input }) => result(await idempotent(
+    service, identity, "start_application_campaign", idempotencyKey, input,
+    async () => discovery.startCampaign(input, identity)
+  )));
+
+  server.registerTool("list_application_campaigns", {
+    description: "List timed application campaigns for the authenticated profile.",
+    inputSchema: {}, annotations: { readOnlyHint: true, openWorldHint: false }
+  }, async () => result({ items: service.listCampaigns(identity.profileId) }));
+
+  server.registerTool("get_application_campaign", {
+    description: "Get timing, outcomes, and exact ready review entries for one campaign.",
+    inputSchema: { campaignId: z.string().uuid() },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  }, async ({ campaignId }) => result(service.campaignStatus(campaignId, identity.profileId)));
+
   const listSchema = { cursor: z.string().max(100).optional(), limit: z.number().int().min(1).max(100).optional() };
   server.registerTool("list_opportunities", {
     description: "List opportunities owned by the authenticated profile.", inputSchema: listSchema,
@@ -125,6 +153,18 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
   }, async ({ entries, idempotencyKey }) => result(await idempotent(
     service, identity, "approve_prepared_batch", idempotencyKey, { entries },
     async () => service.approvePreparedBatch(entries, identity)
+  )));
+  server.registerTool("approve_application_campaign", {
+    description: "Approve exact prepared previews belonging to one campaign, up to its remaining target.",
+    inputSchema: {
+      campaignId: z.string().uuid(),
+      entries: z.array(z.object({ applicationId: z.string().uuid(),
+        previewFingerprint: z.string().regex(/^[a-f0-9]{64}$/) })).min(1).max(50),
+      idempotencyKey: z.string().min(8).max(200)
+    }, annotations: { openWorldHint: false, destructiveHint: true }
+  }, async ({ campaignId, entries, idempotencyKey }) => result(await idempotent(
+    service, identity, "approve_application_campaign", idempotencyKey, { campaignId, entries },
+    async () => service.approveCampaign(campaignId, entries, identity)
   )));
   server.registerTool("attach_application_research", {
     description: "Attach an official company excerpt to a waiting application and requeue it.",
