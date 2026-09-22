@@ -1,0 +1,4 @@
+interface:
+  display_name: "Job Application"
+  short_description: "Run recurring job discovery and application cycles"
+  default_prompt: "Use $job-application to run one bounded job-search cycle, resume durable work, submit eligible applications, and surface only new decisions that need me."

@@ -1,0 +1,205 @@
+import { configuredTitlePriority, preferredTitleGroups } from "./title-preferences.js";
+import { matchSkills } from "./skills.js";
+
+function words(value) {
+  return new Set(String(value ?? "").toLowerCase().match(/[a-z0-9+#.]{2,}/g) ?? []);
+}
+
+function includesPhrase(text, phrase) { return text.includes(String(phrase).toLowerCase()); }
+
+const GLOBAL_REMOTE = /\b(worldwide|anywhere|global|all countries)\b/i;
+const RESTRICTED_REMOTE = /\b(only|restricted|must be (?:based|located)|residents?|candidates? in|within)\b/i;
+const REGIONAL_SCOPE = /\b(eu|eea|europe|european|emea)\b/i;
+const COUNTRY_NAMES = [
+  "albania", "andorra", "argentina", "australia", "austria", "belarus", "belgium", "bosnia",
+  "brazil", "bulgaria", "canada", "chile", "china", "colombia", "croatia", "cyprus", "czechia",
+  "denmark", "estonia", "finland", "france", "georgia", "germany", "greece", "hungary", "iceland",
+  "india", "ireland", "israel", "italy", "japan", "latvia", "liechtenstein", "lithuania",
+  "luxembourg", "malta", "mexico", "moldova", "monaco", "montenegro", "netherlands", "norway",
+  "poland", "portugal", "romania", "serbia", "slovakia", "slovenia", "spain", "sweden",
+  "switzerland", "turkey", "ukraine", "united kingdom", "united states", "usa"
+];
+const REGIONS = {
+  us: /\b(us|u\.s\.|usa|united states|north america)\b/i,
+  europe: /\b(eu|europe|european|emea|bulgaria|germany|france|spain|italy|netherlands|poland|romania|greece|portugal|austria|belgium|sweden|denmark|finland|ireland)\b/i,
+  uk: /\b(uk|u\.k\.|united kingdom|britain|england|scotland|wales)\b/i,
+  canada: /\b(canada|canadian)\b/i,
+  asia: /\b(asia|apac|india|singapore|japan|china|philippines)\b/i,
+  australia: /\b(australia|new zealand|anz)\b/i
+};
+const PERIOD_FACTORS = { year: 1, annual: 1, annually: 1, month: 12, monthly: 12, week: 52, weekly: 52, day: 260, daily: 260, hour: 2080, hourly: 2080 };
+
+function normalizedEmployment(value) {
+  const text = String(value ?? "").toLowerCase().replace(/[_-]+/g, " ").trim();
+  if (/full\s*time|permanent/.test(text)) return "full_time";
+  if (/part\s*time/.test(text)) return "part_time";
+  if (/contract|contractor|freelance|temporary|temp\b/.test(text)) return "contract";
+  if (/intern/.test(text)) return "internship";
+  return text || undefined;
+}
+
+function normalizedCompensationBasis(value) {
+  const text = String(value ?? "").toLowerCase().replace(/[_-]+/g, " ").trim();
+  if (/\b(net|take home|after tax)\b/.test(text)) return "net";
+  if (/\b(gross|before tax)\b/.test(text)) return "gross";
+  return "unspecified";
+}
+
+function locationExclusion(opportunity, allowedLocations) {
+  const location = String(opportunity.location ?? "").trim();
+  if (!opportunity.remote || !location) return null;
+  const lower = location.toLowerCase();
+  const explicitCountries = COUNTRY_NAMES.filter((country) => includesPhrase(lower, country));
+  const residenceCountries = COUNTRY_NAMES.filter((country) =>
+    (allowedLocations ?? []).some((value) => includesPhrase(String(value).toLowerCase(), country)));
+  const namedRegions = Object.entries(REGIONS).filter(([, pattern]) => pattern.test(lower)).map(([name]) => name);
+  // A list of named countries is a residence restriction, even when every
+  // country in that list is part of a broad region accepted by the profile.
+  if (explicitCountries.length && !REGIONAL_SCOPE.test(lower)
+    && !explicitCountries.some((country) => residenceCountries.includes(country))) {
+    return `location restriction ${location} does not include the applicant residence`;
+  }
+  const locationQualifier = lower
+    .replace(/\b(remote|distributed|work from home|locations?)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+  if (locationQualifier && !GLOBAL_REMOTE.test(lower) && !REGIONAL_SCOPE.test(lower)
+    && !residenceCountries.some((country) => includesPhrase(lower, country))) {
+    return `location restriction ${location} does not include the applicant residence or an accepted region`;
+  }
+  const globalOnly = GLOBAL_REMOTE.test(lower) && !explicitCountries.length
+    && !namedRegions.length && !RESTRICTED_REMOTE.test(lower);
+  if (globalOnly || (!explicitCountries.length && !namedRegions.length)) return null;
+
+  const allowedText = allowedLocations.join(" ").toLowerCase();
+  const allowedRegions = new Set(Object.entries(REGIONS)
+    .filter(([, pattern]) => pattern.test(allowedText)).map(([name]) => name));
+  if (namedRegions.some((region) => allowedRegions.has(region))) return null;
+  return `location restriction ${location} does not match allowed locations`;
+}
+
+function excludedLocationReason(opportunity, excludedLocations) {
+  const location = String(opportunity.location ?? "").toLowerCase();
+  if (!location) return null;
+  const excluded = excludedLocations.find((value) => includesPhrase(location, value));
+  return excluded ? `location ${opportunity.location} matches excluded location ${excluded}` : null;
+}
+
+function compensationEvidence(opportunity, profile, mode, modePreferences) {
+  const compensation = opportunity.compensation;
+  const defaultMinimum = mode === "freelance"
+    ? modePreferences.minimumHourlyRate ?? profile.preferences?.minimumHourlyRate
+    : modePreferences.minimumCompensation ?? profile.preferences?.minimumCompensation;
+  const basis = normalizedCompensationBasis(compensation?.basis);
+  const minimum = mode === "freelance" || basis === "gross"
+    ? defaultMinimum
+    : basis === "net"
+      ? modePreferences.minimumNetCompensation
+        ?? profile.preferences?.minimumNetCompensation
+        ?? defaultMinimum
+      : modePreferences.minimumUnspecifiedCompensation
+        ?? profile.preferences?.minimumUnspecifiedCompensation
+        ?? defaultMinimum;
+  if (!minimum || !compensation) return {};
+  const maximum = Number(compensation.maximum ?? compensation.minimum);
+  if (!Number.isFinite(maximum)) return {};
+  const profileCurrency = String(modePreferences.compensationCurrency
+    ?? profile.preferences?.compensationCurrency ?? "").toUpperCase();
+  const offeredCurrency = String(compensation.currency ?? "").toUpperCase();
+  if (profileCurrency && offeredCurrency && profileCurrency !== offeredCurrency) {
+    return { conflict: "compensation_conflict" };
+  }
+  if (!profileCurrency || !offeredCurrency) return {};
+  const offeredFactor = PERIOD_FACTORS[String(compensation.period ?? "year").toLowerCase()];
+  const minimumPeriod = mode === "freelance" ? "hour" : modePreferences.compensationPeriod ?? "year";
+  const minimumFactor = PERIOD_FACTORS[String(minimumPeriod).toLowerCase()];
+  if (!offeredFactor || !minimumFactor) return {};
+  const offeredAnnual = maximum * offeredFactor;
+  const minimumAnnual = Number(minimum) * minimumFactor;
+  if (offeredAnnual < minimumAnnual) {
+    return { exclusion: `maximum ${offeredCurrency} compensation is below the configured minimum` };
+  }
+  return { comparable: true };
+}
+
+export function scoreOpportunity(opportunity, profile, mode, { version = "2" } = {}) {
+  const searchable = `${opportunity.title} ${opportunity.description} ${(opportunity.tags ?? []).join(" ")}`.toLowerCase();
+  const modePreferences = mode === "freelance"
+    ? profile.preferences?.freelance ?? {}
+    : profile.preferences?.fullTime ?? {};
+  const exclusions = [];
+  const conflicts = [...(opportunity.conflicts ?? [])];
+  const excludedTitle = (modePreferences.excludedTitles ?? [])
+    .find((title) => includesPhrase(String(opportunity.title ?? "").toLowerCase(), title));
+  if (excludedTitle) exclusions.push(`excluded title: ${excludedTitle}`);
+  if (modePreferences.remoteOnly === true && opportunity.remote !== true) exclusions.push("profile requires a remote role");
+
+  const allowedLocations = modePreferences.allowedLocations
+    ?? profile.preferences?.allowedLocations ?? profile.preferences?.locations ?? [];
+  const excludedLocations = modePreferences.excludedLocations
+    ?? profile.preferences?.excludedLocations ?? [];
+  const excludedLocation = excludedLocationReason(opportunity, excludedLocations);
+  if (excludedLocation) exclusions.push(excludedLocation);
+  const locationReason = locationExclusion(opportunity, allowedLocations);
+  if (locationReason) exclusions.push(locationReason);
+
+  const acceptedTypes = (modePreferences.employmentTypes ?? []).map(normalizedEmployment).filter(Boolean);
+  const offeredType = normalizedEmployment(opportunity.employmentType);
+  if (offeredType && acceptedTypes.length && !acceptedTypes.includes(offeredType)) {
+    exclusions.push(`employment type ${opportunity.employmentType} is not accepted`);
+  }
+
+  const pay = compensationEvidence(opportunity, profile, mode, modePreferences);
+  if (pay.exclusion) exclusions.push(pay.exclusion);
+  if (pay.conflict && !conflicts.includes(pay.conflict)) conflicts.push(pay.conflict);
+
+  const skills = profile.skills ?? [];
+  const skillEvidence = version === "1"
+    ? skills.filter((skill) => includesPhrase(searchable, skill)).map((skill) => ({ skill, canonical: skill,
+      alias: skill, evidence: "legacy substring match" }))
+    : matchSkills(searchable, skills);
+  const matchedSkills = skillEvidence.map((item) => item.skill);
+  const skillDenominator = Math.max(1, Math.min(skills.length, 6));
+  const skillScore = Math.min(50, Math.round((matchedSkills.length / skillDenominator) * 50));
+  const titleGroups = mode === "freelance"
+    ? { primary: modePreferences.services ?? [], secondary: [] }
+    : preferredTitleGroups(profile);
+  const preferredTitles = titleGroups.primary;
+  const secondaryTitles = titleGroups.secondary;
+  const titleWords = words(opportunity.title);
+  const preferredWords = new Set(preferredTitles.flatMap((title) => [...words(title)]));
+  const secondaryWords = new Set(secondaryTitles.flatMap((title) => [...words(title)]));
+  const primaryMatches = [...titleWords].filter((word) => preferredWords.has(word)).length;
+  const secondaryMatches = [...titleWords].filter((word) => secondaryWords.has(word)).length;
+  const titlePriority = mode === "freelance" ? undefined : configuredTitlePriority(opportunity.title, profile);
+  const rolePriority = titlePriority
+    ?? (mode === "full_time" && modePreferences.opportunisticRoles?.enabled === true
+      ? "opportunistic"
+      : undefined);
+  const titleScore = titlePriority === "secondary"
+    ? Math.min(14, secondaryMatches * 5)
+    : Math.min(25, primaryMatches * 8);
+
+  const locationText = String(opportunity.location ?? "").toLowerCase();
+  const locationScore = opportunity.remote && allowedLocations.some((value) => /remote|worldwide|anywhere|global/i.test(value))
+    ? 10 : allowedLocations.some((value) => includesPhrase(locationText, value)) ? 10 : 0;
+  const posted = Date.parse(opportunity.postedAt ?? "");
+  const ageDays = Number.isFinite(posted) ? Math.max(0, (Date.now() - posted) / 86_400_000) : 30;
+  const recencyScore = ageDays <= 3 ? 10 : ageDays >= 14 ? 0 : Math.round(10 * (14 - ageDays) / 11);
+  const compensationScore = !opportunity.compensation ? 3 : pay.comparable ? 5 : 0;
+  const semanticScore = Number(opportunity.semanticScore);
+  const semanticContribution = version !== "1" && Number.isFinite(semanticScore)
+    ? Math.max(0, Math.min(10, Math.round((semanticScore > 1 ? semanticScore / 100 : semanticScore) * 10))) : 0;
+  const score = exclusions.length ? 0
+    : Math.min(100, skillScore + titleScore + locationScore + recencyScore + compensationScore + semanticContribution);
+  return {
+    score, conflicts,
+    scoreDetails: {
+      scorerVersion: version === "1" ? "1.0.0" : "2.0.0",
+      hardExclusion: exclusions[0], hardExclusions: exclusions,
+      conflicts, matchedSkills, skillEvidence, skillScore, titleScore, titlePriority, rolePriority,
+      compensationComparable: pay.comparable === true,
+      locationScore, recencyScore, compensationScore, semanticContribution,
+      uncertainties: opportunity.uncertainties ?? []
+    }
+  };
+}

@@ -1,0 +1,42 @@
+[Unit]
+Description=Job Application API
+After=network-online.target job-application-worker.service
+Wants=network-online.target job-application-worker.service
+
+[Service]
+Type=simple
+User=jobapp-api
+Group=jobapply
+SupplementaryGroups=jobapply
+WorkingDirectory=/opt/job-application-system
+EnvironmentFile=/etc/job-application/server.env
+Environment=NODE_ENV=production
+Environment=HOME=/var/lib/job-application
+LoadCredential=job-vault-keys:/etc/job-application/vault-keys.json
+UMask=0027
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/job-application /var/lib/job-application-worker/documents
+
+[Install]
+WantedBy=multi-user.target

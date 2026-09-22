@@ -1,0 +1,6 @@
+{
+  "execution": {
+    "adapter": "webhook",
+    "maxApplicationsPerDay": 10
+  }
+}
