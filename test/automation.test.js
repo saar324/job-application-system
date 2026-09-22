@@ -182,6 +182,21 @@ test("required checkboxes become explicit attestations", async () => {
   assert.equal(result.requirements[0].kind, "legal_attestation");
 });
 
+test("styled ATS labels activate zero-size checkbox and object-valued radio", async () => {
+  const result = await run(`<style>input.choice { position:absolute; width:0; height:0 }</style>
+    <form>
+      <input class="choice" type="checkbox" id="privacy" name="privacy" required>
+      <label for="privacy">I agree to the privacy policy</label>
+      <input class="choice" type="radio" id="europe" name="region" value="[object Object]" required>
+      <label for="europe">I am based in Europe</label>
+      <button type="submit">Submit Application</button>
+    </form>`, { privacy: true, region: "I am based in Europe" }, profile,
+  { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled.map((field) => [field.key, field.value]),
+    [["privacy", "Yes"], ["region", "I am based in Europe"]]);
+});
+
 test("worker uploads a resume through a CSS-hidden native file input", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-worker-document-"));
   const resume = path.join(directory, "resume.pdf");

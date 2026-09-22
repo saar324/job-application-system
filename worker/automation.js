@@ -169,8 +169,17 @@ async function fillControl(locator, field, value, surface) {
     if (!option) throw new Error(`answer does not match an option for ${field.label}`);
     await locator.selectOption(option.value);
   } else if (field.type === "checkbox") {
-    if (value === true || normalize(value) === "yes" || normalize(value) === "true") await locator.check();
-    else await locator.uncheck();
+    const checked = value === true || normalize(value) === "yes" || normalize(value) === "true";
+    if (await locator.isVisible()) {
+      if (checked) await locator.check();
+      else await locator.uncheck();
+    } else {
+      // Some ATSes hide the native control and render a styled label. A DOM
+      // click still dispatches the native input/change events their models use.
+      await locator.evaluate((element, desired) => {
+        if (element.checked !== desired) element.click();
+      }, checked);
+    }
   } else if (field.type === "radio") {
     const radios = surface.locator('input[type="radio"]');
     const desired = normalize(value);
@@ -180,7 +189,8 @@ async function fillControl(locator, field, value, surface) {
       const candidateField = await describe(candidate);
       const candidateValue = await candidate.getAttribute("value");
       if (normalize(candidateField.label).includes(desired) || normalize(candidateValue) === desired) {
-        await candidate.check();
+        if (await candidate.isVisible()) await candidate.check();
+        else await candidate.evaluate((element) => element.click());
         return;
       }
     }
@@ -244,7 +254,11 @@ async function readControl(locator, field) {
     if (element.type === "radio") {
       const group = [...document.querySelectorAll('input[type="radio"]')]
         .filter((item) => item.name === element.name && item.form === element.form);
-      return group.find((item) => item.checked)?.value ?? "";
+      const selected = group.find((item) => item.checked);
+      if (!selected) return "";
+      if (selected.value !== "[object Object]") return selected.value;
+      const label = selected.id ? document.querySelector(`label[for="${CSS.escape(selected.id)}"]`) : null;
+      return (label?.innerText || selected.closest("label")?.innerText || "").trim().replace(/\s+/g, " ");
     }
     return element.value;
   });
