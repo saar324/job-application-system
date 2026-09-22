@@ -1,5 +1,6 @@
 import { plainText } from "../text.js";
 import { preferredTitleGroups } from "../title-preferences.js";
+import { needsEmployerApplyUrl } from "../application-destination.js";
 
 function candidateCountry(profile) {
   const values = [
@@ -18,13 +19,6 @@ function postedAt(value) {
   if (typeof value === "number" && Number.isFinite(value)) return new Date(value * 1000).toISOString();
   const parsed = Date.parse(value ?? "");
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
-}
-
-function needsEmployerApplyUrl(value) {
-  try {
-    const hostname = new URL(value).hostname.toLowerCase();
-    return hostname === "himalayas.app" || hostname.endsWith(".himalayas.app");
-  } catch { return true; }
 }
 
 function searchQueries(profile) {
@@ -82,7 +76,7 @@ export const himalayas = {
       company: row.companyName || "Unknown company",
       listingUrl: row.applicationLink,
       applyUrl: row.applicationLink,
-      applicationDestinationPending: needsEmployerApplyUrl(row.applicationLink),
+      applicationDestinationPending: needsEmployerApplyUrl(row.applicationLink, "himalayas.app"),
       description: plainText(row.description || row.excerpt),
       tags: [
         ...(row.categories ?? []),

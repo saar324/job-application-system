@@ -47,7 +47,8 @@ export class DiscoveryService {
       } : this.config.discovery?.sourceOptions?.[id]?.filterValues ?? {},
       configuredBoards: (this.config.discovery?.sourceOptions?.[id]?.boards
         ?? this.config.discovery?.sourceOptions?.[id]?.sites ?? []).map((item) => item.slug ?? item.token),
-      ...(id === "himalayas" ? { applicationFlow: "resolve_employer_url_before_prepare" } : {}),
+      ...(["himalayas", "jobicy", "remoteok", "arbeitnow"].includes(id)
+        ? { applicationFlow: "resolve_employer_url_before_prepare" } : {}),
       maxQueries: 8, maxResultsPerQuery: 200
     })) };
   }
