@@ -12,6 +12,8 @@ import { DiscoveryService } from "../src/discovery/service.js";
 import { ProfileStore } from "../src/profile-store.js";
 import { JsonStore } from "../src/store.js";
 import { WebhookAdapter } from "../src/adapters/webhook.js";
+import { answerEvidenceFingerprint, approvedAnswerFingerprint } from "../src/approved-answers.js";
+import { HttpDraftProvider } from "../worker/draft-provider.js";
 
 const identity = { actorId: "owner", profileId: "owner" };
 const profile = { id: "owner", contact: { firstName: "Ada", lastName: "Lovelace", email: "ada@example.test" },
@@ -108,8 +110,14 @@ test("draft provider receives only unresolved prose and replay uses the saved dr
     const second = await browserRun(browser, html, {
       preparedAnswers: first.preparedAnswers,
       finalSubmissionApproval: { previewFingerprint: first.requirements[0].previewFingerprint }
-    });
+    }, undefined, { listing: "Build reliable software" });
     assert.equal(second.status, "submitted");
+    const stale = await browserRun(browser, html, {
+      preparedAnswers: first.preparedAnswers,
+      finalSubmissionApproval: { previewFingerprint: first.requirements[0].previewFingerprint }
+    }, undefined, { listing: "The role description changed" });
+    assert.equal(stale.status, "needs_input");
+    assert.equal(stale.requirements[0].kind, "missing_answer");
   } finally { await browser.close(); }
 });
 
@@ -153,9 +161,12 @@ test("generic name and email attributes do not fill company and referral fields"
 test("scoped approved answers apply only to their employer", async () => {
   const browser = await chromium.launch();
   const question = "Why this company?";
-  const approved = { ...profile, approvedAnswers: [{ id: "motivation-one", question,
-    value: "I like this company's work.", approvedAt: "2026-09-01T00:00:00Z",
-    scope: { employer: "Example" } }] };
+  const answer = { id: "motivation-one", question, value: "I like this company's work.",
+    approvedAt: new Date().toISOString(), reviewAfter: new Date(Date.now() + 86_400_000).toISOString(),
+    scope: { employer: "Example" }, evidenceFingerprint: answerEvidenceFingerprint(profile),
+    ownerActorId: "owner" };
+  const approved = { ...profile, approvedAnswers: [{ ...answer,
+    contentFingerprint: approvedAnswerFingerprint(answer) }] };
   try {
     const html = `<form><label>${question}<textarea name="motivation" required></textarea></label>
       <button type="submit">Submit Application</button></form>`;
@@ -165,6 +176,39 @@ test("scoped approved answers apply only to their employer", async () => {
     const other = await browserRun(browser, html, { finalApprovalRequired: true }, undefined, undefined,
       { ...approved, approvedAnswers: [{ ...approved.approvedAnswers[0], scope: { employer: "Other" } }] });
     assert.equal(other.requirements[0].kind, "missing_answer");
+    const stale = await browserRun(browser, html, { finalApprovalRequired: true }, undefined, undefined,
+      { ...approved, contact: { ...approved.contact, email: "changed@example.test" } });
+    assert.equal(stale.requirements[0].kind, "missing_answer");
+  } finally { await browser.close(); }
+});
+
+test("draft provider timeout holds the form and leaves the sequential lane free", async () => {
+  const browser = await chromium.launch();
+  const provider = new HttpDraftProvider({ endpoint: "https://draft.example.test", timeoutMs: 20,
+    fetchImpl: async (_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }) });
+  try {
+    const result = await browserRun(browser, `<form><label>Describe a technical project
+      <textarea name="project" required></textarea></label><button type="submit">Submit</button></form>`,
+    {}, provider, { applicant: { skills: ["TypeScript"] }, listing: "Build reliable software" });
+    assert.equal(result.status, "needs_human");
+    assert.equal(result.requirements[0].kind, "draft_provider_failed");
+    assert.equal(result.metrics.draftCalls, 1);
+  } finally { await browser.close(); }
+});
+
+test("a prose draft citing unknown evidence is held for correction", async () => {
+  const browser = await chromium.launch();
+  try {
+    const result = await browserRun(browser, `<form><label>Describe a technical project
+      <textarea name="project" required></textarea></label><button type="submit">Submit</button></form>`,
+    {}, { async draft() { return [{ fieldId: "project", text: "I led an unsupported project.",
+      evidenceIds: ["invented-source"] }]; } },
+    { applicant: { skills: ["TypeScript"] }, listing: "Build reliable software" });
+    assert.equal(result.status, "needs_input");
+    assert.equal(result.requirements[0].kind, "missing_answer");
+    assert.equal(result.preparedAnswers.project, undefined);
   } finally { await browser.close(); }
 });
 

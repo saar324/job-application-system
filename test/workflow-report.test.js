@@ -48,6 +48,7 @@ test("workflow report counts new employer receipts and spent work separately", (
   assert.equal(report.cost.observedModelCalls, 1);
   assert.equal(report.cost.modelInputTokens, null);
   assert.equal(report.cost.toolCalls, null);
+  assert.equal(report.cost.browserSteps, null);
   assert.equal(report.wallMsPerNewVerified, 600_000);
   assert.equal(report.endToEndEligible, true);
   assert.equal(report.target100InOneHourProven, false);
@@ -56,8 +57,14 @@ test("workflow report counts new employer receipts and spent work separately", (
 test("a preloaded candidate disqualifies an end-to-end throughput claim", () => {
   const snapshot = state();
   snapshot.opportunities[0].createdAt = "2026-09-22T10:00:00.000Z";
+  snapshot.opportunities[0].source = "ashby";
+  snapshot.audit.push({ profileId: "person-one", action: "reserve.source_completed",
+    subjectId: "full_time:ashby", at: "2026-09-23T09:45:00.000Z",
+    details: { sourceId: "ashby", durationMs: 2200, requestsMade: 3 } });
   const report = buildWorkflowReport(snapshot, campaign, endedAt);
   assert.equal(report.reserve.selectedBeforeCampaign, 1);
+  assert.equal(report.reserve.attributableMaintenanceMs, 2200);
+  assert.equal(report.reserve.observedMaintenanceRequests, 3);
   assert.equal(report.measurementKind, "preloaded_or_incomplete");
   assert.equal(report.endToEndEligible, false);
 });

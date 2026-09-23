@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { companyQuestion, eligibleProseField, needsCompanyResearch } from "./draft-provider.js";
+import { draftContextFingerprint, reusableApprovedAnswer } from "../src/approved-answers.js";
 import { fillAshbyRequiredControls, verifyAshbyRequiredControls } from "./ashby-adapter.js";
 
 const FINAL_BUTTON = /submit(?: application)?|send application|complete application/i;
@@ -137,7 +138,7 @@ function flattenProfile(profile, currentUrl) {
   return values;
 }
 
-function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, approvedAnswers = [], opportunity = {}, skills = []) {
+function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, approvedAnswers = [], opportunity = {}, skills = [], profile = {}) {
   const candidates = [...new Set([field.name, field.id, field.label, field.groupQuestion]
     .filter(Boolean).flatMap((value) => [value, withoutRequiredMarker(value)]))];
   if (field.type === "checkbox" && field.groupQuestion) {
@@ -161,14 +162,8 @@ function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, appr
   }
   const label = normalize(field.label);
   const approved = approvedAnswers.find((item) => {
-    if (!item || normalize(item.question) !== label || !item.approvedAt
-      || item.reviewAfter && Date.parse(item.reviewAfter) < Date.now()) return false;
-    if (item.scope?.employer && normalize(item.scope.employer) !== normalize(opportunity.company)) return false;
-    if (item.scope?.role && normalize(item.scope.role) !== normalize(opportunity.title)) return false;
-    if (item.scope?.jurisdiction && !label.includes(normalize(item.scope.jurisdiction))) return false;
-    if (/authoriz|visa|sponsor|citizen|compens|salary|legal|consent|demograph/i.test(label)
-      && !item.scope?.jurisdiction && !item.scope?.employer) return false;
-    return true;
+    if (/authoriz|visa|sponsor|citizen|compens|salary|legal|consent|demograph/i.test(label)) return false;
+    return reusableApprovedAnswer(item, profile, opportunity, withoutRequiredMarker(field.label));
   });
   if (approved) return { value: approved.value, source: `approved answer:${approved.id}` };
   if (field.type === "checkbox" && !field.required && Array.isArray(skills)) {
@@ -457,7 +452,7 @@ export async function fillVisibleFields(page, profile, opportunity, answers, pre
     const answer = field.type === "checkbox" && field.required
       ? resolveAnswer(field, answers, {})
       : resolveAnswer(field, answers, profileValues, preparedAnswers,
-        Array.isArray(profile.approvedAnswers) ? profile.approvedAnswers : [], opportunity, profile.skills);
+        Array.isArray(profile.approvedAnswers) ? profile.approvedAnswers : [], opportunity, profile.skills, profile);
     answerPlan.entries.push({ field, answer });
   }
   for (const { field, answer } of answerPlan.entries) {
@@ -749,7 +744,11 @@ export async function automateApplication({ page, profile, opportunity, applicat
   const observedFields = new Map();
   const visitedSteps = new Set();
   let surface = page;
-  const preparedAnswers = { ...(application.preparedAnswers ?? {}) };
+  const draftFingerprint = draftContextFingerprint(profile, opportunity, evidencePacket,
+    application.answers ?? {});
+  const preparedAnswers = application.preparedAnswers?.__contextFingerprint === draftFingerprint
+    ? { ...application.preparedAnswers } : {};
+  preparedAnswers.__contextFingerprint = draftFingerprint;
   const pause = (result, step, phase = "before_final_action") => ({
     ...result, phase, preparedAnswers,
     metrics: { ...timings, activeMs: performance.now() - attemptStarted },

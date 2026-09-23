@@ -36,7 +36,8 @@ export function officialAtsIdentityFromUrl(raw) {
 
 // Browser candidates provide only a URL hint. Every field used for automatic
 // eligibility comes from this fresh official ATS response or configured board.
-export async function fetchVerifiedOfficialAtsRole(rawUrl, sourceOptions = {}, fetchImpl = fetch) {
+export async function fetchVerifiedOfficialAtsRole(rawUrl, sourceOptions = {}, fetchImpl = fetch,
+  onFailure = () => {}) {
   const parsed = officialAtsIdentityFromUrl(rawUrl);
   if (!parsed) return null;
   const endpoint = parsed.source === "ashby"
@@ -45,14 +46,27 @@ export async function fetchVerifiedOfficialAtsRole(rawUrl, sourceOptions = {}, f
       ? `https://boards-api.greenhouse.io/v1/boards/${parsed.board}/jobs/${parsed.id}`
       : `https://api.lever.co/v0/postings/${parsed.board}/${parsed.id}?mode=json`;
   try {
-    const response = await fetchImpl(endpoint, { headers: { "user-agent": "job-application-system/0.2" },
-      signal: AbortSignal.timeout(5000) });
-    if (!response.ok) return null;
+    let response;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        response = await fetchImpl(endpoint, { headers: { "user-agent": "job-application-system/0.2" },
+          signal: AbortSignal.timeout(12_000) });
+        break;
+      } catch (error) {
+        if (attempt === 1 || error?.message === "official lookup budget exhausted") {
+          onFailure(error?.message === "official lookup budget exhausted" ? "budget" : "network_or_timeout");
+          return null;
+        }
+      }
+    }
+    if (!response.ok) { onFailure(`http_${response.status}`); return null; }
     const body = await response.json();
     const row = parsed.source === "ashby"
       ? (body.jobs ?? []).find((job) => String(job.id).toLowerCase() === parsed.id && job.isListed !== false)
       : body;
-    if (!row || String(row.id).toLowerCase() !== parsed.id) return null;
+    if (!row || String(row.id).toLowerCase() !== parsed.id) {
+      onFailure("closed_or_mismatched_role"); return null;
+    }
     const configured = parsed.source === "greenhouse"
       ? sourceOptions.greenhouse?.boards?.find((item) => item.token?.toLowerCase() === parsed.board)
       : parsed.source === "lever"
@@ -89,9 +103,11 @@ export async function fetchVerifiedOfficialAtsRole(rawUrl, sourceOptions = {}, f
     const verified = { source: parsed.source, externalId: `${parsed.board}:${parsed.id}`,
       company, ...role, applicationDestinationVerified: true, applicationDestinationPending: false };
     if (!verified.title || !verified.remote || !officialAtsDestination(verified)
-      || (role.listingUrl && officialAtsIdentityFromUrl(role.listingUrl)?.key !== parsed.key)) return null;
+      || (role.listingUrl && officialAtsIdentityFromUrl(role.listingUrl)?.key !== parsed.key)) {
+      onFailure("ineligible_or_mismatched_destination"); return null;
+    }
     return verified;
-  } catch { return null; }
+  } catch { onFailure("invalid_official_response"); return null; }
 }
 
 export function officialAtsDestination(role) {

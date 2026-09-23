@@ -26,6 +26,17 @@ ineligible, and compensation-conflicting records.
 6. Covered verified official ATS forms pass the owner standing-policy gate. Uncovered forms wait for exact preview review.
    Submission remains sequential and each success requires a receipt.
 
+Reserve maintenance runs separately from the application lane. `POST /v1/discovery/reserve/refresh` checks enabled
+official Ashby, Greenhouse, and Lever feeds with a 20-request limit per source, durable cooldown, and a 45-minute
+reserve window. Normal cooldown is 30 minutes; errors wait an hour and rate limits wait six hours. A `--reserve-only`
+all-source campaign scans the browser catalog with the usual site budgets, records independently verified ATS roles
+for up to 24 hours, and queues no applications. Normal campaigns re-fetch each preloaded official role and re-score it
+before preparation. A role with any application record, including skipped work, is never reused from the reserve.
+Bounded official refresh can renew still-open unattempted roles after their reserve window.
+Campaign status exposes `unattemptedReserveWithinTtl`; it counts stored candidates still within their reserve window,
+not roles proven open at report time. A campaign rechecks at most 20 preloaded roles, so further waves can draw from a
+larger reserve without silently treating the remainder as exhausted.
+
 ## Source safety budget
 
 Browser discovery runs one source at a time. Defaults per source are five result pages, 35 detail pages, 45 navigations,
@@ -42,6 +53,12 @@ Official adapter diagnostics split hard exclusions, below-score roles, and oppor
 unverified destinations have separate counts. Campaign reserve selection remains bounded by the requested target plus
 reserve, and verified official ATS roles are rechecked when their discovery evidence is stale before preparation.
 
+The repository has opt-in systemd timer templates for official refresh and daily browser reserve scans. The deployment
+script does not install or enable them. The official timer covers only enabled server adapters; it cannot maintain the
+full browser catalog. The browser timer needs its own private source catalog and working browser runtime. Until both
+are provisioned and validated, the system does not have a maintained all-source reserve. Even when enabled, a daily
+browser scan measures bounded acquisition, not continuous coverage of every source.
+
 ## Commands
 
 Run against a non-production server first:
@@ -53,6 +70,11 @@ npm run campaign:all-sources -- \
   --token-file /private/path/token \
   --target 10 --reserve 10 --query engineer
 ```
+
+Use `node scripts/run-all-source-campaign.js --reserve-only --catalog /private/path/sources.json
+--server http://127.0.0.1:4310 --token-file /private/path/token --target 100 --reserve 0` for a no-submit browser
+reserve scan. `node scripts/refresh-candidate-reserve.js --server http://127.0.0.1:4310 --token-file
+/private/path/token` refreshes the official feeds. Test both commands manually before scheduling them.
 
 For an authenticated dedicated Chrome profile, add `--headed --user-data-dir /private/path/browser-profile`. The runner
 prints one JSON progress line per source and a final campaign summary with coverage, pool size, application count, and
