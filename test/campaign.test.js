@@ -199,3 +199,49 @@ test("campaign searches every fallback source, caps each pool at ten, then ranks
   assert.equal(prepared.sourceCoverage.health.find((row) => row.sourceId === "board_one").selected, 10);
   assert.deepEqual(prepared.sourceCoverage.fallbackRemaining, []);
 });
+
+test("a held campaign application is replaced from the durable pool in one sequential lane", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-campaign-replacement-"));
+  const profiles = await new ProfileStore(path.join(directory, "profiles.json"), { allowMissing: true }).init();
+  await profiles.patch(identity.profileId, {
+    contact: { firstName: "Applicant", lastName: "Example", email: "applicant@example.test",
+      phone: "+10000000000", location: "Remote" }, documents: { resume: "/secure/resume.pdf" },
+    skills: ["TypeScript"],
+    preferences: { locations: ["Remote"], fullTime: { jobTitles: ["Senior Engineer"],
+      automatedDiscoverySources: [] } }
+  });
+  const config = { defaultMode: "full_time", execution: { concurrency: 4 },
+    modes: { full_time: { minimumScore: 0, autoApply: true, dailyApplicationCap: 20,
+      sources: [], requireConfirmationFor: [] } } };
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  let calls = 0; let active = 0; let maximumActive = 0;
+  const adapter = { name: "replacement-test", async submit({ application }) {
+    active += 1; maximumActive = Math.max(maximumActive, active); calls += 1;
+    try {
+      if (calls === 1) throw new NeedsInputError("Missing answer", [{
+        kind: "missing_answer", fields: ["question"], action: "provide_answer" }]);
+      throw new NeedsInputError("Review", [{ kind: "final_submission_approval",
+        previewFingerprint: application.id.replaceAll("-", "").padEnd(64, "a").slice(0, 64),
+        preview: { filled: [], unfilled: [] } }]);
+    } finally { active -= 1; }
+  } };
+  const service = new ApplicationService({ store, config, profiles, adapter });
+  const discovery = new DiscoveryService({ applicationService: service, profiles, config,
+    fetchImpl: async () => new Response(JSON.stringify({ jobs: [] })) });
+  const campaign = await discovery.startCampaign({ target: 1, reserve: 0, sources: [],
+    fallbackSources: ["board_one"] }, identity);
+  await discovery.addCampaignSourceResults(campaign.campaignId, { sourceId: "board_one", completed: true,
+    items: [1, 2].map((number) => ({ title: `Senior Engineer ${number}`, company: `Company ${number}`,
+      location: "Remote", remote: true, description: "Engineering TypeScript",
+      listingUrl: `https://board.example.test/jobs/${number}`,
+      applyUrl: `https://company${number}.example.test/apply`, applicationDestinationVerified: true }))
+  }, identity);
+  await service.waitForIdle();
+  const current = service.campaignStatus(campaign.campaignId, identity.profileId);
+  assert.equal(current.applications.length, 2);
+  assert.equal(calls, 2);
+  assert.equal(maximumActive, 1);
+  assert.equal(store.snapshot().audit.filter((item) => item.action === "campaign.reserve_replaced").length, 1);
+  await service.recover();
+  assert.equal(service.campaignStatus(campaign.campaignId, identity.profileId).applications.length, 2);
+});

@@ -777,6 +777,7 @@ export class ApplicationService {
     }
     await this.store.mutate(async (draft) => audit(draft, identity, "campaign.selection_finalized", campaignId,
       { candidateCount: opportunities.length, selectedOpportunityIds: selectedIds }));
+    await this.#replenishCampaign(campaignId, identity.profileId);
     return this.campaignStatus(campaignId, identity.profileId);
   }
 
@@ -1040,7 +1041,10 @@ export class ApplicationService {
     if (!application) return;
     const profileId = application.profileId;
     const previous = this.#profileRunners.get(profileId) ?? Promise.resolve();
-    const runner = previous.then(() => this.#withGlobalSlot(() => this.execute(applicationId)))
+    const runner = previous.then(() => this.#withGlobalSlot(async () => {
+      try { await this.execute(applicationId); }
+      finally { if (application.campaignId) await this.#replenishCampaign(application.campaignId, profileId); }
+    }))
       .catch((error) => console.error("application queue error", error))
       .finally(() => {
         if (this.#profileRunners.get(profileId) === runner) this.#profileRunners.delete(profileId);
@@ -1106,6 +1110,56 @@ export class ApplicationService {
       return ids;
     });
     for (const id of queued) this.enqueue(id);
+    const campaigns = [...new Set(this.store.snapshot().applications
+      .filter((item) => item.campaignId).map((item) => `${item.profileId}:${item.campaignId}`))];
+    for (const entry of campaigns) {
+      const separator = entry.indexOf(":");
+      await this.#replenishCampaign(entry.slice(separator + 1), entry.slice(0, separator));
+    }
+  }
+
+  async #replenishCampaign(campaignId, profileId) {
+    const state = this.store.snapshot();
+    const started = campaignStart(state, campaignId, profileId);
+    const selection = state.audit.find((item) => item.profileId === profileId
+      && item.subjectId === campaignId && item.action === "campaign.selection_finalized");
+    if (!started || !selection) return;
+    const pool = [...new Set(state.audit.filter((item) => item.profileId === profileId
+      && item.subjectId === campaignId && ["campaign.scan_completed", "campaign.source_scanned"]
+        .includes(item.action)).flatMap((item) => item.details?.selectedOpportunityIds
+          ?? item.details?.opportunityIds ?? []))];
+    const ranked = state.opportunities.filter((item) => item.profileId === profileId && pool.includes(item.id))
+      .sort((left, right) => Number(right.score ?? 0) - Number(left.score ?? 0)
+        || Date.parse(right.postedAt ?? 0) - Date.parse(left.postedAt ?? 0));
+    const target = started.details.target;
+    const reserve = started.details.reserve;
+    const identity = { actorId: "campaign-reserve", profileId };
+    // A single event may replace several held records, but may never drain an
+    // unbounded pool or start a second submission lane.
+    for (let replacement = 0; replacement < 10; replacement += 1) {
+      const snapshot = this.store.snapshot();
+      const current = snapshot.applications.filter((item) => item.profileId === profileId
+        && item.campaignId === campaignId);
+      if (current.filter((item) => item.status === "submitted" && item.receipt?.submittedAt).length >= target) break;
+      const ready = current.filter((item) => ["queued", "claimed", "submitting", "submitted"].includes(item.status)
+        || item.status === "waiting_confirmation" && snapshot.confirmations.some(
+          (confirmation) => confirmation.applicationId === item.id && confirmation.status === "pending"
+            && confirmation.kind === "final_submission_approval")).length;
+      if (ready >= target + reserve) break;
+      const used = new Set(current.map((item) => item.opportunityId));
+      const next = ranked.find((item) => !used.has(item.id));
+      if (!next) break;
+      try {
+        const application = await this.requestApplication(next.id, { campaignId }, identity);
+        await this.store.mutate((draft) => audit(draft, identity, "campaign.reserve_replaced", campaignId,
+          { applicationId: application.id, opportunityId: next.id }));
+        if (application.status === "waiting_confirmation" && application.decision?.reasons?.some((reason) =>
+          /daily|campaign.*cap|limit/i.test(reason))) break;
+      } catch (error) {
+        if (error.status !== 409) throw error;
+        break;
+      }
+    }
   }
 
   async execute(applicationId) {

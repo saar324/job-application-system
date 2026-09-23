@@ -12,7 +12,7 @@ import { telemetry } from "../telemetry.js";
 import { normalizeOpportunity } from "./normalization.js";
 import { runIdempotent } from "../idempotency.js";
 import { isHandledRole, knownRoleIndex, roleKeys } from "./handled-roles.js";
-import { officialAtsDestination } from "./official-ats.js";
+import { fetchVerifiedOfficialAtsRole, officialAtsDestination, officialAtsIdentityFromUrl } from "./official-ats.js";
 
 const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever].map((source) => [source.id, source]));
 
@@ -195,16 +195,56 @@ export class DiscoveryService {
     const alreadySelected = campaign.sourceCoverage.scans.filter((scan) => scan.sourceId === sourceId)
       .reduce((sum, scan) => sum + Number(scan.selected ?? 0), 0);
     const remainingSourceSlots = Math.max(0, 10 - alreadySelected);
+    // One browser result page may contain many roles from the same Ashby board.
+    // Reuse that official response only within this import; final permits still
+    // run their own freshness checks.
+    const officialResponses = new Map();
+    let officialBudgetBlockedCandidate = false;
+    const maxOfficialRequests = Math.max(1, Math.min(30,
+      Number(this.config.discovery?.officialVerificationMaxRequestsPerBatch ?? 20)));
+    const officialFetch = async (url, options) => {
+      const key = String(url);
+      if (!officialResponses.has(key)) {
+        if (officialResponses.size >= maxOfficialRequests) {
+          officialBudgetBlockedCandidate = true;
+          throw new Error("official lookup budget exhausted");
+        }
+        officialResponses.set(key, Promise.resolve().then(() => this.fetchImpl(url, options)));
+      }
+      return (await officialResponses.get(key)).clone();
+    };
     for (const candidate of input.items) {
       try {
+        officialBudgetBlockedCandidate = false;
         const raw = importedCandidate(candidate, sourceId);
-        if (isHandledRole(raw, knownKeys)) { handledFiltered += 1; continue; }
-        for (const key of roleKeys(raw)) knownKeys.add(key);
-        let scored = { ...raw, mode: campaign.mode,
-          ...scoreOpportunity(raw, profile, campaign.mode, { version: scorerVersion }) };
+        const officialIdentity = officialAtsIdentityFromUrl(raw.applyUrl);
+        const listedIdentity = officialAtsIdentityFromUrl(raw.listingUrl);
+        if (officialIdentity && listedIdentity && officialIdentity.key !== listedIdentity.key) {
+          excluded += 1;
+          exclusionReasons.set("official_ats_identity_mismatch",
+            (exclusionReasons.get("official_ats_identity_mismatch") ?? 0) + 1);
+          continue;
+        }
+        const official = officialIdentity
+          ? await fetchVerifiedOfficialAtsRole(raw.applyUrl,
+            this.config.discovery?.sourceOptions ?? {}, officialFetch) : null;
+        if (officialIdentity && !official) {
+          excluded += 1;
+          const reason = officialBudgetBlockedCandidate
+            ? "official_ats_lookup_budget_exhausted" : "official_ats_verification_failed";
+          exclusionReasons.set(reason, (exclusionReasons.get(reason) ?? 0) + 1);
+          continue;
+        }
+        const verified = official ? normalizeOpportunity({ ...official,
+          provenance: { importedBy: "campaign_browser_fallback", browserSourceId: sourceId,
+            sourceUrl: raw.provenance?.sourceUrl, officialAtsVerified: true } }, { source: official.source }) : raw;
+        if (isHandledRole(verified, knownKeys)) { handledFiltered += 1; continue; }
+        for (const key of roleKeys(verified)) knownKeys.add(key);
+        let scored = { ...verified, mode: campaign.mode,
+          ...scoreOpportunity(verified, profile, campaign.mode, { version: scorerVersion }) };
         const opportunistic = scored.scoreDetails.rolePriority === "opportunistic";
         const opportunisticRules = modePreferences.opportunisticRoles ?? {};
-        const opportunisticQualified = opportunistic && raw.remote === true
+        const opportunisticQualified = opportunistic && verified.remote === true
           && scored.scoreDetails.compensationComparable === true
           && scored.scoreDetails.matchedSkills.length >= Number(opportunisticRules.minimumMatchedSkills ?? 5)
           && scored.score >= Number(opportunisticRules.minimumScore ?? 65);
@@ -226,15 +266,18 @@ export class DiscoveryService {
           errors.push({ stage: "application_destination", error: "verified HTTPS employer application URL required" });
           continue;
         }
-        eligible.push(scored);
+        eligible.push({ scored, serverVerifiedDiscovery: Boolean(official) });
       } catch (error) {
         errors.push({ stage: "candidate_import", error: String(error.message ?? error).slice(0, 500) });
       }
     }
     const opportunityIds = [];
-    for (const scored of eligible.sort((left, right) => Number(right.score ?? 0) - Number(left.score ?? 0)
-      || Date.parse(right.postedAt ?? 0) - Date.parse(left.postedAt ?? 0)).slice(0, remainingSourceSlots)) {
-      const opportunity = await this.applicationService.addOpportunity({ ...scored, lastCampaignId: campaignId }, identity);
+    for (const { scored, serverVerifiedDiscovery } of eligible.sort((left, right) =>
+      Number(right.scored.score ?? 0) - Number(left.scored.score ?? 0)
+      || Date.parse(right.scored.postedAt ?? 0) - Date.parse(left.scored.postedAt ?? 0))
+      .slice(0, remainingSourceSlots)) {
+      const opportunity = await this.applicationService.addOpportunity({ ...scored, lastCampaignId: campaignId },
+        identity, { serverVerifiedDiscovery });
       opportunityIds.push(opportunity.id); selected += 1;
       for (const key of roleKeys(opportunity)) knownKeys.add(key);
     }
