@@ -91,6 +91,14 @@ test("SQLite idempotency serializes callers across connections", async () => {
   left.close(); right.close();
 });
 
+test("SQLite idempotency preserves the original operation error", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-sqlite-idempotency-"));
+  const store = await new SqliteStore(path.join(directory, "state.sqlite")).init();
+  await assert.rejects(runIdempotent({ store, profileId: "profile-1", action: "campaign", key: "key-one",
+    input: { target: 1 }, execute: async () => { throw new Error("original failure"); } }), /original failure/);
+  store.close();
+});
+
 test("migration validation rejects duplicate IDs and cross-profile relationships", () => {
   const base = { opportunities: [
     { id: "op-1", profileId: "profile-1" }, { id: "op-1", profileId: "profile-1" }
