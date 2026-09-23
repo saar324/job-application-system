@@ -37,7 +37,7 @@ test("browser source policy enforces conservative bounds and manual-only instruc
   { maxListingPages: 999, maxRequests: 999, minDelayMs: 1 });
   assert.equal(policy.manual, true);
   assert.equal(policy.maxAcceptedResults, 10);
-  assert.equal(policy.maxCandidates, 20);
+  assert.equal(policy.maxCandidates, 50);
   assert.equal(policy.maxListingPages, 10);
   assert.equal(policy.maxRequests, 150);
   assert.equal(policy.minDelayMs, 500);

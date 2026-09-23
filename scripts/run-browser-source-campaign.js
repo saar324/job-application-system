@@ -82,7 +82,26 @@ async function searchSource(source, policy) {
         }
         nextUrl = null;
         const seeds = new Map(feed.items.map((item) => [item.listingUrl, item]));
-        const detailQueue = feed.detailLinks.slice(0, policy.maxDetailPages);
+        let hasMore = feed.hasMore;
+        while (hasMore && pagesVisited < policy.maxListingPages && requestsMade < policy.maxRequests
+          && seeds.size < policy.maxCandidates) {
+          const pageNumber = pagesVisited + 1;
+          const pageUrl = publicFeedUrl(source.id, { query: options.query ?? "engineer",
+            page: pageNumber, limit: 25 });
+          const pageResponse = await fetch(pageUrl, { headers: {
+            "user-agent": "job-application-system/1.0 personal search"
+          }, signal: AbortSignal.timeout(policy.navigationTimeoutMs) });
+          requestsMade += 1; pagesVisited += 1;
+          if (isBlockingStatus(pageResponse.status)) { rateLimited = true; break; }
+          if (!pageResponse.ok) {
+            errors.push({ error: `feed returned HTTP ${pageResponse.status}: ${pageUrl}` });
+            break;
+          }
+          const nextFeed = parsePublicFeed(source.id, await pageResponse.text());
+          for (const item of nextFeed.items) seeds.set(item.listingUrl, item);
+          hasMore = nextFeed.hasMore;
+        }
+        const detailQueue = [...seeds.keys()].slice(0, policy.maxDetailPages);
         while (detailQueue.length && requestsMade < policy.maxRequests && items.size < policy.maxCandidates) {
           const link = detailQueue.shift();
           const detail = await navigate(page, link, policy); requestsMade += 1;

@@ -52,10 +52,10 @@ export function sourceAutomationPolicy(source, overrides = {}) {
     || source.automation?.mode === "manual";
   return {
     manual, maxAcceptedResults: 10,
-    maxCandidates: bounded(overrides.maxCandidates ?? source.automation?.maxCandidates, 10, 100, 20),
-    maxListingPages: bounded(overrides.maxListingPages ?? source.automation?.maxListingPages, 1, 10, 3),
-    maxDetailPages: bounded(overrides.maxDetailPages ?? source.automation?.maxDetailPages, 1, 100, 15),
-    maxRequests: bounded(overrides.maxRequests ?? source.automation?.maxRequests, 1, 150, 20),
+    maxCandidates: bounded(overrides.maxCandidates ?? source.automation?.maxCandidates, 10, 100, 50),
+    maxListingPages: bounded(overrides.maxListingPages ?? source.automation?.maxListingPages, 1, 10, 5),
+    maxDetailPages: bounded(overrides.maxDetailPages ?? source.automation?.maxDetailPages, 1, 100, 35),
+    maxRequests: bounded(overrides.maxRequests ?? source.automation?.maxRequests, 1, 150, 45),
     minDelayMs: bounded(overrides.minDelayMs ?? source.automation?.minDelayMs, 500, 30_000, 1_500),
     navigationTimeoutMs: bounded(overrides.navigationTimeoutMs
       ?? source.automation?.navigationTimeoutMs, 5_000, 120_000, 15_000)
