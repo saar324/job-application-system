@@ -41,6 +41,19 @@ const browser = await chromium.launch({
 });
 const adaptiveController = createAdaptiveControllerFromEnv();
 const draftProvider = draftProviderFromEnv();
+const internalUrl = process.env.JOB_SERVER_INTERNAL_URL;
+async function finalGate(pathname, body) {
+  if (!internalUrl) throw new Error("JOB_SERVER_INTERNAL_URL is required for standing authorization");
+  const endpoint = new URL(pathname, internalUrl);
+  if (endpoint.protocol !== "http:" || !["127.0.0.1", "localhost", "::1"].includes(endpoint.hostname)) {
+    throw new Error("final gate must use a local server endpoint");
+  }
+  const response = await fetch(endpoint, { method: "POST", headers: {
+    authorization: `Bearer ${token}`, "content-type": "application/json"
+  }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
+  if (!response.ok) throw new Error(`final gate returned HTTP ${response.status}`);
+  return response.json();
+}
 
 const server = createServer(async (request, response) => {
   try {
@@ -61,7 +74,9 @@ const server = createServer(async (request, response) => {
     const profile = payload.profile;
     const result = await receiptStore.run(payload, async (markFinalActionStarted) => {
       return executeInFreshContext({ browser, payload, urlPolicy, artifactsDirectory,
-        adaptiveController, draftProvider, egressProxy, markFinalActionStarted });
+        adaptiveController, draftProvider, egressProxy, markFinalActionStarted,
+        authorizeFinal: (body) => finalGate("/v1/internal/final-decision", body),
+        commitFinal: (body) => finalGate("/v1/internal/final-commit", body) });
     });
     return send(response, result.status === "submitted" ? 200 : 409, result);
   } catch (error) {

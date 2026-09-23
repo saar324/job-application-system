@@ -277,6 +277,11 @@ test("an older automatic application adopts current final-review policy on a saf
     applyUrl: "https://example.test/apply", score: 90 }, identity);
   await service.requestApplication(job.id, {}, identity);
   await service.waitForIdle();
+  // Model a pre-migration application created under the old automatic default.
+  await service.store.mutate((state) => {
+    state.applications[0].finalApprovalRequired = false;
+    state.applications[0].submissionApproval = "automatic";
+  });
   assert.equal(service.list("applications", identity.profileId)[0].finalApprovalRequired, false);
   service.config.modes.full_time.submissionApproval = "always";
   const confirmation = service.list("confirmations", identity.profileId)[0];

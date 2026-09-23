@@ -21,6 +21,11 @@ export async function validateWorkerPayload(payload, documentRoot) {
   if (profileId !== payload.application.profileId) {
     throw Object.assign(new Error("worker payload has no matching profile"), { status: 400 });
   }
+  // Pre-migration queued applications may carry the old automatic flag.
+  // Without a versioned owner policy, exact final approval is mandatory.
+  if (payload.application.standingPolicyVersion === undefined) {
+    payload.application.finalApprovalRequired = true;
+  }
   const root = await realpath(path.resolve(documentRoot)).catch(() => path.resolve(documentRoot));
   const applicationRoot = path.join(root, applicationId);
   for (const [role, value] of Object.entries(payload.profile.documents ?? {})) {

@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { nextStandingPolicy } from "./standing-policy.js";
 
 const ALLOWED_SECTIONS = new Set([
   "displayName", "defaultMode", "contact", "links", "skills", "preferences", "documents", "applicationAnswers",
@@ -106,6 +107,25 @@ export class ProfileStore {
       else document.profiles.push(updated);
       await this.#write(document);
       return this.status(profileId);
+    });
+    this.#pending = operation.catch(() => undefined);
+    return operation;
+  }
+
+  async setStandingSubmissionPolicy(profileId, input, identity) {
+    if (identity?.profileId !== profileId || !identity?.roles?.includes("owner")) {
+      throw Object.assign(new Error("owner authority required for this profile"), { status: 403 });
+    }
+    const operation = this.#pending.then(async () => {
+      const document = await this.#read();
+      const index = document.profiles.findIndex((profile) => profile.id === profileId);
+      const current = index >= 0 ? document.profiles[index] : { id: profileId };
+      const standingSubmissionPolicy = nextStandingPolicy(current.standingSubmissionPolicy, input, identity);
+      const updated = { ...current, standingSubmissionPolicy };
+      if (index >= 0) document.profiles[index] = updated;
+      else document.profiles.push(updated);
+      await this.#write(document);
+      return standingSubmissionPolicy;
     });
     this.#pending = operation.catch(() => undefined);
     return operation;

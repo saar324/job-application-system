@@ -20,7 +20,7 @@ function dataUrl(html) {
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
-async function run(html, answers = {}, profileOverride = profile, applicationOverride = {}, setup) {
+async function run(html, answers = {}, profileOverride = profile, applicationOverride = {}, setup, callbacks = {}) {
   const context = await browser.newContext();
   const page = await context.newPage();
   const artifactsDirectory = await mkdtemp(path.join(os.tmpdir(), "job-worker-test-"));
@@ -30,12 +30,37 @@ async function run(html, answers = {}, profileOverride = profile, applicationOve
       page, profile: profileOverride,
       opportunity: { applyUrl: dataUrl(html) },
       application: { id: "application-one", answers, ...applicationOverride },
-      artifactsDirectory
+      artifactsDirectory, ...callbacks
     });
   } finally {
     await context.close();
   }
 }
+
+test("standing policy requires a live permit and checks it before Submit", async () => {
+  const html = `<form onsubmit="event.preventDefault();document.body.innerHTML='<h2>Success</h2><p>Your application was successfully submitted.</p>'">
+    <label>Email<input name="email" type="email" required></label>
+    <button type="submit">Submit Application</button></form>`;
+  const application = { standingPolicyVersion: 1, claim: { attemptId: "attempt-one" } };
+  const held = await run(html, {}, profile, application, undefined, {
+    authorizeFinal: async () => ({ decision: "hold", reasonCodes: ["policy_revoked"] }),
+    commitFinal: async () => ({ committed: true })
+  });
+  assert.equal(held.requirements[0].kind, "final_policy_hold");
+  let commits = 0;
+  const permitted = await run(html, {}, profile, application, undefined, {
+    authorizeFinal: async () => ({ decision: "permit", permit: "permit-one" }),
+    commitFinal: async (input) => { commits += 1; assert.equal(input.permit, "permit-one");
+      return { committed: true }; }
+  });
+  assert.equal(permitted.status, "submitted");
+  assert.equal(commits, 1);
+  const revoked = await run(html, {}, profile, application, undefined, {
+    authorizeFinal: async () => ({ decision: "permit", permit: "permit-one" }),
+    commitFinal: async () => { throw new Error("revoked"); }
+  });
+  assert.equal(revoked.requirements[0].kind, "final_policy_revoked");
+});
 
 test("worker pauses for an unknown required answer", async () => {
   const result = await run(`
