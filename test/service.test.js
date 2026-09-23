@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { SimulationAdapter } from "../src/adapters/simulation.js";
-import { NeedsInputError, NeedsReviewError, PostingUnavailableError } from "../src/adapters/errors.js";
+import { NeedsInputError, NeedsReviewError, PostingUnavailableError,
+  RetryableExecutionError } from "../src/adapters/errors.js";
 import { ApplicationService } from "../src/service.js";
 import { JsonStore } from "../src/store.js";
 
@@ -354,6 +355,24 @@ test("manual review accepts explicit answers for every named field", async () =>
   assert.equal(queued.status, "queued");
   await service.waitForIdle();
   assert.equal(service.list("applications", identity.profileId)[0].status, "submitted");
+});
+
+test("a browser failure before the final action retries automatically", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  let attempts = 0;
+  const adapter = { name: "test-worker", async submit() {
+    attempts += 1;
+    if (attempts === 1) throw new RetryableExecutionError("navigation connection closed");
+    return { submittedAt: new Date().toISOString(), finalUrl: "https://example.test/complete" };
+  } };
+  const service = new ApplicationService({ store, config, adapter });
+  const job = await opportunity(service);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  assert.equal(attempts, 2);
+  assert.equal(service.list("applications", identity.profileId)[0].status, "submitted");
+  assert.equal(store.snapshot().attempts.some((entry) => entry.status === "transient_retry"), true);
 });
 
 test("execution receives only the authenticated profile", async () => {

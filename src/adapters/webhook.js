@@ -1,4 +1,5 @@
-import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailableError } from "./errors.js";
+import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailableError,
+  RetryableExecutionError } from "./errors.js";
 
 export class WebhookAdapter {
   name = "webhook";
@@ -40,6 +41,9 @@ export class WebhookAdapter {
       if (status?.status === "submitted" && status.receipt?.submittedAt && status.receipt?.finalUrl) {
         return status.receipt;
       }
+      if (status?.status === "before_final_action") {
+        throw new RetryableExecutionError(`The browser stopped before the final action: ${error.message}`);
+      }
       throw new NeedsReviewError(`The application worker response was lost: ${error.message}`, [{
         kind: "submission_unverified", action: "manual_review",
         message: status?.status === "active"
@@ -63,6 +67,13 @@ export class WebhookAdapter {
       throw new PostingUnavailableError(body.message ?? "The employer posting is unavailable", body);
     }
     if (response.status >= 500) {
+      const status = await this.attemptStatus(payload.application?.id).catch(() => null);
+      if (status?.status === "submitted" && status.receipt?.submittedAt && status.receipt?.finalUrl) {
+        return status.receipt;
+      }
+      if (status?.status === "before_final_action") {
+        throw new RetryableExecutionError(body.error ?? `application worker returned HTTP ${response.status}`);
+      }
       throw new NeedsReviewError(body.error ?? `application worker returned HTTP ${response.status}`, [{
         kind: "submission_unverified", action: "manual_review",
         message: "Check whether the application was received before retrying"

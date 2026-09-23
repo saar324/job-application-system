@@ -42,3 +42,10 @@ export class PostingUnavailableError extends Error {
     this.metrics = details.metrics;
   }
 }
+
+export class RetryableExecutionError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "RetryableExecutionError";
+  }
+}
