@@ -329,6 +329,33 @@ test("unverified submission review cannot accidentally retry", async () => {
   );
 });
 
+test("manual review accepts explicit answers for every named field", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  let attempts = 0;
+  const adapter = { name: "test-worker", async submit(payload) {
+    attempts += 1;
+    if (attempts === 1) {
+      throw new NeedsReviewError("Location: matching location option was not found", [{
+        kind: "unsupported_control", action: "manual_review", fields: ["location"]
+      }]);
+    }
+    assert.equal(payload.application.answers.location, "Sofia, Bulgaria");
+    return { submittedAt: new Date().toISOString(), finalUrl: "https://example.test/complete" };
+  } };
+  const service = new ApplicationService({ store, config, adapter });
+  const job = await opportunity(service);
+  const application = await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const confirmation = service.list("confirmations", identity.profileId)[0];
+  const queued = await service.resolveConfirmation(confirmation.id, {
+    approved: true, answers: { location: "Sofia, Bulgaria" }
+  }, identity);
+  assert.equal(queued.status, "queued");
+  await service.waitForIdle();
+  assert.equal(service.list("applications", identity.profileId)[0].status, "submitted");
+});
+
 test("execution receives only the authenticated profile", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();

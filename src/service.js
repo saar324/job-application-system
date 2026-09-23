@@ -310,10 +310,17 @@ export class ApplicationService {
       );
       if (!confirmation) throw new ClientError(404, "confirmation not found");
       if (confirmation.status !== "pending") throw new ClientError(409, "confirmation is already resolved");
+      const hasManualFieldAnswers = confirmation.action === "manual_review"
+        && Array.isArray(confirmation.fields) && confirmation.fields.length > 0
+        && confirmation.fields.every((field) => Object.hasOwn(safeAnswers, field)
+          && safeAnswers[field] !== undefined && safeAnswers[field] !== null
+          && String(safeAnswers[field]).trim() !== "");
       if (confirmation.action === "manual_review" && input.approved === true
         && input.answers?.retry !== true
-        && !(input.answers?.submitted === true && input.answers?.finalUrl)) {
-        throw new ClientError(400, "manual review requires answers.retry=true or a submitted receipt with finalUrl");
+        && !(input.answers?.submitted === true && input.answers?.finalUrl)
+        && !hasManualFieldAnswers) {
+        throw new ClientError(400,
+          "manual review requires answers for every named field, answers.retry=true, or a submitted receipt with finalUrl");
       }
       confirmation.status = input.approved === true ? "approved" : "rejected";
       confirmation.resolvedAt = now();
