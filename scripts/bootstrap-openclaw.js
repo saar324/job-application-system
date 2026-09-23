@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { hashedTokenKey } from "../src/token-keys.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -83,11 +84,13 @@ openclaw([
 const token = randomBytes(32).toString("base64url");
 const tokenMap = await readJson(tokensFile, {});
 for (const [existingToken, identity] of Object.entries(tokenMap)) {
-  if (identity.actorId === `${input.agent}-openclaw` || identity.profileId === input.profile) {
+  if (identity.actorId === `${input.agent}-openclaw`
+    && !identity.roles?.includes("owner")) {
     delete tokenMap[existingToken];
   }
 }
-tokenMap[token] = { actorId: `${input.agent}-openclaw`, profileId: input.profile, roles: ["agent"] };
+tokenMap[hashedTokenKey(token)] = { actorId: `${input.agent}-openclaw`, profileId: input.profile,
+  roles: ["agent"] };
 await secureWrite(tokensFile, `${JSON.stringify(tokenMap, null, 2)}\n`);
 
 await secureWrite(path.join(installedSkill, ".job-server-token"), `${token}\n`);

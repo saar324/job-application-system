@@ -1,7 +1,6 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
-
-function digest(value) { return createHash("sha256").update(value).digest(); }
+import { digestFromTokenKey, tokenDigest } from "./token-keys.js";
 
 export function createAuthenticator(env = process.env) {
   const disabled = env.AUTH_DISABLED === "true";
@@ -24,7 +23,14 @@ export function createAuthenticator(env = process.env) {
       if (error.code !== "ENOENT" || env.JOB_SERVER_TOKENS_FILE) throw error;
     }
     const configured = { ...fromFile, ...fromEnvironment };
-    return Object.entries(configured).map(([token, identity]) => ({ digest: digest(token), identity }));
+    const seen = new Set();
+    return Object.entries(configured).map(([key, identity]) => {
+      const digest = digestFromTokenKey(key);
+      const hex = digest.toString("hex");
+      if (seen.has(hex)) throw new Error("token map contains duplicate credentials");
+      seen.add(hex);
+      return { digest, identity };
+    });
   }
   identities();
 
@@ -32,7 +38,7 @@ export function createAuthenticator(env = process.env) {
     const authorization = request.headers.authorization ?? "";
     const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
     if (!token) return null;
-    const candidate = digest(token);
+    const candidate = tokenDigest(token);
     return identities().find((entry) => timingSafeEqual(entry.digest, candidate))?.identity ?? null;
   };
 }
