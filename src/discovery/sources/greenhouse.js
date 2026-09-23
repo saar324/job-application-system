@@ -1,16 +1,13 @@
 import { plainText } from "../text.js";
 import { discoveryTitleRelevant } from "../title-preferences.js";
 import { normalizeApplicationQuestions } from "../normalization.js";
+import { greenhouseRemoteRole } from "../greenhouse-remote.js";
 
 function configuredBoards(sourceConfig) {
   const boards = sourceConfig?.boards ?? [];
   if (!Array.isArray(boards)) throw new Error("Greenhouse sourceOptions.boards must be an array");
   return boards.filter((board) => board && typeof board.token === "string" && board.token.trim())
     .map((board) => ({ token: board.token.trim(), company: board.company?.trim() || board.token.trim() }));
-}
-
-function remoteLocation(value) {
-  return /\b(remote|distributed|work from home)\b/i.test(String(value ?? ""));
 }
 
 function descriptionOf(job) {
@@ -40,7 +37,7 @@ export const greenhouse = {
     });
     const rows = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
     const selected = rows
-      .filter(({ board, job }) => job?.id && job?.title && remoteLocation(job.location?.name)
+      .filter(({ board, job }) => job?.id && job?.title && greenhouseRemoteRole(job)
         && discoveryTitleRelevant(job.title, profile)
         && (!query.title || job.title.toLowerCase().includes(query.title.toLowerCase()))
         && (!query.location || String(job.location?.name ?? "").toLowerCase().includes(query.location.toLowerCase()))
