@@ -148,9 +148,11 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       }
       const refreshPreview = url.pathname.match(/^\/v1\/applications\/([^/]+)\/refresh-preview$/);
       if (request.method === "POST" && refreshPreview) {
+        const body = await jsonBody(request);
         const saved = await idempotentHttp(service, request, identity, "refresh_final_preview",
-          { applicationId: refreshPreview[1] },
-          async () => ({ status: 202, body: await service.refreshFinalPreview(refreshPreview[1], identity) }));
+          { applicationId: refreshPreview[1], body },
+          async () => ({ status: 202,
+            body: await service.refreshFinalPreview(refreshPreview[1], identity, body) }));
         return send(response, saved.status, saved.body);
       }
 
