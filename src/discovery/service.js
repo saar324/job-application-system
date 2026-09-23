@@ -446,6 +446,7 @@ function importedCandidate(candidate, sourceId) {
     remote: candidate.remote === true, postedAt: capped(candidate.postedAt, 100),
     listingUrl: candidate.listingUrl ?? candidate.applyUrl, applyUrl: candidate.applyUrl,
     applicationDestinationVerified: candidate.applicationDestinationVerified === true,
+    applicationDestinationPending: candidate.applicationDestinationVerified !== true,
     tags: Array.isArray(candidate.tags) ? candidate.tags.slice(0, 100).map((item) => String(item).slice(0, 100)) : [],
     compensation: candidate.compensation && typeof candidate.compensation === "object"
       ? candidate.compensation : undefined,

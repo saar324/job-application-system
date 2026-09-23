@@ -3,6 +3,11 @@
 const TRACKING_PARAMETER = /^(utm_|ref$|refid$|trackingid$|source$|gh_src$|lever-source$)/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function identityText(value) {
+  return String(value ?? '').toLowerCase().replace(/&amp;/g, ' and ')
+    .replace(/[^a-z0-9+#.]+/g, ' ').trim().replace(/\s+/g, ' ');
+}
+
 function keyFromUrl(raw) {
   if (!raw) return null;
   let url;
@@ -53,6 +58,9 @@ export function roleKeys(role) {
     const key = keyFromUrl(raw);
     if (key) keys.add(key);
   }
+  const company = identityText(role?.company);
+  const title = identityText(role?.title);
+  if (company && title && !/^direct application$/i.test(title)) keys.add(`role:${company}:${title}`);
   return keys;
 }
 

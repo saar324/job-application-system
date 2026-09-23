@@ -433,6 +433,21 @@ test("quality gates reject verified schedule, experience, contract, and core-sta
     .scoreDetails.hardExclusion, /contract role/);
   assert.match(scoreOpportunity({ ...base, title: "Senior C# .NET Engineer" }, applicant, "full_time")
     .scoreDetails.hardExclusion, /C#\/\.NET/);
+  assert.match(scoreOpportunity({ ...base,
+    description: "Must-have: Last 2+ years with NestJS in production." }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /NestJS/);
+  assert.match(scoreOpportunity({ ...base,
+    description: "Must-have: production blockchain experience with real funds." }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /blockchain/);
+  const languageApplicant = { ...applicant, applicationAnswers: {
+    ...applicant.applicationAnswers, "Russian proficiency": "A1"
+  } };
+  assert.match(scoreOpportunity({ ...base,
+    description: "English B2. Fluent in the Russian language." }, languageApplicant, "full_time")
+    .scoreDetails.hardExclusion, /fluent Russian/);
+  assert.match(scoreOpportunity({ ...base,
+    title: "Software Development Engineer II (Remote @ Colombia)" }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /title location restriction Colombia/);
 });
 
 test("description-level hiring countries cannot override an ineligible generic Europe label", () => {
