@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { SimulationAdapter } from "../src/adapters/simulation.js";
-import { NeedsInputError, NeedsReviewError, PostingUnavailableError } from "../src/adapters/errors.js";
+import { NeedsInputError, NeedsReviewError, PostingUnavailableError,
+  RetryableExecutionError } from "../src/adapters/errors.js";
 import { ApplicationService } from "../src/service.js";
 import { JsonStore } from "../src/store.js";
 
@@ -196,6 +197,40 @@ test("the same application URL is deduplicated across direct and feed sources", 
   assert.equal(service.list("opportunities", identity.profileId).length, 1);
 });
 
+test("Ashby listing and application URLs share one opportunity", async () => {
+  const service = await fixture();
+  const old = await service.addOpportunity({ title: "ML Developer", company: "Example",
+    applyUrl: "https://jobs.ashbyhq.com/example/d195a389-6af5-4b95-82e5-2258953c7297/application",
+    score: 90 }, identity);
+  const direct = await service.directApplication({
+    url: "https://jobs.ashbyhq.com/example/d195a389-6af5-4b95-82e5-2258953c7297"
+  }, identity);
+  assert.equal(direct.opportunity.id, old.id);
+  assert.equal(service.list("opportunities", identity.profileId).length, 1);
+  await service.waitForIdle();
+});
+
+test("a submitted receipt prevents a second application through another board", async () => {
+  const service = await fixture();
+  const old = await service.addOpportunity({ title: "ML Developer", company: "Example",
+    applyUrl: "https://himalayas.app/companies/example/jobs/ai-engineer", score: 90 }, identity);
+  const prior = await service.requestApplication(old.id, {}, identity);
+  await service.waitForIdle();
+  await service.store.mutate((state) => {
+    const item = state.applications.find((application) => application.id === prior.id);
+    item.status = "submitted";
+    item.receipt = { submittedAt: "2026-09-19T10:00:00.000Z",
+      finalUrl: "https://job-boards.greenhouse.io/example/jobs/5238049007/confirmation" };
+  });
+  const direct = await service.directApplication({
+    url: "https://job-boards.greenhouse.io/example/jobs/5238049007"
+  }, identity);
+  assert.equal(direct.opportunity.id, old.id);
+  assert.equal(direct.duplicate, true);
+  assert.equal(direct.application.id, prior.id);
+  assert.equal(service.list("opportunities", identity.profileId).length, 1);
+});
+
 test("direct user intent upgrades an existing low-scoring discovered opportunity", async () => {
   const service = await fixture();
   const discovered = await opportunity(service, {
@@ -272,6 +307,47 @@ test("worker-discovered questions create resumable confirmations", async () => {
   assert.equal(attempts, 2);
 });
 
+test("an incomplete final preview can be revised and superseded without approval or submission", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  let attempts = 0;
+  const adapter = { name: "test-worker", async submit({ application }) {
+    attempts += 1;
+    if (attempts === 1) throw new NeedsInputError("Review", [{
+      kind: "final_submission_approval", previewFingerprint: "a".repeat(64),
+      preview: { destination: "https://example.test/apply", filled: [], unfilled: [] }
+    }]);
+    assert.equal(application.answers.custom, "verified answer");
+    throw new NeedsInputError("Review", [{
+      kind: "final_submission_approval", previewFingerprint: "b".repeat(64),
+      preview: { destination: "https://example.test/apply", filled: [], unfilled: [] }
+    }]);
+  } };
+  const service = new ApplicationService({ store, config, adapter });
+  const job = await opportunity(service);
+  const application = await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const oldApproval = service.list("confirmations", identity.profileId)[0];
+  assert.equal(oldApproval.kind, "final_submission_approval");
+  await assert.rejects(service.refreshFinalPreview(application.id,
+    { actorId: "other", profileId: "other" }), /not waiting/);
+  const queued = await service.refreshFinalPreview(application.id, identity,
+    { answers: { custom: "verified answer" } });
+  assert.equal(queued.status, "queued");
+  await service.waitForIdle();
+  const confirmations = service.list("confirmations", identity.profileId);
+  assert.equal(confirmations.find((item) => item.id === oldApproval.id).status, "superseded");
+  assert.equal(confirmations.find((item) => item.status === "pending").kind, "final_submission_approval");
+  assert.equal(service.list("applications", identity.profileId)[0].answers.custom, "verified answer");
+  assert.equal(service.list("applications", identity.profileId)[0].receipt, undefined);
+  assert.equal(attempts, 2);
+  await assert.rejects(service.approvePreparedBatch([
+    { applicationId: application.id, previewFingerprint: "a".repeat(64) }
+  ], identity), /not ready/);
+  await assert.rejects(service.refreshFinalPreview(application.id, identity,
+    { answers: { site_password: "secret" } }), /must not contain credential field/);
+});
+
 test("unverified submission review cannot accidentally retry", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();
@@ -292,6 +368,51 @@ test("unverified submission review cannot accidentally retry", async () => {
     service.resolveConfirmation(confirmation.id, { approved: true, answers: {} }, identity),
     /manual review requires/
   );
+});
+
+test("manual review accepts explicit answers for every named field", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  let attempts = 0;
+  const adapter = { name: "test-worker", async submit(payload) {
+    attempts += 1;
+    if (attempts === 1) {
+      throw new NeedsReviewError("Location: matching location option was not found", [{
+        kind: "unsupported_control", action: "manual_review", fields: ["location"]
+      }]);
+    }
+    assert.equal(payload.application.answers.location, "Lisbon, Portugal");
+    return { submittedAt: new Date().toISOString(), finalUrl: "https://example.test/complete" };
+  } };
+  const service = new ApplicationService({ store, config, adapter });
+  const job = await opportunity(service);
+  const application = await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const confirmation = service.list("confirmations", identity.profileId)[0];
+  const queued = await service.resolveConfirmation(confirmation.id, {
+    approved: true, answers: { location: "Lisbon, Portugal" }
+  }, identity);
+  assert.equal(queued.status, "queued");
+  await service.waitForIdle();
+  assert.equal(service.list("applications", identity.profileId)[0].status, "submitted");
+});
+
+test("a browser failure before the final action retries automatically", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  let attempts = 0;
+  const adapter = { name: "test-worker", async submit() {
+    attempts += 1;
+    if (attempts === 1) throw new RetryableExecutionError("navigation connection closed");
+    return { submittedAt: new Date().toISOString(), finalUrl: "https://example.test/complete" };
+  } };
+  const service = new ApplicationService({ store, config, adapter });
+  const job = await opportunity(service);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  assert.equal(attempts, 2);
+  assert.equal(service.list("applications", identity.profileId)[0].status, "submitted");
+  assert.equal(store.snapshot().attempts.some((entry) => entry.status === "transient_retry"), true);
 });
 
 test("execution receives only the authenticated profile", async () => {
@@ -344,7 +465,7 @@ test("concurrent admission cannot exceed the daily cap", async () => {
   await service.waitForIdle();
 });
 
-test("an authenticated profile can raise its own application cap for an approved batch", async () => {
+test("agent-writable profile preferences cannot raise the configured manual application cap", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   const profiles = {
@@ -373,11 +494,12 @@ test("an authenticated profile can raise its own application cap for an approved
     service.requestApplication(first.id, {}, identity),
     service.requestApplication(second.id, {}, identity)
   ]);
-  assert.equal(admitted.filter((item) => item.status === "queued").length, 2);
+  assert.equal(admitted.filter((item) => item.status === "queued").length, 1);
+  assert.equal(admitted.filter((item) => item.status === "skipped").length, 1);
   await service.waitForIdle();
 });
 
-test("an authenticated profile can disable daily application caps", async () => {
+test("agent-writable zero preferences cannot disable configured manual application caps", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   const profiles = {
@@ -406,7 +528,8 @@ test("an authenticated profile can disable daily application caps", async () => 
   const admitted = await Promise.all(
     jobs.map((job) => service.requestApplication(job.id, {}, identity))
   );
-  assert.equal(admitted.filter((item) => item.status === "queued").length, 3);
+  assert.equal(admitted.filter((item) => item.status === "queued").length, 1);
+  assert.equal(admitted.filter((item) => item.status === "skipped").length, 2);
   await service.waitForIdle();
 });
 
@@ -586,6 +709,38 @@ test("rejected account credentials are discarded instead of entering durable sta
   } }, identity);
   assert.doesNotMatch(await readFile(stateFile, "utf8"), /discard-me/);
   assert.deepEqual(service.list("confirmations", identity.profileId)[0].response, {});
+});
+
+test("rejecting one application confirmation supersedes its remaining pending questions", async () => {
+  const service = await fixture();
+  service.adapter.submit = async () => {
+    throw new NeedsInputError("answers required", [
+      { kind: "missing_answer", message: "First", fields: ["first"] },
+      { kind: "missing_answer", message: "Second", fields: ["second"] }
+    ]);
+  };
+  const job = await opportunity(service);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const confirmations = service.list("confirmations", identity.profileId);
+  await service.resolveConfirmation(confirmations[0].id, { approved: false }, identity);
+  assert.deepEqual(service.list("confirmations", identity.profileId).map((item) => item.status).sort(),
+    ["rejected", "superseded"]);
+  assert.equal(service.list("applications", identity.profileId)[0].status, "rejected");
+});
+
+test("manual retry controls are not persisted as application answers", async () => {
+  const service = await fixture();
+  service.adapter.submit = async () => { throw new NeedsInputError("manual", [{
+    kind: "unsupported_form", action: "manual_review", message: "Inspect"
+  }]); };
+  const job = await opportunity(service);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const confirmation = service.list("confirmations", identity.profileId)[0];
+  const application = await service.resolveConfirmation(confirmation.id,
+    { approved: true, answers: { retry: true } }, identity);
+  assert.deepEqual(application.answers, {});
 });
 
 test("ordinary application answers reject credential-like fields", async () => {

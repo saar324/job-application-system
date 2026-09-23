@@ -45,7 +45,11 @@ export function normalizeOpportunity(raw, { source = raw.source ?? "unknown" } =
   return normalized;
 }
 
-export function parseJobPostingJsonLd(input) {
+export function parseJobPostingJsonLd(input, options) {
+  return parseJobPostingsJsonLd(input, options)[0] ?? null;
+}
+
+export function parseJobPostingsJsonLd(input, { source = "schema.org", pageUrl } = {}) {
   const documents = [];
   if (typeof input === "string") {
     const script = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
@@ -57,8 +61,11 @@ export function parseJobPostingJsonLd(input) {
     }
   } else if (input && typeof input === "object") documents.push(input);
   const nodes = documents.flatMap(flattenJsonLd);
-  const job = nodes.find((item) => typesOf(item).includes("JobPosting"));
-  if (!job) return null;
+  const jobs = nodes.filter((item) => typesOf(item).includes("JobPosting"));
+  return jobs.map((job) => jobPosting(job, source, pageUrl));
+}
+
+function jobPosting(job, source, pageUrl) {
   const locations = arrayOf(job.jobLocation).map((item) => [
     item?.address?.addressLocality, item?.address?.addressRegion, item?.address?.addressCountry
   ].filter(Boolean).join(", ")).filter(Boolean);
@@ -66,13 +73,13 @@ export function parseJobPostingJsonLd(input) {
     .map((item) => item?.name ?? item?.addressCountry).filter(Boolean);
   const compensation = compensationOf(job.baseSalary ?? job.estimatedSalary);
   const result = normalizeOpportunity({
-    source: "schema.org",
+    source,
     externalId: job.identifier?.value ?? job.identifier,
     title: job.title,
-    company: job.hiringOrganization?.name,
+    company: job.hiringOrganization?.name ?? (typeof job.hiringOrganization === "string" ? job.hiringOrganization : undefined),
     description: job.description,
-    listingUrl: job.url,
-    applyUrl: job.url,
+    listingUrl: normalizedUrl(job.url, pageUrl),
+    applyUrl: normalizedUrl(job.url, pageUrl),
     location: [...locations, ...applicantLocations].join(", ") || job.jobLocationType,
     remote: /telecommute|remote/i.test(String(job.jobLocationType ?? "")),
     employmentType: arrayOf(job.employmentType).join(", "),
@@ -81,15 +88,20 @@ export function parseJobPostingJsonLd(input) {
     compensation,
     workAuthorization: job.eligibilityToWorkRequirement,
     directApply: job.directApply === true
-  }, { source: "schema.org" });
+  }, { source });
   result.rawStructuredType = "JobPosting";
   return result;
+}
+
+function normalizedUrl(value, pageUrl) {
+  try { return new URL(value ?? pageUrl, pageUrl).toString(); }
+  catch { return value ?? pageUrl; }
 }
 
 function flattenJsonLd(value) {
   if (Array.isArray(value)) return value.flatMap(flattenJsonLd);
   if (!value || typeof value !== "object") return [];
-  return [value, ...flattenJsonLd(value["@graph"] ?? [])];
+  return [value, ...Object.values(value).flatMap(flattenJsonLd)];
 }
 
 function typesOf(value) { return arrayOf(value?.["@type"]); }

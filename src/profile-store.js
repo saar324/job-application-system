@@ -1,9 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { nextStandingPolicy } from "./standing-policy.js";
+import { answerEvidenceFingerprint, approvedAnswerFingerprint } from "./approved-answers.js";
 
 const ALLOWED_SECTIONS = new Set([
   "displayName", "defaultMode", "contact", "links", "skills", "preferences", "documents", "applicationAnswers",
-  "approvedAnswers"
 ]);
 const CREDENTIAL_KEY = /(?:^|[_-])(?:password|passwd|passcode|secret|token|api[_-]?key|otp|cookie)(?:$|[_-])/i;
 
@@ -77,7 +78,6 @@ export class ProfileStore {
       if (!ALLOWED_SECTIONS.has(key)) throw Object.assign(new Error(`profile field is not allowed: ${key}`), { status: 400 });
     }
     rejectSensitiveApplicationAnswers(input.applicationAnswers);
-    validateApprovedAnswers(input.approvedAnswers);
     const operation = this.#pending.then(async () => {
       const document = await this.#read();
       const index = document.profiles.findIndex((profile) => profile.id === profileId);
@@ -111,6 +111,64 @@ export class ProfileStore {
     return operation;
   }
 
+  async setStandingSubmissionPolicy(profileId, input, identity) {
+    if (identity?.profileId !== profileId || !identity?.roles?.includes("owner")) {
+      throw Object.assign(new Error("owner authority required for this profile"), { status: 403 });
+    }
+    const operation = this.#pending.then(async () => {
+      const document = await this.#read();
+      const index = document.profiles.findIndex((profile) => profile.id === profileId);
+      const current = index >= 0 ? document.profiles[index] : { id: profileId };
+      const standingSubmissionPolicy = nextStandingPolicy(current.standingSubmissionPolicy, input, identity);
+      const updated = { ...current, standingSubmissionPolicy,
+        standingPolicyHistory: [...(current.standingPolicyHistory ?? []).slice(-99), {
+          policyId: standingSubmissionPolicy.id, version: standingSubmissionPolicy.version,
+          mode: standingSubmissionPolicy.mode, ownerActorId: identity.actorId,
+          recordedAt: standingSubmissionPolicy.updatedAt
+        }] };
+      if (index >= 0) document.profiles[index] = updated;
+      else document.profiles.push(updated);
+      await this.#write(document);
+      return standingSubmissionPolicy;
+    });
+    this.#pending = operation.catch(() => undefined);
+    return operation;
+  }
+
+  async setApprovedAnswers(profileId, records, identity) {
+    if (identity?.profileId !== profileId || !identity?.roles?.includes("owner")) {
+      throw Object.assign(new Error("owner authority required for approved answers"), { status: 403 });
+    }
+    validateApprovedAnswers(records);
+    const operation = this.#pending.then(async () => {
+      const document = await this.#read();
+      const index = document.profiles.findIndex((profile) => profile.id === profileId);
+      const current = index >= 0 ? document.profiles[index] : { id: profileId };
+      const approvedAt = new Date();
+      const evidenceFingerprint = answerEvidenceFingerprint(current);
+      const approvedAnswers = records.map((item) => {
+        const reviewAfter = item.reviewAfter ? new Date(item.reviewAfter)
+          : new Date(approvedAt.getTime() + 14 * 86_400_000);
+        if (reviewAfter <= approvedAt || reviewAfter.getTime() - approvedAt.getTime() > 30 * 86_400_000) {
+          throw Object.assign(new Error("approved answer reviewAfter must be within 30 days"), { status: 400 });
+        }
+        const answer = { id: item.id, question: item.question.trim(), value: item.value.trim(),
+          scope: { employer: item.scope.employer.trim(),
+            ...(item.scope.role ? { role: item.scope.role.trim() } : {}) },
+          approvedAt: approvedAt.toISOString(), reviewAfter: reviewAfter.toISOString(),
+          evidenceFingerprint, ownerActorId: identity.actorId };
+        return { ...answer, contentFingerprint: approvedAnswerFingerprint(answer) };
+      });
+      const updated = { ...current, approvedAnswers };
+      if (index >= 0) document.profiles[index] = updated;
+      else document.profiles.push(updated);
+      await this.#write(document);
+      return { count: approvedAnswers.length, approvedAt: approvedAt.toISOString() };
+    });
+    this.#pending = operation.catch(() => undefined);
+    return operation;
+  }
+
   async #read() {
     let raw;
     try { raw = await readFile(this.#file, "utf8"); }
@@ -138,13 +196,14 @@ function validateApprovedAnswers(records) {
   }
   for (const item of records) {
     if (!item || typeof item !== "object" || Array.isArray(item)
-      || typeof item.id !== "string" || item.id.length > 100
-      || typeof item.question !== "string" || item.question.length > 1000
-      || typeof item.value !== "string" || item.value.length > 5000
-      || !item.approvedAt || Number.isNaN(Date.parse(item.approvedAt))
+      || typeof item.id !== "string" || !item.id.trim() || item.id.length > 100
+      || typeof item.question !== "string" || !item.question.trim() || item.question.length > 1000
+      || typeof item.value !== "string" || !item.value.trim() || item.value.length > 5000
       || item.reviewAfter && Number.isNaN(Date.parse(item.reviewAfter))
-      || item.scope && (typeof item.scope !== "object" || Array.isArray(item.scope)
-        || Object.keys(item.scope).some((key) => !["employer", "role", "jurisdiction"].includes(key)))
+      || !item.scope || typeof item.scope !== "object" || Array.isArray(item.scope)
+      || typeof item.scope.employer !== "string" || !item.scope.employer.trim()
+      || item.scope.role !== undefined && (typeof item.scope.role !== "string" || !item.scope.role.trim())
+      || Object.keys(item.scope).some((key) => !["employer", "role"].includes(key))
       || CREDENTIAL_KEY.test(item.question)) {
       throw Object.assign(new Error("approvedAnswers contains an invalid record"), { status: 400 });
     }

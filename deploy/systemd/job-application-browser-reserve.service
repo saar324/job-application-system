@@ -1,0 +1,20 @@
+[Unit]
+Description=Refresh bounded browser job candidate reserve
+After=network-online.target job-application-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jobapp-api
+Group=jobapply
+WorkingDirectory=/opt/job-application-system
+EnvironmentFile=/etc/job-application/reserve.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/flock -n /var/lib/job-application/reserve-refresh.lock /usr/bin/node scripts/run-all-source-campaign.js --reserve-only --catalog /etc/job-application/sources.json --target 100 --reserve 0
+TimeoutStartSec=45min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/job-application
+

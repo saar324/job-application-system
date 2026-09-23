@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
+import { hashedTokenKey } from "../src/token-keys.js";
 
 const execute = promisify(execFile);
 
@@ -20,7 +21,12 @@ test("OpenClaw refresh preserves private source and writing-style references", a
   const privateStyle = JSON.stringify({ version: 1, privateStyleMarker: "preserve-style" });
   await writeFile(path.join(installedReferences, "sources.json"), privateSources);
   await writeFile(path.join(installedReferences, "writing-style.json"), privateStyle);
-  await writeFile(tokensFile, "{}\n");
+  const ownerKey = hashedTokenKey("owner-token");
+  await writeFile(tokensFile, JSON.stringify({
+    [ownerKey]: { actorId: "person-one-owner", profileId: "applicant-one", roles: ["owner"] },
+    "old-target-agent-token": { actorId: "applicant-one-openclaw", profileId: "applicant-one", roles: ["agent"] },
+    "other-agent-token": { actorId: "other-agent", profileId: "applicant-one", roles: ["agent"] }
+  }));
 
   const fakeOpenClaw = path.join(fakeBin, "openclaw");
   await writeFile(fakeOpenClaw, `#!/usr/bin/env node
@@ -59,4 +65,11 @@ if (args[0] === "agents" && args[1] === "list") {
   );
   assert.match(result.stdout, /"privateReferencesRestored"/);
   assert.doesNotMatch(result.stdout, /preserve-source|preserve-style/);
+  const installedToken = (await readFile(path.join(workspace, "skills/job-application/.job-server-token"),
+    "utf8")).trim();
+  const tokenMap = JSON.parse(await readFile(tokensFile, "utf8"));
+  assert.deepEqual(Object.keys(tokenMap), [ownerKey, "other-agent-token", hashedTokenKey(installedToken)]);
+  assert.equal(tokenMap["old-target-agent-token"], undefined);
+  assert.deepEqual(tokenMap[ownerKey].roles, ["owner"]);
+  assert.doesNotMatch(await readFile(tokensFile, "utf8"), new RegExp(installedToken));
 });

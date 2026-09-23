@@ -18,7 +18,44 @@ $JOBCLI opportunities
 $JOBCLI applications
 $JOBCLI application-log
 $JOBCLI application-metrics
+$JOBCLI campaigns
 $JOBCLI inbox
+```
+
+Start one timed campaign from a fresh scan. It deterministically excludes handled roles and listings without an
+employer application destination, then prepares the target plus reserve sequentially. Covered official ATS roles follow
+the owner standing policy; uncovered roles wait for exact final-preview review:
+
+```bash
+printf '%s' '{"target":10,"reserve":10,"idempotencyKey":"campaign-2026-09-22-01"}' | $JOBCLI campaign-start
+$JOBCLI campaign-status CAMPAIGN_UUID
+```
+
+For an all-source campaign, pass the catalog's server adapter IDs in `sources` and visible-browser IDs in
+`fallbackSources`, with `limitPerSource:10`. Submit each browser source only after bounded pagination is finished:
+
+```bash
+printf '%s' '{"target":10,"reserve":10,"limitPerSource":10,"sources":["ashby","lever","greenhouse"],"fallbackSources":["example_board"],"idempotencyKey":"all-source-campaign-01"}' | $JOBCLI campaign-start
+printf '%s' '{"sourceId":"example_board","items":[],"pagesVisited":3,"requestsMade":12,"exhausted":true,"completed":true,"idempotencyKey":"all-source-campaign-01-example-board"}' | $JOBCLI campaign-add-source CAMPAIGN_UUID
+```
+
+The private catalog is authoritative; the short example lists are placeholders. The server caps accepted candidates at
+10 per source, tracks coverage and paging telemetry, waits for every fallback source, then ranks the combined pool before
+preparing applications.
+
+Campaign targets up to 50 use the normal limit. A target from 51 to 100 requires an active owner-issued standing policy
+for the campaign mode whose `dailyCap` and `campaignCap` both meet the requested target. The policy is set only through
+the owner-authenticated `PUT /v1/standing-submission-policy` API. An agent profile update cannot grant that authority.
+The default global and mode daily caps still apply to uncovered and manual applications. Policy-covered final actions
+reserve a cap slot before Submit; unused reservations expire, and consumed attempts count across campaign waves.
+
+The status response includes scan, preparation, approval-wait, submission, and worker-active timing; every ready
+review entry includes the company, role, destination, full presentation, application ID, and preview fingerprint.
+For entries awaiting exact review, submit only after the owner explicitly approves the exact entries shown:
+
+```bash
+printf '%s' '{"idempotencyKey":"campaign-approval-2026-09-22-01","entries":[{"applicationId":"APPLICATION_UUID","previewFingerprint":"64_HEX_CHARACTERS"}]}' \
+  | $JOBCLI campaign-approve CAMPAIGN_UUID
 ```
 
 For each recurring cycle, use this order:
@@ -44,6 +81,13 @@ printf '%s' '{"manuallyVerified":true,"finalUrl":"https://company.example/applic
 
 Use this only after the site shows reliable submission evidence. Never include passwords, tokens, or one-time codes. The server redacts credential-like values if they are supplied by mistake.
 
+If a final preview is found incomplete before owner approval, supersede only that pending preview and queue a fresh inspection. Supply verified corrections or relevant optional answers in `answers`; this does not approve or submit the application:
+
+```bash
+printf '%s' '{"answers":{"portfolio_url":"https://example.test/portfolio"}}' \
+  | $JOBCLI refresh-preview APPLICATION_ID
+```
+
 Record an employer-side status without changing the application's submission state:
 
 ```bash
@@ -59,14 +103,8 @@ Store profile facts supplied by the active owner:
 printf '%s' '{"contact":{"firstName":"...","email":"..."},"skills":["..."]}' | $JOBCLI profile-update
 ```
 
-Choose whether a mode runs end-to-end or always asks before the final Submit click:
-
-```bash
-printf '%s' '{"preferences":{"fullTime":{"submissionApproval":"automatic"}}}' | $JOBCLI profile-update
-printf '%s' '{"preferences":{"fullTime":{"submissionApproval":"always"}}}' | $JOBCLI profile-update
-```
-
-Use `freelance` instead of `fullTime` for freelance applications. The repository default is `always`.
+Submission authority is read from the owner-issued standing policy. Ordinary `profile-update` preferences cannot enable
+automatic final submission or raise the configured daily caps. The default is exact final-preview approval.
 
 Never add an `id` or `profileId`; authentication selects the profile.
 
