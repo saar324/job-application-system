@@ -323,6 +323,34 @@ test("a named country list accepts Canada when it is included", () => {
   assert.equal(scored.scoreDetails.hardExclusion, undefined);
 });
 
+test("ISO country-code lists accept the applicant residence code", () => {
+  const scored = scoreOpportunity({
+    title: "Senior Backend Engineer", description: "Python Node.js PostgreSQL", tags: [],
+    location: "DE, FR, BG, RO", remote: true, employmentType: "Full-Time"
+  }, {
+    skills: ["Python", "Node.js", "PostgreSQL"],
+    preferences: { fullTime: {
+      jobTitles: ["Backend Engineer"], remoteOnly: true,
+      allowedLocations: ["Bulgaria", "Europe"], employmentTypes: ["full_time"]
+    } }
+  }, "full_time");
+  assert.equal(scored.scoreDetails.hardExclusion, undefined);
+});
+
+test("ISO country-code lists still exclude a missing residence code", () => {
+  const scored = scoreOpportunity({
+    title: "Senior Backend Engineer", description: "Python", tags: [],
+    location: "US, CA", remote: true, employmentType: "Full-Time"
+  }, {
+    skills: ["Python"],
+    preferences: { fullTime: {
+      jobTitles: ["Backend Engineer"], remoteOnly: true,
+      allowedLocations: ["Bulgaria", "Europe"], employmentTypes: ["full_time"]
+    } }
+  }, "full_time");
+  assert.match(scored.scoreDetails.hardExclusion, /does not include the applicant residence/);
+});
+
 test("a city-specific remote role excludes an applicant living elsewhere", () => {
   const scored = scoreOpportunity({
     title: "Example Systems Specialist", description: "Example integrations", tags: [],

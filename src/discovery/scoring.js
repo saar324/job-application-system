@@ -19,6 +19,20 @@ const COUNTRY_NAMES = [
   "poland", "portugal", "romania", "serbia", "slovakia", "slovenia", "spain", "sweden",
   "switzerland", "turkey", "ukraine", "united kingdom", "united states", "usa"
 ];
+const COUNTRY_CODES = new Map([
+  ["albania", "AL"], ["andorra", "AD"], ["austria", "AT"], ["belarus", "BY"],
+  ["belgium", "BE"], ["bosnia", "BA"], ["bulgaria", "BG"], ["croatia", "HR"],
+  ["cyprus", "CY"], ["czechia", "CZ"], ["denmark", "DK"], ["estonia", "EE"],
+  ["finland", "FI"], ["france", "FR"], ["germany", "DE"], ["greece", "GR"],
+  ["hungary", "HU"], ["iceland", "IS"], ["ireland", "IE"], ["israel", "IL"],
+  ["italy", "IT"], ["latvia", "LV"], ["liechtenstein", "LI"], ["lithuania", "LT"],
+  ["luxembourg", "LU"], ["malta", "MT"], ["moldova", "MD"], ["monaco", "MC"],
+  ["montenegro", "ME"], ["netherlands", "NL"], ["norway", "NO"], ["poland", "PL"],
+  ["portugal", "PT"], ["romania", "RO"], ["serbia", "RS"], ["slovakia", "SK"],
+  ["slovenia", "SI"], ["spain", "ES"], ["sweden", "SE"], ["switzerland", "CH"],
+  ["turkey", "TR"], ["ukraine", "UA"], ["united kingdom", "GB"],
+  ["canada", "CA"], ["united states", "US"], ["usa", "US"]
+]);
 const REGIONS = {
   us: /\b(us|u\.s\.|usa|united states|north america)\b/i,
   europe: /\b(eu|europe|european|emea|bulgaria|germany|france|spain|italy|netherlands|poland|romania|greece|portugal|austria|belgium|sweden|denmark|finland|ireland)\b/i,
@@ -52,20 +66,25 @@ function locationExclusion(opportunity, allowedLocations) {
   const explicitCountries = COUNTRY_NAMES.filter((country) => includesPhrase(lower, country));
   const residenceCountries = COUNTRY_NAMES.filter((country) =>
     (allowedLocations ?? []).some((value) => includesPhrase(String(value).toLowerCase(), country)));
+  const explicitCodes = new Set(location.match(/\b[A-Z]{2}\b/g) ?? []);
+  const residenceCodes = new Set(residenceCountries.map((country) => COUNTRY_CODES.get(country)).filter(Boolean));
+  const residenceIncluded = explicitCountries.some((country) => residenceCountries.includes(country))
+    || [...residenceCodes].some((code) => explicitCodes.has(code));
   const namedRegions = Object.entries(REGIONS).filter(([, pattern]) => pattern.test(lower)).map(([name]) => name);
   // A list of named countries is a residence restriction, even when every
   // country in that list is part of a broad region accepted by the profile.
   if (explicitCountries.length && !REGIONAL_SCOPE.test(lower)
-    && !explicitCountries.some((country) => residenceCountries.includes(country))) {
+    && !residenceIncluded) {
     return `location restriction ${location} does not include the applicant residence`;
   }
   const locationQualifier = lower
     .replace(/\b(remote|distributed|work from home|locations?)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ").trim();
   if (locationQualifier && !GLOBAL_REMOTE.test(lower) && !REGIONAL_SCOPE.test(lower)
-    && !residenceCountries.some((country) => includesPhrase(lower, country))) {
+    && !residenceIncluded) {
     return `location restriction ${location} does not include the applicant residence or an accepted region`;
   }
+  if (residenceIncluded) return null;
   const globalOnly = GLOBAL_REMOTE.test(lower) && !explicitCountries.length
     && !namedRegions.length && !RESTRICTED_REMOTE.test(lower);
   if (globalOnly || (!explicitCountries.length && !namedRegions.length)) return null;

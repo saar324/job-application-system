@@ -62,3 +62,13 @@ test("public challenge iframe navigation does not replace the application destin
   assert.deepEqual(publicUrls, [item.payload.opportunity.applyUrl,
     "https://job-boards.greenhouse.io/example", "https://www.recaptcha.net/recaptcha/api2/anchor"]);
 });
+
+test("a browser-verified public application destination is allowed as the exact initial host", async () => {
+  const item = fixture({ status: "needs_input" });
+  item.payload.opportunity = { applyUrl: "https://careers.acme.test/apply/123",
+    applicationDestinationVerified: true };
+  const calls = [];
+  item.urlPolicy.assertAllowed = (url, domains) => calls.push({ url, domains });
+  await executeInFreshContext({ ...item, artifactsDirectory: "/tmp" });
+  assert.deepEqual(calls[0], { url: "https://careers.acme.test/apply/123", domains: ["careers.acme.test"] });
+});

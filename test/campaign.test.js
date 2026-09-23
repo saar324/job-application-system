@@ -132,7 +132,8 @@ test("campaign searches every fallback source, caps each pool at ten, then ranks
       phone: "+10000000000", location: "Remote" },
     documents: { resume: "/secure/resume.pdf" }, skills: ["TypeScript", "Node.js", "PostgreSQL"],
     preferences: { locations: ["Remote", "Europe"], fullTime: {
-      jobTitles: ["Senior Engineer"], automatedDiscoverySources: ["remoteok"], submissionApproval: "always"
+      jobTitles: ["Senior Engineer"], remoteOnly: true,
+      automatedDiscoverySources: ["remoteok"], submissionApproval: "always"
     } }
   });
   const config = { defaultMode: "full_time", execution: { concurrency: 1 }, discovery: { limitPerSource: 50 },
@@ -162,11 +163,15 @@ test("campaign searches every fallback source, caps each pool at ten, then ranks
     applyUrl: `https://${board}.example.test/jobs/${index}` });
   const first = await discovery.addCampaignSourceResults(started.campaignId, {
     sourceId: "board_one", completed: false, pagesVisited: 1, requestsMade: 7,
-    items: [{ ...make(99), applyUrl: previouslySeen.applyUrl }, ...Array.from({ length: 6 }, (_, index) => make(index))]
+    items: [{ ...make(99), applyUrl: previouslySeen.applyUrl },
+      { ...make(98), applyUrl: "https://one.example.test/jobs/office", remote: false, location: "Office" },
+      ...Array.from({ length: 6 }, (_, index) => make(index))]
   }, identity);
   assert.equal(first.status, "searching_more_sources");
   assert.equal(first.sourceCoverage.scans[0].selected, 6);
   assert.equal(first.sourceCoverage.scans[0].handledFiltered, 1);
+  assert.deepEqual(first.sourceCoverage.scans[0].exclusionReasons,
+    [{ reason: "profile requires a remote role", count: 1 }]);
   const second = await discovery.addCampaignSourceResults(started.campaignId, {
     sourceId: "board_one", completed: true, exhausted: true, pagesVisited: 2, requestsMade: 6,
     items: Array.from({ length: 6 }, (_, index) => make(index + 6))

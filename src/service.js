@@ -473,6 +473,7 @@ export class ApplicationService {
         sourceId: input.sourceId, found: input.found, qualifying: input.qualifying,
         excluded: input.excluded, handledFiltered: input.handledFiltered,
         selected: input.selected, opportunityIds: input.opportunityIds ?? [],
+        exclusionReasons: input.exclusionReasons ?? [],
         completed: input.completed, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
         rateLimited: input.rateLimited === true, exhausted: input.exhausted === true,
         errors: input.errors ?? []
@@ -542,6 +543,9 @@ export class ApplicationService {
     const pendingFinal = snapshot.confirmations.filter((item) => item.profileId === profileId
       && item.status === "pending" && item.kind === "final_submission_approval"
       && applicationIds.has(item.applicationId));
+    const pendingOther = snapshot.confirmations.filter((item) => item.profileId === profileId
+      && item.status === "pending" && item.kind !== "final_submission_approval"
+      && applicationIds.has(item.applicationId));
     const counts = Object.fromEntries([...new Set(applications.map((item) => item.status))]
       .map((status) => [status, applications.filter((item) => item.status === status).length]));
     const submitted = applications.filter((item) => item.status === "submitted" && item.receipt?.submittedAt)
@@ -558,7 +562,8 @@ export class ApplicationService {
         : active ? "running"
           : pendingFinal.length ? "awaiting_batch_review"
             : searchingMore ? "searching_more_sources"
-            : scan && applications.length < target ? "insufficient_candidates" : "blocked";
+            : pendingOther.length ? "blocked"
+              : scan && applications.length < target ? "insufficient_candidates" : "blocked";
     const completedAt = status === "complete" ? submitted[target - 1].receipt.submittedAt : undefined;
     const lastApplicationUpdate = applications.length
       ? applications.map((item) => item.updatedAt).sort().at(-1) : undefined;

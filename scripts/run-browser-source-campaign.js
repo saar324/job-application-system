@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { chromium } from "playwright";
 import { extractSourcePage, isBlockingStatus, sourceAutomationPolicy } from "../src/discovery/browser-source.js";
+import { parsePublicFeed, publicFeedUrl } from "../src/discovery/public-feeds.js";
 
 const options = argumentsOf(process.argv.slice(2));
 if (!options.campaign || !options.catalog) {
@@ -64,6 +65,40 @@ async function searchSource(source, policy) {
   const items = new Map(); const visitedListings = new Set(); const visitedDetails = new Set(); const errors = [];
   let nextUrl = source.url; let pagesVisited = 0; let requestsMade = 0; let rateLimited = false;
   try {
+    const feedUrl = publicFeedUrl(source.id, { query: options.query ?? "engineer",
+      limit: source.id === "remotive" || source.id === "weworkremotely" ? 100 : 25 });
+    if (feedUrl) {
+      const response = await fetch(feedUrl, { headers: { "user-agent": "job-application-system/1.0 personal search" },
+        signal: AbortSignal.timeout(policy.navigationTimeoutMs) });
+      requestsMade += 1; pagesVisited += 1;
+      if (isBlockingStatus(response.status)) rateLimited = true;
+      else if (!response.ok) errors.push({ error: `feed returned HTTP ${response.status}: ${feedUrl}` });
+      else {
+        const feed = parsePublicFeed(source.id, await response.text());
+        if (source.id !== "jobgether") {
+          for (const job of feed.items) add(items, job);
+          return { items: [...items.values()].slice(0, policy.maxCandidates), pagesVisited, requestsMade,
+            rateLimited, exhausted: !feed.hasMore, errors };
+        }
+        nextUrl = null;
+        const seeds = new Map(feed.items.map((item) => [item.listingUrl, item]));
+        const detailQueue = feed.detailLinks.slice(0, policy.maxDetailPages);
+        while (detailQueue.length && requestsMade < policy.maxRequests && items.size < policy.maxCandidates) {
+          const link = detailQueue.shift();
+          const detail = await navigate(page, link, policy); requestsMade += 1;
+          if (isBlockingStatus(detail.status)) { rateLimited = true; break; }
+          if (!detail.ok) continue;
+          const extracted = extractSourcePage(await page.content(), page.url(), source.id);
+          if (extracted.jobs.length) {
+            for (const job of extracted.jobs) add(items, { ...seeds.get(link), ...job,
+              location: job.location || seeds.get(link)?.location,
+              listingUrl: link, externalId: seeds.get(link)?.externalId ?? job.externalId });
+          } else if (seeds.has(link)) add(items, seeds.get(link));
+        }
+        return { items: [...items.values()].slice(0, policy.maxCandidates), pagesVisited, requestsMade,
+          rateLimited, exhausted: true, errors };
+      }
+    }
     while (nextUrl && pagesVisited < policy.maxListingPages && requestsMade < policy.maxRequests
       && items.size < policy.maxCandidates) {
       if (visitedListings.has(nextUrl)) break;
@@ -71,11 +106,13 @@ async function searchSource(source, policy) {
       const listing = await navigate(page, nextUrl, policy); requestsMade += 1;
       if (isBlockingStatus(listing.status)) { rateLimited = true; break; }
       if (!listing.ok) { errors.push({ error: `listing returned HTTP ${listing.status}: ${nextUrl}` }); break; }
-      if (pagesVisited === 0) await applyBroadSearch(page, options.query ?? "engineer");
+      if (pagesVisited === 0) await applyBroadSearch(page, options.query ?? "engineer", options.location ?? "Bulgaria");
       pagesVisited += 1;
       const extracted = extractSourcePage(await page.content(), page.url(), source.id);
       for (const job of extracted.jobs) add(items, job);
-      for (const link of extracted.jobLinks) {
+      const detailQueue = [...extracted.jobLinks];
+      while (detailQueue.length) {
+        const link = detailQueue.shift();
         if (items.size >= policy.maxCandidates || visitedDetails.size >= policy.maxDetailPages
           || requestsMade >= policy.maxRequests) break;
         if (visitedDetails.has(link)) continue;
@@ -83,8 +120,15 @@ async function searchSource(source, policy) {
         const detail = await navigate(page, link, policy); requestsMade += 1;
         if (isBlockingStatus(detail.status)) { rateLimited = true; break; }
         if (!detail.ok) continue;
-        const detailJobs = extractSourcePage(await page.content(), page.url(), source.id).jobs;
-        for (const job of detailJobs) add(items, job);
+        const detailPage = extractSourcePage(await page.content(), page.url(), source.id);
+        for (const job of detailPage.jobs) add(items, job);
+        if (!detailPage.jobs.length) {
+          const nestedLinks = [];
+          for (const nested of detailPage.jobLinks) {
+            if (!visitedDetails.has(nested) && !detailQueue.includes(nested)) nestedLinks.push(nested);
+          }
+          detailQueue.unshift(...nestedLinks);
+        }
       }
       if (rateLimited) break;
       nextUrl = extracted.nextUrl;
@@ -109,7 +153,7 @@ async function navigate(page, url, policy) {
   return { status, ok: status >= 200 && status < 400 };
 }
 
-async function applyBroadSearch(page, query) {
+async function applyBroadSearch(page, query, location) {
   const selectors = [
     'input[type="search"]', 'input[name*="keyword" i]', 'input[name*="search" i]',
     'input[placeholder*="job" i]', 'input[placeholder*="role" i]', 'input[placeholder*="keyword" i]'
@@ -119,19 +163,40 @@ async function applyBroadSearch(page, query) {
     for (let index = 0; index < Math.min(await inputs.count(), 4); index += 1) {
       const input = inputs.nth(index);
       if (!await input.isVisible().catch(() => false)) continue;
+      const before = page.url();
       await input.fill(query);
-      await input.press("Enter");
+      const locationInput = page.locator('input[placeholder*="location" i]').filter({ visible: true }).first();
+      if (await locationInput.isVisible().catch(() => false)) {
+        await locationInput.fill(location);
+        await page.waitForTimeout(400);
+        const option = page.getByRole("option", { name: new RegExp(`^${escapePattern(location)}$`, "i") })
+          .filter({ visible: true }).first();
+        if (await option.isVisible().catch(() => false)) await option.click({ timeout: 2_000 }).catch(() => undefined);
+      }
+      const submit = page.locator("button[data-submit]").filter({ visible: true }).first();
+      if (await submit.isVisible().catch(() => false)) {
+        await submit.click({ timeout: 3_000, noWaitAfter: true }).catch(() => undefined);
+      } else await input.press("Enter");
       await settle(page);
+      if (page.url() === before) {
+        const button = page.getByRole("button", { name: /^search$/i }).filter({ visible: true }).first();
+        if (await button.isVisible().catch(() => false)) {
+          await button.click({ timeout: 3_000, noWaitAfter: true }).catch(() => undefined);
+          await settle(page);
+        }
+      }
       return true;
     }
   }
   return false;
 }
 
+function escapePattern(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
 async function settle(page) {
-  await page.waitForLoadState("networkidle", { timeout: 4_000 }).catch(() => undefined);
+  await page.waitForLoadState("networkidle", { timeout: 1_500 }).catch(() => undefined);
   await page.evaluate(() => window.scrollTo(0, Math.min(document.body.scrollHeight, 4000))).catch(() => undefined);
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(250);
 }
 
 async function report(sourceId, items, metadata) {
@@ -163,6 +228,7 @@ function compactJob(job) {
     location: clipped(job.location, 500), employmentType: clipped(job.employmentType, 100),
     remote: job.remote === true, postedAt: clipped(job.postedAt, 100),
     listingUrl: job.listingUrl, applyUrl: job.applyUrl, compensation: job.compensation,
+    applicationDestinationVerified: job.applicationDestinationVerified === true,
     tags: job.tags?.slice(0, 100), uncertainties: job.uncertainties?.slice(0, 50)
   };
 }

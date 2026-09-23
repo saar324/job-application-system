@@ -179,6 +179,21 @@ test("common link label variants use verified profile URLs", async () => {
   ]);
 });
 
+test("common location variants and exact verified answers are reused deterministically", async () => {
+  const result = await run(`<form>
+    <label>Location (City)* <input name="candidate-location" required></label>
+    <label>Where are you based out of? <input name="based" required></label>
+    <label>How did you hear about this job? <input name="source" required></label>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile,
+    contact: { ...profile.contact, city: "Sofia", location: "Sofia, Bulgaria" },
+    applicationAnswers: { "How did you hear about this job?": "LinkedIn" }
+  }, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled.map((field) => field.value),
+    ["Sofia", "Sofia, Bulgaria", "LinkedIn"]);
+});
+
 test("Ashby submit waits for the last field save triggered by blur", async () => {
   const context = await browser.newContext();
   const page = await context.newPage();

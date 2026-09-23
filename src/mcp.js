@@ -61,6 +61,7 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
         externalId: z.string().max(500).optional(), description: z.string().max(100000).optional(),
         location: z.string().max(500).optional(), employmentType: z.string().max(100).optional(),
         remote: z.boolean().optional(), postedAt: z.string().max(100).optional(),
+        applicationDestinationVerified: z.boolean().optional(),
         sourceUrl: z.string().url().optional(), tags: z.array(z.string().max(100)).max(100).optional(),
         compensation: z.record(z.string(), z.unknown()).optional(), uncertainties: z.array(z.string().max(200)).max(50).optional()
       })).max(200), idempotencyKey: z.string().min(8).max(200)

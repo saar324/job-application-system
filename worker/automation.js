@@ -63,6 +63,10 @@ function flattenProfile(profile, currentUrl) {
     location: contact.location,
     "current location": contact.location,
     city: contact.city,
+    "candidate location": contact.city ?? contact.location,
+    "location city": contact.city ?? contact.location,
+    "where are you based": contact.location,
+    "where are you based out of": contact.location,
     country: contact.country,
     address: contact.address,
     "street address": contact.address,
@@ -81,8 +85,15 @@ function flattenProfile(profile, currentUrl) {
     resume: documents.resume,
     cv: documents.resume,
     "cover letter": documents.coverLetter,
-    // Unscoped historical answers are not authoritative for a new employer or jurisdiction.
   };
+  // Reuse only exact normalized questions from the owner's verified answer bank.
+  // This avoids fuzzy legal or jurisdictional matches while eliminating repeated
+  // questions such as referral source, current employer, and current title.
+  for (const [question, answer] of Object.entries(profile.applicationAnswers ?? {})) {
+    if (answer === undefined || answer === null || answer === "" || typeof answer === "object") continue;
+    const key = normalize(question);
+    if (key && values[key] === undefined) values[key] = answer;
+  }
   if (credentialMatches(profile.siteCredential, currentUrl)) {
     values.username = profile.siteCredential.username;
     values["user name"] = profile.siteCredential.username;
