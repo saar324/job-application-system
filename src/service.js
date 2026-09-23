@@ -3,6 +3,7 @@ import { evaluatePolicy } from "./policy.js";
 import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailableError,
   RetryableExecutionError } from "./adapters/errors.js";
 import { telemetry as defaultTelemetry } from "./telemetry.js";
+import { roleKeys } from "./discovery/handled-roles.js";
 
 function now() { return new Date().toISOString(); }
 const inactive = (item) => ["skipped", "rejected", "failed"].includes(item.status);
@@ -91,9 +92,18 @@ export class ApplicationService {
     const dedupKey = input.dedupKey ?? buildDedupKey(input);
     const applicationUrl = normalizedApplicationUrl(input.applyUrl);
     return this.store.mutate(async (state) => {
+      const incomingKeys = roleKeys(input);
+      const sameRole = (entry) => {
+        if ([...roleKeys(entry)].some((key) => !key.startsWith("role:") && incomingKeys.has(key))) return true;
+        return state.applications.some((application) => application.profileId === identity.profileId
+          && application.opportunityId === entry.id && application.receipt?.finalUrl
+          && [...roleKeys({ applyUrl: application.receipt.finalUrl })]
+            .some((key) => !key.startsWith("role:") && incomingKeys.has(key)));
+      };
       const existing = state.opportunities.find(
         (entry) => entry.profileId === identity.profileId
-          && (entry.dedupKey === dedupKey || normalizedApplicationUrl(entry.applyUrl) === applicationUrl)
+          && (entry.dedupKey === dedupKey || normalizedApplicationUrl(entry.applyUrl) === applicationUrl
+            || sameRole(entry))
       );
       if (existing) {
         if (input.userRequested === true) {
