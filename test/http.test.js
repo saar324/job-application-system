@@ -24,7 +24,14 @@ async function fixture() {
     async scan() { return { items: [] }; },
     async startCampaign(input, identity) {
       return service.createCampaign({ id: campaignId, target: input.target ?? 10,
-        reserve: input.reserve ?? 10, mode: "full_time" }, identity);
+        reserve: input.reserve ?? 10, mode: "full_time", sources: input.sources ?? [],
+        fallbackSources: input.fallbackSources ?? [] }, identity);
+    },
+    async addCampaignSourceResults(id, input, identity) {
+      return service.recordCampaignSourceScan(id, { sourceId: input.sourceId,
+        found: input.items.length, qualifying: 0, excluded: input.items.length,
+        handledFiltered: 0, selected: 0, completed: input.completed !== false,
+        pagesVisited: input.pagesVisited, requestsMade: input.requestsMade, errors: [] }, identity);
     }
   };
   const authenticate = (request) => request.headers.authorization === "Bearer profile-one-token"
@@ -124,6 +131,29 @@ test("campaign HTTP start is idempotent and campaign reads stay profile-bound", 
     });
     assert.equal(status.status, 200);
     assert.equal((await status.json()).target, 10);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test("campaign source results are authenticated, idempotent, and record page coverage", async () => {
+  const { server, campaignId, base } = await fixture();
+  try {
+    const started = await fetch(`${base}/v1/campaigns`, {
+      method: "POST", headers: { authorization: "Bearer profile-one-token", "content-type": "application/json" },
+      body: JSON.stringify({ target: 2, reserve: 0, fallbackSources: ["browser_one"] })
+    });
+    assert.equal(started.status, 202);
+    const send = () => fetch(`${base}/v1/campaigns/${campaignId}/source-results`, {
+      method: "POST", headers: { authorization: "Bearer profile-one-token", "content-type": "application/json",
+        "idempotency-key": "browser-source-page-1" },
+      body: JSON.stringify({ sourceId: "browser_one", items: [], completed: true,
+        pagesVisited: 3, requestsMade: 9, exhausted: true })
+    });
+    const first = await send(); const replay = await send();
+    assert.equal(first.status, 200); assert.equal(replay.status, 200);
+    const result = await first.json();
+    assert.equal(result.sourceCoverage.scans.length, 1);
+    assert.equal(result.sourceCoverage.scans[0].pagesVisited, 3);
+    assert.deepEqual(result.sourceCoverage.fallbackRemaining, []);
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 

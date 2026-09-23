@@ -41,7 +41,7 @@ test("only applications for the current profile enter the handled index", () => 
   assert.equal(isHandledRole(state.opportunities[2], keys), false);
 });
 
-test("official board search excludes handled roles before applying the result limit", async () => {
+test("official board search excludes handled and previously seen roles before applying the result limit", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-handled-discovery-"));
   const profiles = await new ProfileStore(path.join(directory, "profiles.json"), { allowMissing: true }).init();
   await profiles.patch("owner", { skills: ["TypeScript"],
@@ -71,5 +71,6 @@ test("official board search excludes handled roles before applying the result li
   assert.equal(result.items.length, 1, JSON.stringify(result));
   assert.equal(result.items[0].opportunity.externalId, `example:${ids[1]}`);
   const repeat = await discovery.scan({ limitPerSource: 1 }, { actorId: "owner", profileId: "owner" });
-  assert.equal(repeat.items.length, 1, "a discovered role with no application remains searchable");
+  assert.equal(repeat.items.length, 0, "a previously seen role must not re-enter a later candidate pool");
+  assert.equal(repeat.handledFiltered, 2);
 });

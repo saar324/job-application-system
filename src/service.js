@@ -432,7 +432,7 @@ export class ApplicationService {
       }
       audit(state, identity, "campaign.started", input.id, {
         target: input.target, reserve: input.reserve, mode: input.mode,
-        sources: input.sources ?? [], queryPlan: input.queryPlan ?? []
+        sources: input.sources ?? [], fallbackSources: input.fallbackSources ?? [], queryPlan: input.queryPlan ?? []
       });
       return this.campaignStatus(input.id, identity.profileId, state);
     });
@@ -462,6 +462,57 @@ export class ApplicationService {
     });
   }
 
+  async recordCampaignSourceScan(campaignId, input, identity) {
+    return this.store.mutate(async (state) => {
+      const started = campaignStart(state, campaignId, identity.profileId);
+      if (!started) throw new ClientError(404, "campaign not found");
+      if (!(started.details.fallbackSources ?? []).includes(input.sourceId)) {
+        throw new ClientError(400, "source is not in this campaign fallback plan");
+      }
+      audit(state, identity, "campaign.source_scanned", campaignId, {
+        sourceId: input.sourceId, found: input.found, qualifying: input.qualifying,
+        excluded: input.excluded, handledFiltered: input.handledFiltered,
+        selected: input.selected, opportunityIds: input.opportunityIds ?? [],
+        completed: input.completed, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
+        rateLimited: input.rateLimited === true, exhausted: input.exhausted === true,
+        errors: input.errors ?? []
+      });
+      return this.campaignStatus(campaignId, identity.profileId, state);
+    });
+  }
+
+  async finalizeCampaignSelection(campaignId, identity) {
+    const campaign = this.campaignStatus(campaignId, identity.profileId);
+    if (campaign.sourceCoverage.fallbackRemaining.length) {
+      throw new ClientError(409, "campaign source search is not complete");
+    }
+    const state = this.store.snapshot();
+    const events = state.audit.filter((item) => item.profileId === identity.profileId
+      && item.subjectId === campaignId && item.action.startsWith("campaign."));
+    const scan = events.findLast((item) => item.action === "campaign.scan_completed");
+    const ids = [...new Set([
+      ...(scan?.details.selectedOpportunityIds ?? []),
+      ...events.filter((item) => item.action === "campaign.source_scanned")
+        .flatMap((item) => item.details.opportunityIds ?? [])
+    ])];
+    const opportunities = state.opportunities.filter((item) => item.profileId === identity.profileId
+      && ids.includes(item.id)).sort((left, right) => Number(right.score ?? 0) - Number(left.score ?? 0)
+      || Date.parse(right.postedAt ?? 0) - Date.parse(left.postedAt ?? 0));
+    const selectedIds = [];
+    for (const opportunity of opportunities) {
+      if (selectedIds.length >= campaign.target + campaign.reserve) break;
+      try {
+        await this.requestApplication(opportunity.id, { campaignId, forceFinalApproval: true }, identity);
+        selectedIds.push(opportunity.id);
+      } catch (error) {
+        if (error.status !== 409) throw error;
+      }
+    }
+    await this.store.mutate(async (draft) => audit(draft, identity, "campaign.selection_finalized", campaignId,
+      { candidateCount: opportunities.length, selectedOpportunityIds: selectedIds }));
+    return this.campaignStatus(campaignId, identity.profileId);
+  }
+
   listCampaigns(profileId) {
     const state = this.store.snapshot();
     return state.audit.filter((item) => item.profileId === profileId && item.action === "campaign.started")
@@ -477,6 +528,8 @@ export class ApplicationService {
     const scan = events.findLast((item) => item.action === "campaign.scan_completed");
     const failed = events.findLast((item) => item.action === "campaign.failed");
     const approval = events.find((item) => item.action === "campaign.batch_approved");
+    const selection = events.findLast((item) => item.action === "campaign.selection_finalized");
+    const sourceScans = events.filter((item) => item.action === "campaign.source_scanned");
     const applications = snapshot.applications.filter((item) => item.profileId === profileId
       && item.campaignId === campaignId);
     const applicationIds = new Set(applications.map((item) => item.id));
@@ -494,18 +547,24 @@ export class ApplicationService {
     const submitted = applications.filter((item) => item.status === "submitted" && item.receipt?.submittedAt)
       .sort((left, right) => left.receipt.submittedAt.localeCompare(right.receipt.submittedAt));
     const target = started.details.target;
+    const fallbackPlanned = started.details.fallbackSources ?? [];
+    const fallbackCovered = [...new Set(sourceScans.filter((item) => item.details.completed !== false)
+      .map((item) => item.details.sourceId))];
+    const fallbackRemaining = fallbackPlanned.filter((source) => !fallbackCovered.includes(source));
+    const searchingMore = Boolean(scan && applications.length < target && fallbackRemaining.length);
     const active = applications.some((item) => ["queued", "claimed", "submitting"].includes(item.status));
     const status = failed ? "failed"
       : submitted.length >= target ? "complete"
         : active ? "running"
           : pendingFinal.length ? "awaiting_batch_review"
+            : searchingMore ? "searching_more_sources"
             : scan && applications.length < target ? "insufficient_candidates" : "blocked";
     const completedAt = status === "complete" ? submitted[target - 1].receipt.submittedAt : undefined;
     const lastApplicationUpdate = applications.length
       ? applications.map((item) => item.updatedAt).sort().at(-1) : undefined;
     const endedAt = completedAt ?? failed?.at
       ?? (["insufficient_candidates", "blocked"].includes(status)
-        ? [scan?.at, lastApplicationUpdate].filter(Boolean).sort().at(-1) : undefined);
+        ? [selection?.at, scan?.at, lastApplicationUpdate].filter(Boolean).sort().at(-1) : undefined);
     const reviewReadyAt = finalConfirmations.length
       ? finalConfirmations.map((item) => item.createdAt).sort().at(-1) : undefined;
     const duration = (end, start) => end && start
@@ -513,6 +572,16 @@ export class ApplicationService {
     const activeWorkerMs = attempts.reduce((sum, item) => sum + Number(item.workerMetrics?.activeMs ?? 0), 0);
     return {
       campaignId, status, target, reserve: started.details.reserve, mode: started.details.mode,
+      sourceCoverage: {
+        primary: started.details.sources ?? [], fallbackPlanned, fallbackCovered, fallbackRemaining,
+        coveredCount: (started.details.sources ?? []).length + fallbackCovered.length,
+        plannedCount: (started.details.sources ?? []).length + fallbackPlanned.length,
+        scans: sourceScans.map((item) => ({ at: item.at, ...item.details }))
+      },
+      candidatePoolSize: [...new Set([
+        ...(scan?.details.selectedOpportunityIds ?? []),
+        ...sourceScans.flatMap((item) => item.details.opportunityIds ?? [])
+      ])].length,
       startedAt: started.at, ...(scan ? { scanCompletedAt: scan.at, scan: scan.details } : {}),
       ...(completedAt ? { completedAt } : {}),
       ...(endedAt ? { endedAt } : {}),
