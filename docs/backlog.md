@@ -26,5 +26,6 @@ items remain open unless their completion evidence is recorded here.
 The follow-up pilot exposed one additional performance blocker: production prose drafting is disabled (`draftCalls: 0`), so every company-specific answer reaches the owner. Evaluate a securely configured draft provider with factual grounding and final review before counting any time gain. The optional-portfolio upload mapping was fixed and deployed in `1dfcaf4`.
 
 The [23 September pilot](pilot-2026-09-23.md) produced seven new verified receipts from ten owner-approved roles. Three
-were already submitted in earlier runs, exposing cross-source and URL-variant duplicate misses. A fresh scan found no
-replacement candidates. The 30-second acceptance target remains unmet.
+were already submitted in earlier runs, exposing cross-source and URL-variant duplicate misses. A bounded scan of all 50
+configured sources found no accepted replacement candidates; Jobfluent needs a verified employer application URL. The
+30-second acceptance target remains unmet.
