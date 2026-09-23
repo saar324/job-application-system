@@ -55,14 +55,35 @@ export async function fillAshbyRequiredControls(surface, profile, answers = {}) 
       if (field.type === "combobox") {
         const input = surface.locator(".ashby-application-form-field-entry").nth(field.index)
           .locator('input[role="combobox"]');
-        const candidates = Array.isArray(value) ? value : [value];
+        const candidates = [...new Set((Array.isArray(value) ? value : [value])
+          .flatMap((candidate) => [candidate, String(candidate).split(",")[0]])
+          .concat(locationQuestion ? [profile?.contact?.city, profile?.contact?.country] : [])
+          .filter(Boolean).map(String))];
+        const preferred = [...new Set((Array.isArray(value) ? value : [value])
+          .concat(locationQuestion ? [profile?.contact?.location] : [])
+          .filter(Boolean).map((candidate) => normalize(candidate)))];
+        const city = normalize(profile?.contact?.city || String(candidates[0] ?? "").split(",")[0]);
+        const country = normalize(profile?.contact?.country
+          || String((Array.isArray(value) ? value[0] : value) ?? "").split(",").at(-1));
         let selectedValue;
         for (const candidate of candidates) {
           await input.fill(String(candidate));
-          const option = surface.getByRole("option", { name: String(candidate), exact: true });
-          if (!await option.isVisible({ timeout: 1500 }).catch(() => false)) continue;
-          await option.click();
-          selectedValue = String(candidate);
+          const optionLocator = surface.getByRole("option");
+          await optionLocator.first().waitFor({ state: "visible", timeout: 1500 }).catch(() => {});
+          const visible = [];
+          for (const option of await optionLocator.all()) {
+            if (!await option.isVisible().catch(() => false)) continue;
+            visible.push({ option, label: (await option.innerText()).trim() });
+          }
+          const exact = visible.find((item) => preferred.includes(normalize(item.label)));
+          const cityCountry = locationQuestion && city && country
+            ? visible.find((item) => normalize(item.label).startsWith(city)
+              && normalize(item.label).includes(country)) : undefined;
+          const choice = exact ?? cityCountry
+            ?? visible.find((item) => normalize(item.label) === normalize(candidate));
+          if (!choice) continue;
+          await choice.option.click();
+          selectedValue = choice.label;
           break;
         }
         if (!selectedValue) throw new Error("matching location option was not found");
