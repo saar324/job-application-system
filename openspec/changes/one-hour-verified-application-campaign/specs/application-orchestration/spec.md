@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Standing submission authorization is explicit, scoped, and revocable
-The service SHALL allow an authenticated profile owner to enable or revoke a versioned standing submission policy. It SHALL derive profile identity from authenticated credentials, enforce policy scope and caps at the pre-final boundary, and default to exact final-preview approval when no active policy covers the application. Campaign start alone SHALL NOT authorize submission.
+The service SHALL allow only a separately authenticated profile owner, not an agent token or ordinary profile PATCH, to enable, widen, or revoke a versioned standing submission policy. It SHALL derive profile identity from authenticated credentials, enforce policy scope and caps at the pre-final boundary, and default to exact final-preview approval when no active policy covers the application. Campaign start alone SHALL NOT authorize submission.
 
 #### Scenario: A covered form reaches final review
 - **WHEN** an active owner-enabled policy covers the mode, role, destination, answer classes, and current caps, and all final machine checks pass
@@ -11,9 +11,17 @@ The service SHALL allow an authenticated profile owner to enable or revoke a ver
 - **WHEN** an application reaches the final boundary without an active covering policy
 - **THEN** the service creates or retains an exact fingerprinted owner approval and does not allow automatic final action
 
+#### Scenario: An agent tries to enable its own authority
+- **WHEN** a profile-bound agent token calls the policy mutation route or ordinary profile PATCH with a policy field
+- **THEN** the service rejects the change and leaves submission authorization unchanged
+
 #### Scenario: The owner narrows a policy while an application is queued
 - **WHEN** a queued application's prior decision refers to an older or revoked policy version
 - **THEN** the service re-evaluates the current policy before final action and holds the application if it is no longer covered
+
+#### Scenario: The owner revokes after review but before the click
+- **WHEN** the policy is revoked or a cap is reached after a pre-final review
+- **THEN** the immediately pre-click permit check rejects the stale decision and no final click occurs
 
 #### Scenario: Default automatic application mode is disabled
 - **WHEN** a role is covered by an active standing policy but the mode default is `autoApply: false`
@@ -24,7 +32,7 @@ The service SHALL allow an authenticated profile owner to enable or revoke a ver
 - **THEN** the service enforces that cap on reserved final actions across campaign waves and does not consume it for skipped records or duplicate discoveries
 
 ### Requirement: Automatic final review stops on factual and site exceptions
-The service SHALL hold automatic submission for unknown applicant facts, unconfirmed legal attestations, conflicting compensation or availability, employer authorship restrictions, authentication challenges, ambiguous destinations or final controls, changed form values, and uncertain earlier final actions. The hold SHALL identify the precise missing action, persist a resumable checkpoint, and release the sequential lane.
+The service SHALL hold automatic submission for unknown applicant facts, unconfirmed legal attestations, conflicting compensation or availability, employer authorship restrictions, authentication challenges, ambiguous destinations or final controls, changed form values, and uncertain earlier final actions, regardless of the mode's `requireConfirmationFor` setting. The hold SHALL identify the precise missing action, persist a resumable checkpoint, and release the sequential lane.
 
 #### Scenario: A required legal question has no confirmed answer
 - **WHEN** the form asks a work-authorization or other legal question absent from valid profile facts

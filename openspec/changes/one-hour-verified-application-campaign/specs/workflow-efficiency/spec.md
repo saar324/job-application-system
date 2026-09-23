@@ -12,7 +12,7 @@ The system SHALL report wall-clock and active time from fresh candidate acquisit
 - **THEN** the report includes attributable reserve acquisition and upkeep in its steady-state throughput or explicitly labels the measurement as preloaded-queue latency
 
 ### Requirement: The one-hour target has staged quality-preserving gates
-The service SHALL treat 100 new suitable verified receipts in 60 minutes as an unproven target until a complete live campaign meets it within configured caps and source limits. It SHALL gate rollout through fixture correctness, staging shadow decisions, a small opted-in live cohort, 10 receipts in six minutes, and 25 in fifteen minutes. A speed gain SHALL NOT compensate for unsupported claims, unconfirmed legal answers, duplicate final actions, false receipts, or privacy violations.
+The service SHALL treat 100 new suitable verified receipts in 60 minutes as an unproven target until a complete live campaign meets it within configured caps and source limits, with fresh candidate acquisition and attributable reserve upkeep inside the measured window. A preloaded-queue test SHALL NOT establish the end-to-end target. It SHALL gate rollout through fixture correctness, fully audited staging shadow decisions, a small opted-in live cohort with an answer/fit audit, 10 receipts in six minutes, and 25 in fifteen minutes. A speed gain SHALL NOT compensate for unsupported claims, unconfirmed legal answers, duplicate final actions, false receipts, or privacy violations.
 
 #### Scenario: Fewer than 100 eligible roles are available
 - **WHEN** a full campaign cannot assemble 100 suitable, unapplied, reachable postings

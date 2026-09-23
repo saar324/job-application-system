@@ -3,6 +3,10 @@
 ### Requirement: Final machine review uses the live completed form
 Before any automatic final action, the worker SHALL inspect all reachable form steps, compare observed values with the typed answer plan, verify required fields and supported optional fields, check upload identity and client-side persistence, and detect validation errors or newly revealed questions. It SHALL bind the result to a form fingerprint and destination.
 
+#### Scenario: A field contains drafted prose
+- **WHEN** a prose answer is evidence-grounded, passes the current policy, and every other final check succeeds
+- **THEN** drafted prose alone does not force a new owner approval
+
 #### Scenario: A value appears in the UI but was not persisted
 - **WHEN** a contact field or radio choice displays a value but the application state or reopened control does not retain it
 - **THEN** the worker does not submit and repairs or holds the form before another review
