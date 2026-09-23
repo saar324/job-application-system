@@ -2,7 +2,7 @@ export function publicFeedUrl(sourceId, { query = "engineer", page = 1, limit = 
   if (sourceId === "jobgether") {
     const url = new URL("https://jobgether.com/api/v1/jobs");
     url.search = new URLSearchParams({ keyword: query, locations: "europe,bulgaria",
-      contractType: "full-time", remoteType: "full-remote", sort: "date",
+      contractType: "full-time", remoteType: "full-remote", sort: "relevance",
       page: String(page), limit: String(Math.min(25, limit)) }).toString();
     return url.toString();
   }

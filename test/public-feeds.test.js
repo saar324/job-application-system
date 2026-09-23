@@ -7,6 +7,7 @@ test("Jobgether official API query is bounded and normalized", () => {
   assert.equal(url.pathname, "/api/v1/jobs");
   assert.equal(url.searchParams.get("locations"), "europe,bulgaria");
   assert.equal(url.searchParams.get("remoteType"), "full-remote");
+  assert.equal(url.searchParams.get("sort"), "relevance");
   assert.equal(url.searchParams.get("limit"), "25");
   const parsed = parsePublicFeed("jobgether", { jobs: [{ id: "one", title: "Backend Engineer",
     company: "Acme", url: "https://jobgether.com/offer/one", location: "Europe",

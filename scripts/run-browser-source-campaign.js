@@ -65,8 +65,9 @@ async function searchSource(source, policy) {
   const items = new Map(); const visitedListings = new Set(); const visitedDetails = new Set(); const errors = [];
   let nextUrl = source.url; let pagesVisited = 0; let requestsMade = 0; let rateLimited = false;
   try {
-    const feedUrl = publicFeedUrl(source.id, { query: options.query ?? "engineer",
-      limit: source.id === "remotive" || source.id === "weworkremotely" ? 100 : 25 });
+    const feedQueries = source.id === "jobgether" ? jobgetherQueries(options.query) : [options.query ?? "engineer"];
+    const feedUrl = publicFeedUrl(source.id, { query: feedQueries[0],
+      limit: source.id === "remotive" || source.id === "weworkremotely" ? 100 : 10 });
     if (feedUrl) {
       const response = await fetch(feedUrl, { headers: { "user-agent": "job-application-system/1.0 personal search" },
         signal: AbortSignal.timeout(policy.navigationTimeoutMs) });
@@ -82,12 +83,14 @@ async function searchSource(source, policy) {
         }
         nextUrl = null;
         const seeds = new Map(feed.items.map((item) => [item.listingUrl, item]));
-        let hasMore = feed.hasMore;
-        while (hasMore && pagesVisited < policy.maxListingPages && requestsMade < policy.maxRequests
+        let hasMore = feedQueries.length === 1 && feed.hasMore;
+        while (pagesVisited < policy.maxListingPages && requestsMade < policy.maxRequests
           && seeds.size < policy.maxCandidates) {
+          const query = feedQueries[pagesVisited] ?? feedQueries[0];
+          if (!hasMore && pagesVisited >= feedQueries.length) break;
           const pageNumber = pagesVisited + 1;
-          const pageUrl = publicFeedUrl(source.id, { query: options.query ?? "engineer",
-            page: pageNumber, limit: 25 });
+          const pageUrl = publicFeedUrl(source.id, { query,
+            page: feedQueries.length === 1 ? pageNumber : 1, limit: feedQueries.length === 1 ? 25 : 10 });
           const pageResponse = await fetch(pageUrl, { headers: {
             "user-agent": "job-application-system/1.0 personal search"
           }, signal: AbortSignal.timeout(policy.navigationTimeoutMs) });
@@ -99,7 +102,7 @@ async function searchSource(source, policy) {
           }
           const nextFeed = parsePublicFeed(source.id, await pageResponse.text());
           for (const item of nextFeed.items) seeds.set(item.listingUrl, item);
-          hasMore = nextFeed.hasMore;
+          hasMore = feedQueries.length === 1 && nextFeed.hasMore;
         }
         const detailQueue = [...seeds.keys()].slice(0, policy.maxDetailPages);
         while (detailQueue.length && requestsMade < policy.maxRequests && items.size < policy.maxCandidates) {
@@ -211,6 +214,11 @@ async function applyBroadSearch(page, query, location) {
 }
 
 function escapePattern(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+function jobgetherQueries(query) {
+  if (query && String(query).trim().toLowerCase() !== "engineer") return [String(query).trim()];
+  return ["AI engineer", "backend engineer", "full stack engineer", "frontend engineer", "GIS developer"];
+}
 
 async function settle(page) {
   await page.waitForLoadState("networkidle", { timeout: 1_500 }).catch(() => undefined);
