@@ -375,9 +375,9 @@ async function readControl(locator, field) {
         .filter((item) => item.name === element.name && item.form === element.form);
       const selected = group.find((item) => item.checked);
       if (!selected) return "";
-      if (selected.value !== "[object Object]") return selected.value;
       const label = selected.id ? document.querySelector(`label[for="${CSS.escape(selected.id)}"]`) : null;
-      return (label?.innerText || selected.closest("label")?.innerText || "").trim().replace(/\s+/g, " ");
+      return (label?.innerText || selected.closest("label")?.innerText || selected.value || "")
+        .trim().replace(/\s+/g, " ");
     }
     return element.value;
   });
@@ -450,8 +450,11 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
       const expected = field.type === "file" ? path.basename(String(answer.value))
         : field.type === "checkbox" ? Boolean(answer.value === true || normalize(answer.value) === "yes" || normalize(answer.value) === "true")
           : field.type === "radio" ? normalize(answer.value) : String(answer.value);
+      const radioValue = field.type === "radio" ? await locator.evaluate((element) =>
+        [...document.querySelectorAll('input[type="radio"]')]
+          .find((item) => item.name === element.name && item.form === element.form && item.checked)?.value ?? "") : "";
       const matches = field.type === "file" ? observed.some((file) => file.name === expected && file.size > 0)
-        : field.type === "radio" ? normalize(observed) === expected
+        : field.type === "radio" ? normalize(observed) === expected || normalize(radioValue) === expected
           : field.tag === "select" ? field.options.some((option) => option.value === observed
             && (normalize(option.label) === normalize(answer.value) || normalize(option.value) === normalize(answer.value)))
             : observed === expected;
