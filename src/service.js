@@ -5,6 +5,7 @@ import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailab
 import { telemetry as defaultTelemetry } from "./telemetry.js";
 import { roleKeys } from "./discovery/handled-roles.js";
 import { scoreOpportunity } from "./discovery/scoring.js";
+import { officialAtsDestination, revalidateOfficialAtsRole } from "./discovery/official-ats.js";
 import { policyCovers, hardPolicyHolds, LEGAL_ATTESTATION_FIELD } from "./standing-policy.js";
 
 function now() { return new Date().toISOString(); }
@@ -15,7 +16,8 @@ export class ApplicationService {
   #activeExecutions = 0;
   #executionWaiters = [];
 
-  constructor({ store, config, adapter, profiles, documentStager, credentialVault, telemetry = defaultTelemetry }) {
+  constructor({ store, config, adapter, profiles, documentStager, credentialVault,
+    telemetry = defaultTelemetry, fetchImpl = fetch }) {
     this.store = store;
     this.config = config;
     this.adapter = adapter;
@@ -23,6 +25,7 @@ export class ApplicationService {
     this.documentStager = documentStager;
     this.credentialVault = credentialVault;
     this.telemetry = telemetry;
+    this.fetchImpl = fetchImpl;
   }
 
   list(collection, profileId) {
@@ -181,7 +184,7 @@ export class ApplicationService {
 
   async requestApplication(opportunityId, input, identity) {
     assertNoSensitiveAnswerFields(input.answers, "application answers");
-    const initialOpportunity = this.store.snapshot().opportunities.find(
+    let initialOpportunity = this.store.snapshot().opportunities.find(
       (item) => item.id === opportunityId && item.profileId === identity.profileId
     );
     if (!initialOpportunity) throw new ClientError(404, "opportunity not found");
@@ -189,6 +192,10 @@ export class ApplicationService {
     const modeConfig = this.config.modes[mode];
     if (!modeConfig) throw new ClientError(400, `unknown mode: ${mode}`);
     const profile = this.profiles ? await this.profiles.get(identity.profileId) : null;
+    if (policyCovers(profile?.standingSubmissionPolicy, initialOpportunity, mode)
+      && !verifiedDiscoveryIsFresh(initialOpportunity, mode)) {
+      initialOpportunity = await this.#refreshDiscoveryVerification(initialOpportunity);
+    }
     const profileStatus = this.profiles
       ? await this.profiles.status(identity.profileId, mode, this.config.defaultMode) : null;
     const modePreferences = mode === "freelance"
@@ -295,6 +302,11 @@ export class ApplicationService {
     const application = this.store.snapshot().applications.find((item) => item.id === applicationId);
     if (!application) throw new ClientError(404, "application not found");
     const profile = await this.profiles?.get(application.profileId);
+    const initialOpportunity = this.store.snapshot().opportunities.find((item) => item.id === application.opportunityId);
+    if (initialOpportunity && policyCovers(profile?.standingSubmissionPolicy, initialOpportunity, application.mode)
+      && !verifiedDiscoveryIsFresh(initialOpportunity, application.mode)) {
+      await this.#refreshDiscoveryVerification(initialOpportunity);
+    }
     return this.store.mutate(async (state) => {
       const current = state.applications.find((item) => item.id === applicationId);
       const opportunity = state.opportunities.find((item) => item.id === current?.opportunityId);
@@ -372,6 +384,22 @@ export class ApplicationService {
         { decision: decision.decision, reasonCodes, policyVersion: decision.policyVersion });
       return { decision: decision.decision, reasonCodes,
         ...(decision.decision === "permit" ? { permit: decision.id } : {}) };
+    });
+  }
+
+  async #refreshDiscoveryVerification(opportunity) {
+    if (!opportunity?.discoveryVerification || !officialAtsDestination(opportunity)
+      || opportunity.validThrough && Date.parse(opportunity.validThrough) <= Date.now()) return opportunity;
+    if (!await revalidateOfficialAtsRole(opportunity, this.fetchImpl)) return opportunity;
+    return this.store.mutate((state) => {
+      const current = state.opportunities.find((item) => item.id === opportunity.id);
+      if (!current || current.profileId !== opportunity.profileId
+        || current.applyUrl !== opportunity.applyUrl || current.title !== opportunity.title
+        || current.userRequested === true || current.direct === true) return current ?? opportunity;
+      current.discoveryVerification.verifiedAt = now();
+      audit(state, { actorId: "system-discovery-refresh", profileId: current.profileId },
+        "opportunity.discovery_revalidated", current.id, { source: current.source });
+      return current;
     });
   }
 

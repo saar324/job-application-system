@@ -12,6 +12,7 @@ import { telemetry } from "../telemetry.js";
 import { normalizeOpportunity } from "./normalization.js";
 import { runIdempotent } from "../idempotency.js";
 import { isHandledRole, knownRoleIndex, roleKeys } from "./handled-roles.js";
+import { officialAtsDestination } from "./official-ats.js";
 
 const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever].map((source) => [source.id, source]));
 
@@ -368,6 +369,9 @@ export class DiscoveryService {
           errors.push({ source: scored.source, stage: "application_destination", error: error.message });
         }
       }
+      // This flag is derived from a server-fetched official ATS row and its
+      // stable role URL, never from caller-supplied source metadata.
+      scored.applicationDestinationVerified = officialAtsDestination(scored);
       if (isHandled(scored)) {
         excluded += 1;
         continue;
