@@ -714,7 +714,12 @@ export async function automateApplication({ page, profile, opportunity, applicat
   // not incorrectly classify a supported form as empty.
   await page.locator("input, textarea, select, button, iframe").first()
     .waitFor({ state: "attached", timeout: 10_000 }).catch(() => undefined);
-  await page.waitForTimeout(250);
+  const surfaceDeadline = Date.now() + 10_000;
+  while (Date.now() < surfaceDeadline) {
+    if (await findAction(page).catch(() => null)) break;
+    await page.waitForTimeout(200);
+  }
+  await page.waitForTimeout(150);
   timings.loadMs = performance.now() - attemptStarted;
   const observedFields = new Map();
   const visitedSteps = new Set();
