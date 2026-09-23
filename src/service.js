@@ -6,6 +6,7 @@ import { telemetry as defaultTelemetry } from "./telemetry.js";
 import { roleKeys } from "./discovery/handled-roles.js";
 import { scoreOpportunity } from "./discovery/scoring.js";
 import { officialAtsDestination, revalidateOfficialAtsRole } from "./discovery/official-ats.js";
+import { buildWorkflowReport, recordWorkflowStage } from "./workflow-report.js";
 import { policyCovers, hardPolicyHolds, LEGAL_ATTESTATION_FIELD } from "./standing-policy.js";
 
 function now() { return new Date().toISOString(); }
@@ -102,6 +103,11 @@ export class ApplicationService {
       modelOutputTokens: null,
       coordinatorTokens: null
     };
+  }
+
+  campaignWorkflowReport(campaignId, profileId) {
+    const state = this.store.snapshot();
+    return buildWorkflowReport(state, { ...this.campaignStatus(campaignId, profileId, state), profileId });
   }
 
   async addOpportunity(input, identity, { serverVerifiedDiscovery = false } = {}) {
@@ -285,6 +291,9 @@ export class ApplicationService {
         });
       }
       audit(state, identity, "application.requested", application.id, { status: application.status });
+      recordWorkflowStage(state, identity, application.id, "preparation", {
+        campaignId: application.campaignId, applicationId: application.id, outcome: application.status
+      });
       return application;
     });
     this.telemetry.count("applications.admitted", 1, { mode, status: saved.status });
@@ -382,6 +391,9 @@ export class ApplicationService {
       current.finalSubmissionDecision = decision;
       audit(state, { actorId: "worker", profileId: current.profileId }, "application.final_decision", current.id,
         { decision: decision.decision, reasonCodes, policyVersion: decision.policyVersion });
+      recordWorkflowStage(state, { actorId: "worker", profileId: current.profileId }, current.id,
+        "final_decision", { campaignId: current.campaignId, applicationId: current.id,
+          attemptId, outcome: decision.decision });
       return { decision: decision.decision, reasonCodes,
         ...(decision.decision === "permit" ? { permit: decision.id } : {}) };
     });
@@ -435,6 +447,9 @@ export class ApplicationService {
       decision.consumedAt = now();
       audit(state, { actorId: "worker", profileId: current.profileId }, "application.final_permit_consumed", current.id,
         { policyVersion: policy.version });
+      recordWorkflowStage(state, { actorId: "worker", profileId: current.profileId }, current.id,
+        "final_action", { campaignId: current.campaignId, applicationId: current.id,
+          attemptId: input.attemptId, outcome: "permit_consumed" });
       return { committed: true };
     });
   }
@@ -569,6 +584,14 @@ export class ApplicationService {
       }
       application.updatedAt = now();
       audit(state, identity, "confirmation.resolved", confirmation.id, { status: confirmation.status });
+      recordWorkflowStage(state, identity, application.id, "owner_hold", {
+        campaignId: application.campaignId, applicationId: application.id,
+        outcome: confirmation.status,
+        durationMs: Math.max(0, Date.parse(confirmation.resolvedAt) - Date.parse(confirmation.createdAt))
+      });
+      if (application.status === "rejected") recordWorkflowStage(state, identity, application.id,
+        "terminal_failure", { campaignId: application.campaignId, applicationId: application.id,
+          outcome: "owner_rejected" });
       return application;
     });
     if (result.status === "queued") this.enqueue(result.id);
@@ -637,6 +660,10 @@ export class ApplicationService {
         application.updatedAt = now();
         audit(state, identity, "confirmation.batch_approved", confirmation.id,
           { applicationId: application.id, previewFingerprint: confirmation.previewFingerprint });
+        recordWorkflowStage(state, identity, application.id, "owner_hold", {
+          campaignId: application.campaignId, applicationId: application.id, outcome: "batch_approved",
+          durationMs: Math.max(0, Date.parse(confirmation.resolvedAt) - Date.parse(confirmation.createdAt))
+        });
       }
       return matches.map(({ application }) => application);
     });
@@ -659,6 +686,7 @@ export class ApplicationService {
         target: input.target, reserve: input.reserve, mode: input.mode,
         sources: input.sources ?? [], fallbackSources: input.fallbackSources ?? [], queryPlan: input.queryPlan ?? []
       });
+      recordWorkflowStage(state, identity, input.id, "discovery", { campaignId: input.id, outcome: "started" });
       return this.campaignStatus(input.id, identity.profileId, state);
     });
   }
@@ -671,8 +699,16 @@ export class ApplicationService {
         found: input.found, qualifying: input.qualifying, excluded: input.excluded,
         handledFiltered: input.handledFiltered, selectedOpportunityIds: input.selectedOpportunityIds ?? [],
         destinationPending: input.destinationPending ?? 0,
-        applicationIds: input.applicationIds ?? [], errors: input.errors ?? []
+        applicationIds: input.applicationIds ?? [], errors: input.errors ?? [],
+        sourceYield: input.sourceYield ?? [], durations: input.durations ?? {}
       });
+      for (const [stage, durationMs] of [["discovery", input.durations?.fetchMs],
+        ["screening", input.durations?.screeningMs], ["destination", input.durations?.destinationMs]]) {
+        recordWorkflowStage(state, identity, campaignId, stage, { campaignId, durationMs,
+          found: input.found, qualifying: input.qualifying, excluded: input.excluded,
+          handledFiltered: input.handledFiltered, destinationPending: input.destinationPending,
+          outcome: "completed" });
+      }
       return this.campaignStatus(campaignId, identity.profileId, state);
     });
   }
@@ -683,6 +719,7 @@ export class ApplicationService {
       audit(state, identity, "campaign.failed", campaignId, {
         error: String(error?.message ?? error).slice(0, 1000)
       });
+      recordWorkflowStage(state, identity, campaignId, "terminal_failure", { campaignId, outcome: "campaign_failed" });
       return this.campaignStatus(campaignId, identity.profileId, state);
     });
   }
@@ -703,6 +740,10 @@ export class ApplicationService {
         rateLimited: input.rateLimited === true, exhausted: input.exhausted === true,
         errors: input.errors ?? []
       });
+      recordWorkflowStage(state, identity, campaignId, "discovery", { campaignId,
+        sourceId: input.sourceId, found: input.found, qualifying: input.qualifying,
+        excluded: input.excluded, handledFiltered: input.handledFiltered,
+        outcome: input.rateLimited ? "rate_limited" : "completed" });
       return this.campaignStatus(campaignId, identity.profileId, state);
     });
   }
@@ -902,6 +943,10 @@ export class ApplicationService {
         externalId: input.externalId,
         questionCount: questionsAndAnswers.length
       });
+      recordWorkflowStage(state, identity, application.id, "receipt", {
+        campaignId: application.campaignId, applicationId: application.id,
+        outcome: "manually_verified"
+      });
       return buildApplicationLogEntry(
         application,
         opportunity,
@@ -1051,6 +1096,9 @@ export class ApplicationService {
           message: "The server restarted during submission. Verify the remote site before retrying."
         });
         audit(state, { actorId: "system-recovery", profileId: item.profileId }, "application.recovery_review", item.id, {});
+        recordWorkflowStage(state, { actorId: "system-recovery", profileId: item.profileId },
+          item.id, "recovery", { campaignId: item.campaignId, applicationId: item.id,
+            attemptId: item.claim?.attemptId, outcome: "uncertain" });
       }
       return ids;
     });
@@ -1081,6 +1129,9 @@ export class ApplicationService {
         queueMs: application.queuedAt ? Math.max(0, Date.parse(claimedAt) - Date.parse(application.queuedAt)) : null
       });
       audit(state, identity, "application.claimed", application.id, { adapter: this.adapter.name, attemptId });
+      recordWorkflowStage(state, identity, application.id, "worker", {
+        campaignId: application.campaignId, applicationId: application.id,
+        attemptId, outcome: "claimed" });
       return { application, opportunity, identity, attemptId };
     });
     if (!claimed) return null;
@@ -1106,6 +1157,9 @@ export class ApplicationService {
         const attempt = state.attempts.find((entry) => entry.id === attemptId);
         if (attempt) Object.assign(attempt, { status: "submitting", executionStartedAt });
         audit(state, identity, "application.submitting", item.id, { adapter: this.adapter.name, attemptId });
+        recordWorkflowStage(state, identity, item.id, "worker", {
+          campaignId: item.campaignId, applicationId: item.id,
+          attemptId, outcome: "started" });
         return item;
       });
       if (!executable) return null;
@@ -1152,6 +1206,9 @@ export class ApplicationService {
         const attempt = state.attempts?.find((entry) => entry.id === attemptId);
         if (attempt) Object.assign(attempt, { status: "failed", completedAt: item.updatedAt, errorCode: "execution_failed" });
         audit(state, identity, "application.failed", item.id, { error: error.message });
+        recordWorkflowStage(state, identity, item.id, "terminal_failure", {
+          campaignId: item.campaignId, applicationId: item.id, attemptId,
+          outcome: "execution_failed" });
       });
       this.telemetry.count("applications.failed", 1, { adapter: this.adapter.name, reason: "execution_failed" });
       throw error;
@@ -1176,6 +1233,27 @@ export class ApplicationService {
       const recorded = state.audit.some((entry) => entry.action === "application.submitted"
         && entry.subjectId === item.id && entry.details?.attemptId === attemptId);
       if (!recorded) audit(state, identity, "application.submitted", item.id, { receipt, attemptId });
+      if (!state.audit.some((entry) => entry.action === "workflow.stage"
+        && entry.subjectId === item.id && entry.details?.stage === "final_action"
+        && entry.details?.attemptId === attemptId)) {
+        recordWorkflowStage(state, identity, item.id, "final_action", {
+          campaignId: item.campaignId, applicationId: item.id, attemptId,
+          outcome: "inferred_from_receipt"
+        });
+      }
+      recordWorkflowStage(state, identity, item.id, "receipt", {
+        campaignId: item.campaignId, applicationId: item.id, attemptId,
+        outcome: receipt.simulated === true ? "simulated" : receipt.manuallyVerified === true
+          ? "manually_verified" : "adapter_verified",
+        durationMs: receipt.metrics?.receiptMs });
+      if (Number.isFinite(receipt.metrics?.activeMs)) recordWorkflowStage(state, identity, item.id,
+        "worker", { campaignId: item.campaignId, applicationId: item.id,
+          attemptId, outcome: "completed", durationMs: receipt.metrics.activeMs,
+          modelCalls: receipt.metrics.draftCalls, browserSteps: receipt.metrics.steps });
+      if (Number.isFinite(receipt.metrics?.planFillMs)) recordWorkflowStage(state, identity, item.id,
+        "preparation", { campaignId: item.campaignId, applicationId: item.id,
+          attemptId, outcome: "completed", durationMs: receipt.metrics.planFillMs,
+          modelCalls: receipt.metrics.draftCalls });
       return item;
     });
     recordWorkerMetrics(this.telemetry, receipt.metrics, "submitted");
@@ -1196,6 +1274,9 @@ export class ApplicationService {
       if (attempt) Object.assign(attempt, { status: "transient_retry", completedAt: item.updatedAt,
         errorCode: "worker_stopped_before_final_action" });
       audit(state, identity, "application.transient_retry", item.id, { reason: error.message, retry: retries + 1 });
+      recordWorkflowStage(state, identity, item.id, "recovery", {
+        campaignId: item.campaignId, applicationId: item.id, attemptId,
+        outcome: "transient_retry" });
       return item;
     });
     if (saved) this.enqueue(saved.id);
@@ -1221,6 +1302,10 @@ export class ApplicationService {
         if (!duplicate) addConfirmation(state, item, requirement, error.message);
       }
       audit(state, identity, "application.input_required", item.id, { requirements: error.requirements });
+      recordWorkflowStage(state, identity, item.id, "preparation", {
+        campaignId: item.campaignId, applicationId: item.id, attemptId,
+        outcome: "input_required", durationMs: error.metrics?.planFillMs,
+        modelCalls: error.metrics?.draftCalls });
       return item;
     });
     this.telemetry.count("applications.confirmation_required", 1,
@@ -1241,6 +1326,9 @@ export class ApplicationService {
         errorCode: error.reasonCode ?? "posting_unavailable", workerMetrics: safeWorkerMetrics(error.metrics) });
       audit(state, identity, "application.posting_unavailable", item.id,
         { reasonCode: error.reasonCode ?? "posting_unavailable" });
+      recordWorkflowStage(state, identity, item.id, "terminal_failure", {
+        campaignId: item.campaignId, applicationId: item.id, attemptId,
+        outcome: "posting_unavailable" });
       return item;
     });
     this.telemetry.count("applications.posting_unavailable", 1,
@@ -1264,6 +1352,9 @@ export class ApplicationService {
         addConfirmation(state, item, { ...requirement, action: "manual_review" }, error.message);
       }
       audit(state, identity, "application.review_required", item.id, { requirements: error.requirements });
+      recordWorkflowStage(state, identity, item.id, "recovery", {
+        campaignId: item.campaignId, applicationId: item.id, attemptId,
+        outcome: "review_required", durationMs: error.metrics?.activeMs });
       return item;
     });
     this.telemetry.count("applications.manual_review", 1,
@@ -1289,6 +1380,9 @@ export class ApplicationService {
         workerMetrics: safeWorkerMetrics(error.metrics) });
       audit(state, identity, "application.research_required", item.id,
         { questionCount: item.researchQuestions.length });
+      recordWorkflowStage(state, identity, item.id, "preparation", {
+        campaignId: item.campaignId, applicationId: item.id, attemptId,
+        outcome: "research_required", durationMs: error.metrics?.activeMs });
       return item;
     });
     recordWorkerMetrics(this.telemetry, error.metrics, "research_required");
@@ -1370,6 +1464,9 @@ function addConfirmation(state, application, requirement, fallback) {
   };
   confirmation.presentation = buildPresentation(confirmation);
   state.confirmations.push(confirmation);
+  recordWorkflowStage(state, { actorId: "system-confirmation", profileId: application.profileId },
+    application.id, "owner_hold", { campaignId: application.campaignId,
+      applicationId: application.id, outcome: confirmation.kind });
 }
 
 function buildPresentation(confirmation) {

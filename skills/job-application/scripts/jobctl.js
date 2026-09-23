@@ -27,6 +27,7 @@ const routes = {
   sources: ["GET", "/v1/discovery/sources"], query: ["POST", "/v1/discovery/query"],
   "campaign-start": ["POST", "/v1/campaigns"], "campaigns": ["GET", "/v1/campaigns"],
   "campaign-status": ["GET", `/v1/campaigns/${id}`],
+  "campaign-report": ["GET", `/v1/campaigns/${id}/workflow-report`],
   "campaign-approve": ["POST", `/v1/campaigns/${id}/approve`],
   "campaign-add-source": ["POST", `/v1/campaigns/${id}/source-results`],
   direct: ["POST", "/v1/direct-applications"],
@@ -41,8 +42,8 @@ const routes = {
   "record-employer-status": ["POST", `/v1/applications/${id}/employer-status`],
   confirm: ["POST", `/v1/confirmations/${id}`], reject: ["POST", `/v1/confirmations/${id}`]
 };
-if ((!routes[command] && command !== "callback") || (["apply", "campaign-status", "campaign-approve", "campaign-add-source", "research", "refresh-preview", "record-submission", "record-employer-status", "confirm", "reject", "callback"].includes(command) && !id)) {
-  console.error("usage: jobctl <health|me|profile|profile-update|sources|scan|query|campaign-start|campaigns|campaign-status ID|campaign-approve ID|campaign-add-source ID|direct|opportunities|applications|application-log|application-metrics|inbox|approve-batch|research ID|refresh-preview ID|add|apply ID|record-submission ID|record-employer-status ID|confirm ID|reject ID|callback DATA>");
+if ((!routes[command] && command !== "callback") || (["apply", "campaign-status", "campaign-report", "campaign-approve", "campaign-add-source", "research", "refresh-preview", "record-submission", "record-employer-status", "confirm", "reject", "callback"].includes(command) && !id)) {
+  console.error("usage: jobctl <health|me|profile|profile-update|sources|scan|query|campaign-start|campaigns|campaign-status ID|campaign-report ID|campaign-approve ID|campaign-add-source ID|direct|opportunities|applications|application-log|application-metrics|inbox|approve-batch|research ID|refresh-preview ID|add|apply ID|record-submission ID|record-employer-status ID|confirm ID|reject ID|callback DATA>");
   process.exit(2);
 }
 

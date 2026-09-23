@@ -145,6 +145,9 @@ export class DiscoveryService {
       const recorded = await this.applicationService.recordCampaignScan(campaignId, {
         found: scan.found, qualifying: scan.qualifying, excluded: scan.excluded,
         handledFiltered: scan.handledFiltered,
+        sourceYield: scan.sourceYield.map((row) => ({ ...row,
+          selected: selected.filter((entry) => entry.opportunity.source === row.sourceId).length })),
+        durations: scan.durations,
         destinationPending: scan.items.length - ready.length,
         selectedOpportunityIds: selected.map((entry) => entry.opportunity.id),
         applicationIds, errors: scan.errors
@@ -278,12 +281,23 @@ export class DiscoveryService {
       if (!source) throw Object.assign(new Error(`unknown discovery source: ${id}`), { status: 400 });
       return source;
     });
+    const sourceYield = new Map(selected.map(({ id }) => [id, {
+      sourceId: id, found: 0, qualifying: 0, excluded: 0,
+      handledFiltered: 0, destinationPending: 0, selected: 0
+    }]));
+    const handledBySource = new Map();
     const internalErrors = [];
     const handledKeys = knownRoleIndex(this.applicationService.store.snapshot(), identity.profileId);
     const handledMatches = new Set();
     const isHandled = (role) => {
       if (!isHandledRole(role, handledKeys)) return false;
       handledMatches.add([...roleKeys(role)][0] ?? role.applyUrl ?? role.listingUrl);
+      const sourceId = role.source;
+      if (sourceYield.has(sourceId)) {
+        const perSource = handledBySource.get(sourceId) ?? new Set();
+        perSource.add([...roleKeys(role)][0] ?? role.applyUrl ?? role.listingUrl);
+        handledBySource.set(sourceId, perSource);
+      }
       return true;
     };
     const fetchStarted = performance.now();
@@ -308,6 +322,7 @@ export class DiscoveryService {
       onError: (error) => internalErrors.push({ source: source.id, ...error })
     })));
     telemetry.observe("discovery.fetch_ms", performance.now() - fetchStarted, { mode });
+    const fetchMs = performance.now() - fetchStarted;
     telemetry.count("discovery.provider_requests", requestCount, { mode });
 
     const errors = [...internalErrors];
@@ -321,6 +336,11 @@ export class DiscoveryService {
     const uniqueFound = [...new Map(found.filter((raw) => !isHandled(raw))
       .map((raw) => [`${raw.source}:${raw.externalId ?? raw.applyUrl}`, raw])).values()];
     const normalizedFound = uniqueFound.map((raw) => normalizeOpportunity(raw));
+    for (const raw of normalizedFound) {
+      if (sourceYield.has(raw.source)) sourceYield.get(raw.source).found += 1;
+    }
+    const screeningStarted = performance.now();
+    let destinationMs = 0;
     const scorerVersion = String(modePreferences.scorerVersion
       ?? this.config.discovery?.scorerVersion ?? "2");
     const shadowScorerVersion = this.config.discovery?.shadowScorerVersion
@@ -361,20 +381,29 @@ export class DiscoveryService {
       if (scored.scoreDetails.hardExclusion
         || (opportunistic ? !opportunisticQualified : scored.score < modeConfig.minimumScore)) {
         excluded += 1;
+        if (sourceYield.has(raw.source)) sourceYield.get(raw.source).excluded += 1;
         continue;
       }
       if (scored.applicationDestinationPending) {
+        const destinationStarted = performance.now();
         try { scored = await resolveEmployerApplicationUrl(scored, cachedFetch); }
         catch (error) {
           errors.push({ source: scored.source, stage: "application_destination", error: error.message });
         }
+        destinationMs += performance.now() - destinationStarted;
       }
       // This flag is derived from a server-fetched official ATS row and its
       // stable role URL, never from caller-supplied source metadata.
       scored.applicationDestinationVerified = officialAtsDestination(scored);
       if (isHandled(scored)) {
         excluded += 1;
+        if (sourceYield.has(raw.source)) sourceYield.get(raw.source).excluded += 1;
         continue;
+      }
+      if (sourceYield.has(raw.source)) {
+        sourceYield.get(raw.source).qualifying += 1;
+        if (scored.applicationDestinationPending) sourceYield.get(raw.source).destinationPending += 1;
+        else sourceYield.get(raw.source).selected += 1;
       }
       const opportunity = await this.applicationService.addOpportunity({
         ...scored, ...(input.campaignId ? { lastCampaignId: input.campaignId } : {})
@@ -401,6 +430,7 @@ export class DiscoveryService {
     telemetry.count("discovery.source_failures", errors.length, { mode });
     telemetry.observe("discovery.jobs_found", uniqueFound.length, { mode });
     telemetry.observe("discovery.scan_ms", performance.now() - scanStarted, { mode });
+    for (const [sourceId, roles] of handledBySource) sourceYield.get(sourceId).handledFiltered = roles.size;
     return {
       mode,
       sources: requestedSources,
@@ -411,6 +441,9 @@ export class DiscoveryService {
       readyToApply: profileStatus.readyToApply,
       missingForApplications: profileStatus.missingForApplications,
       errors,
+      sourceYield: [...sourceYield.values()],
+      durations: { fetchMs, screeningMs: Math.max(0, performance.now() - screeningStarted - destinationMs),
+        destinationMs, totalMs: performance.now() - scanStarted },
       items: qualifying
     };
   }

@@ -131,6 +131,13 @@ test("campaign HTTP start is idempotent and campaign reads stay profile-bound", 
     });
     assert.equal(status.status, 200);
     assert.equal((await status.json()).target, 10);
+    const report = await fetch(`${base}/v1/campaigns/${campaignId}/workflow-report`, {
+      headers: { authorization: "Bearer profile-one-token" }
+    });
+    assert.equal(report.status, 200);
+    assert.equal((await report.json()).counts.newVerified, 0);
+    const anonymous = await fetch(`${base}/v1/campaigns/${campaignId}/workflow-report`);
+    assert.equal(anonymous.status, 401);
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
