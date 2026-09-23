@@ -150,6 +150,7 @@ function uniqueJobs(jobs) {
 
 function jobLinkScore(url, text) {
   const path = `${url.pathname}${url.search}`;
+  if (/\/company\/[^/]+\/jobs\/[^/?#]+/i.test(path)) return 105;
   if (/\/(?:offers?|positions?|vacanc(?:y|ies)|openings?)\/[^/?#]+/i.test(path)) return 100;
   if (/\/companies\/[^/]+\/jobs\/[^/?#]+/i.test(path)) return 95;
   if (/\/jobs?\/(?!company-|companies|categories|locations?)[^/?#]+/i.test(path)) return 90;

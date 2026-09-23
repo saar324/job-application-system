@@ -32,6 +32,34 @@ test("browser source extraction returns structured jobs, likely detail links, an
   assert.equal(result.nextUrl, "https://jobs.example.test/jobs?page=2");
 });
 
+test("Remote Rocketship listing cards outrank job-category links and retain official apply destinations", () => {
+  const listing = `<!doctype html><html><body>
+    <a href="/jobs/architect/">architect jobs</a>
+    <a href="/company/qualysoft/jobs/gis-test-hungary-remote/">GIS Test and Deployment Specialist</a>
+    <a href="/jobs/software-engineer/">software engineer jobs</a>
+    <a href="/company/example/jobs/gis-platform-europe-remote/">GIS Platform Engineer</a>
+  </body></html>`;
+  const listingResult = extractSourcePage(listing,
+    "https://www.remoterocketship.com/country/europe/jobs/gis/", "remoterocketship");
+  assert.deepEqual(listingResult.jobLinks.slice(0, 2), [
+    "https://www.remoterocketship.com/company/qualysoft/jobs/gis-test-hungary-remote/",
+    "https://www.remoterocketship.com/company/example/jobs/gis-platform-europe-remote/"
+  ]);
+  const detail = `<!doctype html><html><head><script type="application/ld+json">${JSON.stringify({
+    "@context": "https://schema.org", "@type": "JobPosting", title: "GIS Test and Deployment Specialist",
+    hiringOrganization: { name: "Qualysoft" }, description: "GIS integration testing",
+    jobLocationType: "TELECOMMUTE", applicantLocationRequirements: { name: "Hungary" },
+    url: "https://www.remoterocketship.com/company/qualysoft/jobs/gis-test-hungary-remote/"
+  })}</script></head><body>
+    <a href="https://jobs.lever.co/qualysoft/20addfaa-44bb-45ef-bcaf-7b0b6c68af14">Apply Now</a>
+  </body></html>`;
+  const detailResult = extractSourcePage(detail, listingResult.jobLinks[0], "remoterocketship");
+  assert.equal(detailResult.jobs[0].location, "Hungary");
+  assert.equal(detailResult.jobs[0].applyUrl,
+    "https://jobs.lever.co/qualysoft/20addfaa-44bb-45ef-bcaf-7b0b6c68af14");
+  assert.equal(detailResult.jobs[0].applicationDestinationVerified, true);
+});
+
 test("browser source policy enforces conservative bounds and manual-only instructions", () => {
   const policy = sourceAutomationPolicy({ id: "eures",
     screeningNote: "Use manually because EURES prohibits scraping or automated extraction." },
