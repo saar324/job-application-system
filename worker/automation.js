@@ -651,9 +651,16 @@ async function findAction(page) {
     return selected ? [...document.forms].indexOf(selected) : -1;
   });
   const scoped = activeForm >= 0 ? actions.filter((item) => item.form === activeForm) : actions;
-  const unique = (items, final) => items.length === 1
-    ? { locator: items[0].locator, text: items[0].text, final }
-    : items.length > 1 ? { ambiguous: true, text: items.map((item) => item.text).join(" / ") } : null;
+  const unique = (items, final) => {
+    if (items.length === 1) return { locator: items[0].locator, text: items[0].text, final };
+    if (items.length > 1) {
+      const sameAction = items.every((item) => item.form === items[0].form
+        && normalize(item.text) === normalize(items[0].text));
+      if (sameAction) return { locator: items[0].locator, text: items[0].text, final };
+      return { ambiguous: true, text: items.map((item) => item.text).join(" / ") };
+    }
+    return null;
+  };
   // A landing-page Apply action takes precedence over unrelated page forms.
   const starts = actions.filter((item) => START_BUTTON.test(item.text));
   if (starts.length && activeForm < 0) return unique(starts, false);
