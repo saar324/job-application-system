@@ -32,6 +32,34 @@ test("browser source extraction returns structured jobs, likely detail links, an
   assert.equal(result.nextUrl, "https://jobs.example.test/jobs?page=2");
 });
 
+test("Remote Rocketship listing cards outrank job-category links and retain official apply destinations", () => {
+  const listing = `<!doctype html><html><body>
+    <a href="/jobs/architect/">architect jobs</a>
+    <a href="/company/examplevendor/jobs/map-test-hungary-remote/">Geospatial Test and Deployment Specialist</a>
+    <a href="/jobs/software-engineer/">software engineer jobs</a>
+    <a href="/company/example/jobs/map-platform-europe-remote/">Geospatial Platform Developer</a>
+  </body></html>`;
+  const listingResult = extractSourcePage(listing,
+    "https://www.remoterocketship.com/country/europe/jobs/maps/", "remoterocketship");
+  assert.deepEqual(listingResult.jobLinks.slice(0, 2), [
+    "https://www.remoterocketship.com/company/examplevendor/jobs/map-test-hungary-remote/",
+    "https://www.remoterocketship.com/company/example/jobs/map-platform-europe-remote/"
+  ]);
+  const detail = `<!doctype html><html><head><script type="application/ld+json">${JSON.stringify({
+    "@context": "https://schema.org", "@type": "JobPosting", title: "Geospatial Test and Deployment Specialist",
+    hiringOrganization: { name: "Example Vendor" }, description: "Geospatial integration testing",
+    jobLocationType: "TELECOMMUTE", applicantLocationRequirements: { name: "Hungary" },
+    url: "https://www.remoterocketship.com/company/examplevendor/jobs/map-test-hungary-remote/"
+  })}</script></head><body>
+    <a href="https://jobs.lever.co/examplevendor/00000000-0000-4000-8000-000000000001">Apply Now</a>
+  </body></html>`;
+  const detailResult = extractSourcePage(detail, listingResult.jobLinks[0], "remoterocketship");
+  assert.equal(detailResult.jobs[0].location, "Hungary");
+  assert.equal(detailResult.jobs[0].applyUrl,
+    "https://jobs.lever.co/examplevendor/00000000-0000-4000-8000-000000000001");
+  assert.equal(detailResult.jobs[0].applicationDestinationVerified, true);
+});
+
 test("browser source policy enforces conservative bounds and manual-only instructions", () => {
   const policy = sourceAutomationPolicy({ id: "eures",
     screeningNote: "Use manually because EURES prohibits scraping or automated extraction." },
