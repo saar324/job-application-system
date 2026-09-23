@@ -4,7 +4,8 @@ import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailab
   RetryableExecutionError } from "./adapters/errors.js";
 import { telemetry as defaultTelemetry } from "./telemetry.js";
 import { roleKeys } from "./discovery/handled-roles.js";
-import { policyCovers, hardPolicyHolds } from "./standing-policy.js";
+import { scoreOpportunity } from "./discovery/scoring.js";
+import { policyCovers, hardPolicyHolds, LEGAL_ATTESTATION_FIELD } from "./standing-policy.js";
 
 function now() { return new Date().toISOString(); }
 const inactive = (item) => ["skipped", "rejected", "failed"].includes(item.status);
@@ -30,10 +31,14 @@ export class ApplicationService {
 
   async recordStandingPolicyChange(policy, identity) {
     return this.store.mutate((state) => {
-      audit(state, identity, "standing_policy.changed", policy.id, {
-        version: policy.version, mode: policy.mode, dailyCap: policy.dailyCap,
-        campaignCap: policy.campaignCap
-      });
+      if (!state.audit.some((item) => item.profileId === identity.profileId
+        && item.action === "standing_policy.changed" && item.subjectId === policy.id
+        && item.details?.version === policy.version)) {
+        audit(state, identity, "standing_policy.changed", policy.id, {
+          version: policy.version, mode: policy.mode, dailyCap: policy.dailyCap,
+          campaignCap: policy.campaignCap
+        });
+      }
       return { version: policy.version };
     });
   }
@@ -96,14 +101,17 @@ export class ApplicationService {
     };
   }
 
-  async addOpportunity(input, identity) {
+  async addOpportunity(input, identity, { serverVerifiedDiscovery = false } = {}) {
     if (!input.title || !input.company || !input.applyUrl) {
       throw new ClientError(400, "title, company, and applyUrl are required");
     }
-    const dedupKey = input.dedupKey ?? buildDedupKey(input);
+    // Client-supplied score/source/provenance is useful for review but cannot
+    // establish authorization for an automatic final action.
+    const { discoveryVerification: _untrustedVerification, ...candidate } = input;
+    const dedupKey = candidate.dedupKey ?? buildDedupKey(candidate);
     const applicationUrl = normalizedApplicationUrl(input.applyUrl);
     return this.store.mutate(async (state) => {
-      const incomingKeys = roleKeys(input);
+      const incomingKeys = roleKeys(candidate);
       const sameRole = (entry) => {
         if ([...roleKeys(entry)].some((key) => !key.startsWith("role:") && incomingKeys.has(key))) return true;
         return state.applications.some((application) => application.profileId === identity.profileId
@@ -132,9 +140,13 @@ export class ApplicationService {
         return existing;
       }
       const item = {
-        ...input, id: randomUUID(), profileId: identity.profileId, dedupKey,
-        mode: input.mode ?? this.config.defaultMode, source: input.source ?? "agent",
-        score: Number(input.score ?? 0), status: "discovered", createdAt: now()
+        ...candidate, id: randomUUID(), profileId: identity.profileId, dedupKey,
+        mode: candidate.mode ?? this.config.defaultMode, source: candidate.source ?? "agent",
+        score: Number(candidate.score ?? 0), status: "discovered", createdAt: now(),
+        ...(serverVerifiedDiscovery && candidate.applicationDestinationVerified === true
+          && candidate.applicationDestinationPending !== true && candidate.userRequested !== true
+          ? { discoveryVerification: { sourceId: candidate.source ?? "agent", verifiedAt: now(),
+            score: Number(candidate.score ?? 0) } } : {})
       };
       if (!this.config.modes[item.mode]) throw new ClientError(400, `unknown mode: ${item.mode}`);
       state.opportunities.push(item);
@@ -182,7 +194,8 @@ export class ApplicationService {
     const modePreferences = mode === "freelance"
       ? profile?.preferences?.freelance : profile?.preferences?.fullTime;
     const covered = input.forceFinalApproval !== true
-      && policyCovers(profile?.standingSubmissionPolicy, initialOpportunity, mode);
+      && policyCovers(profile?.standingSubmissionPolicy, initialOpportunity, mode)
+      && verifiedDiscoveryIsFresh(initialOpportunity, mode);
     const submissionApproval = covered ? "automatic" : "always";
     if (!["automatic", "always"].includes(submissionApproval)) {
       throw new ClientError(400, `invalid submissionApproval for ${mode}`);
@@ -203,6 +216,12 @@ export class ApplicationService {
 
       const decision = evaluatePolicy({ opportunity, mode, modeConfig, answers: input.answers });
       if (covered) {
+        const freshScore = scoreOpportunity(opportunity, profile, mode,
+          { version: String(this.config.discovery?.scorerVersion ?? "2") });
+        if (freshScore.scoreDetails.hardExclusion || freshScore.score < modeConfig.minimumScore) {
+          decision.eligible = false;
+          decision.reasons.push(freshScore.scoreDetails.hardExclusion ?? "current fit score below minimum");
+        }
         decision.autoApply = true;
         decision.confirmations.push(...hardPolicyHolds({ opportunity, mode, answers: input.answers, profile })
           .filter((hold) => !decision.confirmations.some((existing) => existing.kind === hold.kind
@@ -284,6 +303,15 @@ export class ApplicationService {
       const policy = profile?.standingSubmissionPolicy;
       const reasonCodes = [];
       if (!policyCovers(policy, opportunity, current.mode)) reasonCodes.push("policy_not_covering");
+      if (!verifiedDiscoveryIsFresh(opportunity, current.mode)) reasonCodes.push("discovery_unverified_or_stale");
+      if (profile && opportunity) {
+        const freshScore = scoreOpportunity(opportunity, profile, current.mode,
+          { version: String(this.config.discovery?.scorerVersion ?? "2") });
+        if (freshScore.scoreDetails.hardExclusion
+          || freshScore.score < this.config.modes[current.mode].minimumScore) {
+          reasonCodes.push("current_fit_not_eligible");
+        }
+      }
       if (current.standingPolicyVersion !== policy?.version) reasonCodes.push("policy_version_changed");
       let destinationMatches = false;
       try {
@@ -316,7 +344,7 @@ export class ApplicationService {
         })) reasonCodes.push("answer_class_not_authorized");
         if (fields.some((field) => field.source === "drafted prose")
           && !policy?.answerClasses?.includes("grounded_prose")) reasonCodes.push("prose_not_authorized");
-        if (fields.some((field) => /(?:legal|authorize|consent|certify|agree|privacy policy)/i.test(field.label ?? ""))) {
+        if (fields.some((field) => LEGAL_ATTESTATION_FIELD.test(`${field.label ?? ""} ${field.key ?? ""}`))) {
           reasonCodes.push("legal_answer_unconfirmed");
         }
       }
@@ -1529,6 +1557,21 @@ function normalizedApplicationUrl(raw) {
     url.pathname = url.pathname.replace(/\/$/, "");
     return url.toString();
   } catch { return String(raw ?? "").replace(/\/$/, ""); }
+}
+
+function verifiedDiscoveryIsFresh(opportunity, mode) {
+  const verification = opportunity?.discoveryVerification;
+  if (!verification || opportunity.userRequested === true || opportunity.direct === true
+    || opportunity.mode !== mode || verification.sourceId !== opportunity.source
+    || opportunity.applicationDestinationVerified !== true
+    || opportunity.applicationDestinationPending === true
+    || !/^https:\/\//i.test(opportunity.applyUrl ?? "")) return false;
+  const verifiedAt = Date.parse(verification.verifiedAt);
+  if (!Number.isFinite(verifiedAt) || Date.now() - verifiedAt > 10 * 60_000
+    || verifiedAt > Date.now() + 60_000) return false;
+  if (opportunity.validThrough && (!Number.isFinite(Date.parse(opportunity.validThrough))
+    || Date.parse(opportunity.validThrough) <= Date.now())) return false;
+  return true;
 }
 
 function validateDirectUrl(raw) {

@@ -314,7 +314,7 @@ export class DiscoveryService {
     for (let index = 0; index < settled.length; index += 1) {
       const result = settled[index];
       if (result.status === "rejected") errors.push({ source: requests[index].source.id, error: result.reason.message });
-      else found.push(...result.value);
+      else found.push(...result.value.map((item) => ({ ...item, source: requests[index].source.id })));
     }
 
     const uniqueFound = [...new Map(found.filter((raw) => !isHandled(raw))
@@ -374,7 +374,7 @@ export class DiscoveryService {
       }
       const opportunity = await this.applicationService.addOpportunity({
         ...scored, ...(input.campaignId ? { lastCampaignId: input.campaignId } : {})
-      }, identity);
+      }, identity, { serverVerifiedDiscovery: true });
       const entry = { opportunity };
       const autoApplyDiscovered = input.prepareApplications === false ? false : modeConfig.autoApplyDiscovered;
       if (autoApplyDiscovered && scored.applicationDestinationPending) {

@@ -32,7 +32,8 @@ async function fixture() {
 
 async function prepared(service, extra = {}) {
   const role = await service.addOpportunity({ title: "Engineer", company: "Example",
-    applyUrl: "https://example.test/apply", score: 100, ...extra }, agent);
+    applyUrl: "https://example.test/apply", score: 100,
+    applicationDestinationVerified: true, ...extra }, agent, { serverVerifiedDiscovery: true });
   const application = await service.requestApplication(role.id, {}, agent);
   await service.store.mutate((state) => {
     const item = state.applications.find((entry) => entry.id === application.id);
@@ -96,7 +97,8 @@ test("owner cap allows one final attempt and rejects a concurrent second reserva
   await profiles.setStandingSubmissionPolicy("person", policy, owner);
   const first = await prepared(service);
   const secondRole = await service.addOpportunity({ title: "Engineer II", company: "Example",
-    applyUrl: "https://example.test/apply/two", score: 100 }, agent);
+    applyUrl: "https://example.test/apply/two", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
   const second = await service.requestApplication(secondRole.id, {}, agent);
   await service.store.mutate((state) => {
     const item = state.applications.find((entry) => entry.id === second.id);
@@ -128,6 +130,7 @@ test("HTTP policy mutation requires owner token bound to its profile", async () 
   try {
     assert.equal((await put("agent-secret")).status, 403);
     assert.equal((await put("owner-secret")).status, 200);
+    assert.deepEqual((await profiles.get("person")).standingPolicyHistory.map((entry) => entry.version), [1]);
     const other = await fetch(`${base}/v1/standing-submission-policy`, {
       headers: { authorization: "Bearer other-owner" } });
     assert.equal((await other.json()).policy, null);
@@ -136,4 +139,52 @@ test("HTTP policy mutation requires owner token bound to its profile", async () 
       body: "{}" });
     assert.equal(callback.status, 403);
   } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test("forged source, score, user intent, and direct URL cannot obtain standing authority", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", policy, owner);
+  const forged = await service.addOpportunity({ title: "Engineer", company: "Example",
+    applyUrl: "https://example.test/forged", source: "agent", score: 100,
+    userRequested: true, applicationDestinationVerified: true,
+    discoveryVerification: { sourceId: "agent", verifiedAt: new Date().toISOString(), score: 100 } }, agent);
+  assert.equal(forged.discoveryVerification, undefined);
+  const application = await service.requestApplication(forged.id, {}, agent);
+  assert.equal(application.finalApprovalRequired, true);
+  assert.equal(application.status, "waiting_confirmation");
+  const direct = await service.directApplication({ url: "https://example.test/direct" }, agent);
+  assert.equal(direct.application.finalApprovalRequired, true);
+});
+
+test("stale or closed verified discovery cannot receive a final permit", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", policy, owner);
+  const application = await prepared(service);
+  await service.store.mutate((state) => {
+    const opportunity = state.opportunities.find((item) => item.id === application.opportunityId);
+    opportunity.discoveryVerification.verifiedAt = new Date(Date.now() - 11 * 60_000).toISOString();
+  });
+  const stale = await service.prepareFinalSubmission(decisionInput(application));
+  assert.ok(stale.reasonCodes.includes("discovery_unverified_or_stale"));
+  await service.store.mutate((state) => {
+    const opportunity = state.opportunities.find((item) => item.id === application.opportunityId);
+    opportunity.discoveryVerification.verifiedAt = new Date().toISOString();
+    opportunity.validThrough = new Date(Date.now() - 60_000).toISOString();
+  });
+  const closed = await service.prepareFinalSubmission(decisionInput(application));
+  assert.ok(closed.reasonCodes.includes("discovery_unverified_or_stale"));
+});
+
+test("work authorization and sponsorship wording holds automatic final action", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", policy, owner);
+  const application = await prepared(service);
+  for (const label of ["Are you authorized to work in Germany?", "Will you require sponsorship?",
+    "Do you have a valid visa?", "Do you have the right to work in the EU?"]) {
+    const result = await service.prepareFinalSubmission(decisionInput(application, {
+      preview: { ...decisionInput(application).preview,
+        filled: [{ key: "legal_question", label, value: "Yes", source: "verified profile fact" }] }
+    }));
+    assert.ok(result.reasonCodes.includes("legal_answer_unconfirmed"), label);
+  }
 });
