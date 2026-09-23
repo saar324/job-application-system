@@ -591,6 +591,16 @@ test("a disabled duplicate Apply button does not make the start action ambiguous
   assert.equal(result.requirements[0].kind, "final_submission_approval");
 });
 
+test("identical submit controls in the same form are one semantic action", async () => {
+  const result = await run(`<form>
+    <label>First name <input name="first_name" required></label>
+    <button type="submit">Submit Application</button>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, profile, { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+});
+
 test("worker follows a plain Apply button and an Apply manually handoff", async () => {
   const result = await run(`
     <div id="landing">
