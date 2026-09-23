@@ -56,3 +56,11 @@ Current acceptance blockers are production cutover/snapshot, installed-skill syn
 live ATS browser comparison, verified candidate supply across the catalog, provider/tool-cost accounting, and fresh
 10/25/100-receipt trials within explicit owner caps. These require staged or live evidence and cannot be closed by
 additional unit tests alone.
+
+## Post-audit rollout update
+
+The production cutover, private rollback snapshot, and installed-skill synchronization were completed later on
+23 September; see [production rollout](production-rollout-2026-09-23-onehour.md). The live direct-intake duplicate probe
+passed for RapidSOS, Wayflyer, and n8n, but the branch has not yet been merged. The full staging catalog scan is running.
+Shadow review, live origin comparison, suitable supply, complete tool/token accounting, and the fresh receipt milestones
+remain unverified. The table above records the earlier audit and should not be read as the current deployment state.

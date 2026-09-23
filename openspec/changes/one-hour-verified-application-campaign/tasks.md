@@ -4,7 +4,7 @@ Checked boxes mean completed in the repository; they do not claim a production t
 ## 0. Baseline and release prerequisites
 
 - [ ] 0.1 Merge and deploy the 23 September cross-source/receipt-URL duplicate fix from `codex/all-source-campaign`; verify production direct intake returns existing submitted IDs for RapidSOS, Wayflyer, and n8n without queueing a new application.
-- [ ] 0.2 Capture production configuration, deployed skill version, daily caps, browser runtime, and source catalog version. Record a rollback snapshot without copying profile files or credentials into Git.
+- [x] 0.2 Capture production configuration, deployed skill version, daily caps, browser runtime, and source catalog version. Record a rollback snapshot without copying profile files or credentials into Git.
 - [x] 0.3 Add one campaign trace with privacy-safe timestamps, durations, source yield, model/tool calls, token counts, owner wait, worker phases, failed/blocked attempts, and verified receipt counts. Mark missing legacy data unknown.
 - [ ] 0.4 Re-run a representative baseline and publish a stage waterfall for a fresh cohort. Calculate per-new-receipt wall time with duplicates and failures in the denominator of spent work; do not extrapolate from preselected forms alone.
 
@@ -15,7 +15,7 @@ Checked boxes mean completed in the repository; they do not claim a production t
 - [ ] 1.2 Implement one pre-final policy evaluator across campaign, direct, and ordinary applications. Bind the decision to current role key, destination, complete observed form fingerprint, answer provenance, uploads, and policy version; invalidate it on any material change. Issue a short-lived permit and recheck policy version, cap, and revocation immediately before final click.
 - [x] 1.3 Remove unconditional `forceFinalApproval: true` from campaign selection when the policy covers the role. Keep exact fingerprinted final approval for uncovered forms and existing pending confirmations; do not auto-resolve old confirmations during migration.
 - [ ] 1.4 Define typed holds for unknown applicant facts, unconfirmed legal attestations, compensation/availability conflicts, account/OTP/CAPTCHA, employer AI-use or authorship restrictions, ambiguous final controls, changed values, and uncertain prior submit actions. Enforce these holds independently of `requireConfirmationFor`; release the lane and ask only the missing item.
-- [ ] 1.5 Update the repository and installed job-application skill to honor the authenticated standing policy, including direct links and browser handoff; remove redundant per-role/batch approval requests only for covered forms. Verify skill and server policy agree after deployment.
+- [x] 1.5 Update the repository and installed job-application skill to honor the authenticated standing policy, including direct links and browser handoff; remove redundant per-role/batch approval requests only for covered forms. Verify skill and server policy agree after deployment.
 - [ ] 1.6 Add authorization/state-machine regressions: agent token cannot enable or widen policy, unauthorized profile, revoked/expired/narrowed policy between decision and click, cap exceeded, changed preview, concurrent attempts, prior pending approval, legal answer with `requireConfirmationFor: []`, optional blank, and owner-selected `always` mode.
 
 ## 2. Reliable final browser path
