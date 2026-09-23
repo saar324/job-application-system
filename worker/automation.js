@@ -82,6 +82,8 @@ function flattenProfile(profile, currentUrl) {
     website: links.portfolio,
     "personal website": links.portfolio,
     "website url": links.portfolio,
+    "online cv or linkedin profile": links.linkedin,
+    "please share your online cv or linkedin profile with us": links.linkedin,
     resume: documents.resume,
     cv: documents.resume,
     "cover letter": documents.coverLetter,
@@ -94,6 +96,16 @@ function flattenProfile(profile, currentUrl) {
     const key = normalize(question);
     if (key && values[key] === undefined) values[key] = answer;
   }
+  const storedAnswers = profile.applicationAnswers ?? {};
+  values["what would be your availability to join us"] = storedAnswers["What is your availability?"]
+    ?? storedAnswers.Availability ?? storedAnswers.availability;
+  values["what are your strongest professionally used programming languages"] = storedAnswers.Languages;
+  values["__bulgaria work authorization"] = storedAnswers[
+    "Are you authorized to work in Bulgaria and for EU companies without visa sponsorship?"
+  ];
+  values["__visa sponsorship required"] = storedAnswers[
+    "Will you now or in the future require employer visa sponsorship?"
+  ];
   if (credentialMatches(profile.siteCredential, currentUrl)) {
     values.username = profile.siteCredential.username;
     values["user name"] = profile.siteCredential.username;
@@ -140,6 +152,17 @@ function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, appr
   const unrelated = /company|employer|referr|manager|supervisor|emergency|school|recruiter|contact person/i
     .test(`${field.label} ${field.section}`);
   if (unrelated) return undefined;
+  const bulgariaEligible = /\bbulgaria\b/i.test(String(opportunity.location ?? ""))
+    || /\bBG\b/.test(String(opportunity.location ?? ""));
+  if (/authoriz(?:ed|ation).*work/i.test(label)
+    && (bulgariaEligible || /\bbulgaria\b/i.test(label))
+    && profileValues["__bulgaria work authorization"] !== undefined) {
+    return { value: profileValues["__bulgaria work authorization"], source: "verified profile fact" };
+  }
+  if (/visa sponsorship|require sponsorship/i.test(label)
+    && profileValues["__visa sponsorship required"] !== undefined) {
+    return { value: profileValues["__visa sponsorship required"], source: "verified profile fact" };
+  }
   if (field.type === "file" && /\b(?:resume|cv)\b/.test(label) && profileValues.resume) {
     return { value: profileValues.resume, source: "profile" };
   }

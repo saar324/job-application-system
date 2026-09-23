@@ -623,6 +623,24 @@ test("rejected account credentials are discarded instead of entering durable sta
   assert.deepEqual(service.list("confirmations", identity.profileId)[0].response, {});
 });
 
+test("rejecting one application confirmation supersedes its remaining pending questions", async () => {
+  const service = await fixture();
+  service.adapter.submit = async () => {
+    throw new NeedsInputError("answers required", [
+      { kind: "missing_answer", message: "First", fields: ["first"] },
+      { kind: "missing_answer", message: "Second", fields: ["second"] }
+    ]);
+  };
+  const job = await opportunity(service);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const confirmations = service.list("confirmations", identity.profileId);
+  await service.resolveConfirmation(confirmations[0].id, { approved: false }, identity);
+  assert.deepEqual(service.list("confirmations", identity.profileId).map((item) => item.status).sort(),
+    ["rejected", "superseded"]);
+  assert.equal(service.list("applications", identity.profileId)[0].status, "rejected");
+});
+
 test("ordinary application answers reject credential-like fields", async () => {
   const service = await fixture();
   const job = await opportunity(service);

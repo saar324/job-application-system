@@ -317,6 +317,16 @@ export class ApplicationService {
       confirmation.response = safeAnswers;
       confirmation.resolvedBy = identity.actorId;
       const application = state.applications.find((item) => item.id === confirmation.applicationId);
+      if (input.approved !== true) {
+        for (const sibling of state.confirmations) {
+          if (sibling.applicationId === application.id && sibling.id !== confirmation.id
+            && sibling.status === "pending") {
+            sibling.status = "superseded";
+            sibling.resolvedAt = confirmation.resolvedAt;
+            sibling.resolvedBy = identity.actorId;
+          }
+        }
+      }
       if (requireApprovalOnRetry) {
         application.finalApprovalRequired = true;
         application.submissionApproval = "always";
@@ -560,9 +570,9 @@ export class ApplicationService {
     const status = failed ? "failed"
       : submitted.length >= target ? "complete"
         : active ? "running"
-          : pendingFinal.length ? "awaiting_batch_review"
-            : searchingMore ? "searching_more_sources"
-            : pendingOther.length ? "blocked"
+          : pendingOther.length ? "blocked"
+            : pendingFinal.length ? "awaiting_batch_review"
+              : searchingMore ? "searching_more_sources"
               : scan && applications.length < target ? "insufficient_candidates" : "blocked";
     const completedAt = status === "complete" ? submitted[target - 1].receipt.submittedAt : undefined;
     const lastApplicationUpdate = applications.length
@@ -593,7 +603,7 @@ export class ApplicationService {
       elapsedMs: Math.max(0, Date.parse(endedAt ?? now()) - Date.parse(started.at)),
       timing: {
         scanMs: duration(scan?.at, started.at),
-        preparationMs: duration(!active ? reviewReadyAt : undefined, scan?.at),
+        preparationMs: duration(!active && !pendingOther.length ? reviewReadyAt : undefined, scan?.at),
         approvalWaitMs: duration(approval?.at, reviewReadyAt),
         submissionMs: duration(completedAt, approval?.at),
         workerActiveMs: activeWorkerMs,
