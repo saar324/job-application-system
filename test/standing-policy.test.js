@@ -214,6 +214,10 @@ test("an official Ashby campaign result reaches the standing final permit", asyn
   const role = service.list("opportunities", "person")[0];
   assert.equal(role.applicationDestinationVerified, true);
   assert.equal(application.finalApprovalRequired, false);
+  const report = service.campaignWorkflowReport(campaign.campaignId, "person");
+  assert.equal(report.sourceYield[0].sourceId, "ashby");
+  assert.equal(report.sourceYield[0].selected, 1);
+  assert.ok(report.stages.discovery.measuredMs !== null);
   await service.store.mutate((state) => {
     const item = state.applications.find((entry) => entry.id === application.id);
     item.status = "submitting";

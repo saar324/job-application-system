@@ -123,6 +123,10 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "GET" && campaign) {
         return send(response, 200, service.campaignStatus(campaign[1], identity.profileId));
       }
+      const campaignWorkflowReport = url.pathname.match(/^\/v1\/campaigns\/([^/]+)\/workflow-report$/);
+      if (request.method === "GET" && campaignWorkflowReport) {
+        return send(response, 200, service.campaignWorkflowReport(campaignWorkflowReport[1], identity.profileId));
+      }
       const campaignApproval = url.pathname.match(/^\/v1\/campaigns\/([^/]+)\/approve$/);
       if (request.method === "POST" && campaignApproval) {
         const body = await jsonBody(request);
