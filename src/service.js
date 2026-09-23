@@ -300,6 +300,9 @@ export class ApplicationService {
       }
     } else {
       assertNoSensitiveAnswerFields(safeAnswers, "confirmation answers");
+      for (const controlField of ["retry", "submitted", "finalUrl", "externalId"]) {
+        delete safeAnswers[controlField];
+      }
     }
     const result = await this.store.mutate(async (state) => {
       const confirmation = state.confirmations.find(

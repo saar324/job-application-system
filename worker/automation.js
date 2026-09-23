@@ -37,6 +37,11 @@ function normalize(value) {
     .toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+function withoutRequiredMarker(value) {
+  return String(value ?? "").replace(/\*+\s*(?:required)?\b/gi, " ")
+    .replace(/\brequired\b/gi, " ").replace(/\s+/g, " ").trim();
+}
+
 function flattenProfile(profile, currentUrl) {
   const contact = profile.contact ?? {};
   const links = profile.links ?? {};
@@ -106,6 +111,20 @@ function flattenProfile(profile, currentUrl) {
   values["__visa sponsorship required"] = storedAnswers[
     "Will you now or in the future require employer visa sponsorship?"
   ];
+  values["please share a link to your linkedin profile"] = links.linkedin;
+  values["how many years of backend development experience do you have with node js and typescript"]
+    = storedAnswers.nodejs_years;
+  const awsBand = String(storedAnswers.awsExperienceBand ?? "").match(/^\s*(\d+)/)?.[1];
+  values["how many years of work experience do you have with aws"] = awsBand;
+  values["do you have any experience working with a startup or in a global remote role"]
+    = storedAnswers.worked_as_internal_employee_at_saas_startup_or_scaleup === true
+      || Number(storedAnswers.remote_work_years_approx) > 0 ? "Yes" : undefined;
+  values["what is your current monthly base salary in usd"] = storedAnswers.currentMonthlyBaseSalaryUsd;
+  values["what is your expected monthly base salary in usd"] = storedAnswers.expectedMonthlyBaseSalaryUsd;
+  values["what is your current residency status in the indicated job location e g open work permit permanent resident citizen etc if you are not currently based in that location please specify your current location"]
+    = storedAnswers["Legal residence status in Bulgaria"];
+  values["are you willing to undergo a reference check and a background check in accordance with local law regulations after accepting the conditional job offer by the end of the hiring process"]
+    = storedAnswers.backgroundCheckWilling === true ? "Yes" : undefined;
   if (credentialMatches(profile.siteCredential, currentUrl)) {
     values.username = profile.siteCredential.username;
     values["user name"] = profile.siteCredential.username;
@@ -118,7 +137,8 @@ function flattenProfile(profile, currentUrl) {
 }
 
 function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, approvedAnswers = [], opportunity = {}, skills = []) {
-  const candidates = [field.name, field.id, field.label, field.groupQuestion].filter(Boolean);
+  const candidates = [...new Set([field.name, field.id, field.label, field.groupQuestion]
+    .filter(Boolean).flatMap((value) => [value, withoutRequiredMarker(value)]))];
   if (field.type === "checkbox" && field.groupQuestion) {
     for (const candidate of [field.name, field.groupQuestion]) {
       const direct = Object.hasOwn(answers, candidate) ? answers[candidate] : answers[normalize(candidate)];
@@ -155,6 +175,10 @@ function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, appr
     if (skills.some((skill) => compact(skill) === compact(field.label))) {
       return { value: true, source: "profile skill" };
     }
+  }
+  if (field.type === "checkbox" && /\blocations?\b/i.test(field.groupQuestion ?? "")
+    && normalize(field.label) === normalize(profileValues.country)) {
+    return { value: true, source: "profile" };
   }
   // A generic name or email attribute is not enough when the label identifies
   // another person or organization.
@@ -308,8 +332,10 @@ export async function inventoryFormStep(page) {
     const labels = [...(element.labels ?? [])].map((label) => label.innerText.trim()).filter(Boolean);
     const ariaLabelledBy = (element.getAttribute("aria-labelledby") ?? "").split(/\s+/)
       .map((id) => document.getElementById(id)?.innerText?.trim()).filter(Boolean).join(" ");
-    const rawLabel = element.getAttribute("aria-label") || ariaLabelledBy || labels.join(" ")
-      || element.getAttribute("placeholder") || element.getAttribute("name") || element.id || "Unlabelled field";
+    const stableLabel = element.getAttribute("aria-label") || ariaLabelledBy || labels.join(" ")
+      || element.getAttribute("placeholder") || element.getAttribute("name") || element.id;
+    if (!stableLabel || element.matches('.iti__search-input, [id^="iti-"][type="search"]')) return null;
+    const rawLabel = stableLabel;
     const section = element.closest("fieldset")?.querySelector("legend")?.innerText?.trim()
       .replace(/\s+/g, " ") ?? "";
     const tag = element.tagName.toLowerCase();

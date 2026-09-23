@@ -93,6 +93,27 @@ test("custom combobox values are committed through an exact visible option", asy
   assert.deepEqual(result.requirements[0].preview.filled.map((field) => field.value), ["Bulgaria"]);
 });
 
+test("visual required text does not break deterministic profile aliases", async () => {
+  const result = await run(`<form>
+    <label>First name* <span>Required</span><input name="candidate[first_name]"></label>
+    <label>Please share a link to your Linkedin profile.** <span>Required</span><input name="linkedin"></label>
+    <label>How many years of backend development experience do you have with Node.js and TypeScript?*
+      <span>Required</span><input name="node_years" type="number"></label>
+    <fieldset><legend>Locations* <span>Required</span></legend>
+      <label><input type="checkbox" name="locations" value="romania">Romania</label>
+      <label><input type="checkbox" name="locations" value="bulgaria">Bulgaria</label>
+    </fieldset>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile,
+    contact: { ...profile.contact, country: "Bulgaria" },
+    links: { linkedin: "https://www.linkedin.com/in/example/" },
+    applicationAnswers: { nodejs_years: 5 }
+  }, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled.map((field) => field.value),
+    ["Ada", "https://www.linkedin.com/in/example/", "5", "Yes"]);
+});
+
 test("worker fills safe fields before pausing for an embedded challenge", async () => {
   const result = await run(`
     <form>
