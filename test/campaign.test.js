@@ -160,16 +160,20 @@ test("campaign searches every fallback source, caps each pool at ten, then ranks
     company: `Board ${board} ${index}`, description: board === "two" ? "TypeScript Node.js PostgreSQL" : "engineering",
     location: "Worldwide", remote: true, employmentType: "full_time",
     postedAt: new Date(Date.now() - index * 1000).toISOString(),
-    applyUrl: `https://${board}.example.test/jobs/${index}` });
+    applyUrl: `https://${board}.example.test/jobs/${index}`, applicationDestinationVerified: true });
   const first = await discovery.addCampaignSourceResults(started.campaignId, {
     sourceId: "board_one", completed: false, pagesVisited: 1, requestsMade: 7,
     items: [{ ...make(99), applyUrl: previouslySeen.applyUrl },
+      { ...make(97), applyUrl: "https://public-board.example.test/jobs/97",
+        applicationDestinationVerified: false },
       { ...make(98), applyUrl: "https://one.example.test/jobs/office", remote: false, location: "Office" },
       ...Array.from({ length: 6 }, (_, index) => make(index))]
   }, identity);
   assert.equal(first.status, "searching_more_sources");
   assert.equal(first.sourceCoverage.scans[0].selected, 6);
   assert.equal(first.sourceCoverage.scans[0].handledFiltered, 1);
+  assert.ok(first.sourceCoverage.scans[0].errors.some((item) =>
+    item.error === "verified HTTPS employer application URL required"));
   assert.deepEqual(first.sourceCoverage.scans[0].exclusionReasons,
     [{ reason: "profile requires a remote role", count: 1 }]);
   const second = await discovery.addCampaignSourceResults(started.campaignId, {

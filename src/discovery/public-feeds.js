@@ -45,7 +45,6 @@ function parseRemotive(payload) {
     employmentType: job.job_type, postedAt: job.publication_date,
     listingUrl: job.url, applyUrl: job.url, tags: job.tags,
     ...(parseSalary(job.salary) ? { compensation: parseSalary(job.salary) } : {}),
-    applicationDestinationVerified: true,
     uncertainties: ["employer_application_url_unverified"]
   })).filter(valid);
   return { items, detailLinks: [], hasMore: false };
@@ -64,7 +63,7 @@ function parseWeWorkRemotely(payload) {
       description: decode(tag(item, "description")),
       location: normalizeLocation(decode(tag(item, "region"))), remote: true,
       employmentType: "full_time", postedAt: decode(tag(item, "pubDate")),
-      listingUrl: url, applyUrl: url, applicationDestinationVerified: true,
+      listingUrl: url, applyUrl: url,
       uncertainties: ["employer_application_url_unverified"]
     };
   }).filter(valid);

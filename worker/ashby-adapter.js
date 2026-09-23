@@ -33,10 +33,20 @@ export async function fillAshbyRequiredControls(surface, profile, answers = {}) 
     let value = Object.hasOwn(answers, field.key) ? answers[field.key]
       : Object.hasOwn(answers, field.label) ? answers[field.label] : undefined;
     let source = "application answer";
-    if (value === undefined && field.type === "combobox" && normalize(field.label) === "location"
-      && /country.*currently residing/i.test(field.description) && profile?.contact?.country) {
-      value = profile.contact.country;
+    const locationQuestion = /^(?:location|where are you located\??|current location)$/i.test(field.label.trim());
+    if (value === undefined && field.type === "combobox" && locationQuestion
+      && (profile?.contact?.location || profile?.contact?.country || profile?.contact?.city)) {
+      value = [profile.contact.location, profile.contact.country, profile.contact.city].filter(Boolean);
       source = "profile";
+    }
+    if (value === undefined && field.type === "yesno" && /work authorization|authori[sz]ed to work/i.test(field.label)) {
+      const saved = Object.entries(profile?.applicationAnswers ?? {})
+        .find(([key]) => /authori[sz]ed to work/i.test(key))?.[1];
+      if (saved !== undefined) { value = saved; source = "verified profile fact"; }
+    }
+    if (value === undefined && field.type === "yesno" && /independent contractor/i.test(field.label)) {
+      const saved = profile?.applicationAnswers?.can_work_full_time_independent_contractor_bulgaria;
+      if (saved !== undefined) { value = saved; source = "verified profile fact"; }
     }
     const summary = { key: field.key, label: field.label, type: "ashby_custom",
       controlType: field.type, required: true };
@@ -45,8 +55,18 @@ export async function fillAshbyRequiredControls(surface, profile, answers = {}) 
       if (field.type === "combobox") {
         const input = surface.locator(".ashby-application-form-field-entry").nth(field.index)
           .locator('input[role="combobox"]');
-        await input.fill(String(value));
-        await surface.getByRole("option", { name: String(value), exact: true }).click({ timeout: 5000 });
+        const candidates = Array.isArray(value) ? value : [value];
+        let selectedValue;
+        for (const candidate of candidates) {
+          await input.fill(String(candidate));
+          const option = surface.getByRole("option", { name: String(candidate), exact: true });
+          if (!await option.isVisible({ timeout: 1500 }).catch(() => false)) continue;
+          await option.click();
+          selectedValue = String(candidate);
+          break;
+        }
+        if (!selectedValue) throw new Error("matching location option was not found");
+        value = selectedValue;
         const selected = await input.evaluate((element) => ({
           value: element.value, expanded: element.getAttribute("aria-expanded")
         }));
@@ -54,7 +74,7 @@ export async function fillAshbyRequiredControls(surface, profile, answers = {}) 
           throw new Error("selection was not verified");
         }
       } else if (field.type === "yesno") {
-        const choice = normalize(value);
+        const choice = value === true ? "yes" : value === false ? "no" : normalize(value);
         if (!["yes", "no"].includes(choice)) throw new Error("answer must be Yes or No");
         const button = surface.locator(".ashby-application-form-field-entry").nth(field.index)
           .locator(`.ashby-application-form-input-yesno button[data-option="${choice}"]`);

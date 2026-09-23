@@ -24,6 +24,11 @@ test("ATS role identities match direct application and feed URLs without trackin
     roleKeys({ source: "ashby", externalId: "example:11111111-1111-4111-8111-111111111111" })), false);
   assert.ok(isHandledRole({ applyUrl: "https://careers.example.test/roles/engineer/apply?utm_source=board" },
     roleKeys({ applyUrl: "https://careers.example.test/roles/engineer" })));
+  assert.ok(isHandledRole({ company: "Lemon.io", title: "Senior React Full-stack Developer",
+    applyUrl: "https://board-two.example.test/jobs/44" }, roleKeys({ company: "Lemon.io",
+    title: "Senior React Full-stack Developer", applyUrl: "https://board-one.example.test/jobs/22" })));
+  assert.equal(isHandledRole({ company: "Lemon.io", title: "Senior AI Engineer" },
+    roleKeys({ company: "Lemon.io", title: "Senior React Full-stack Developer" })), false);
 });
 
 test("only applications for the current profile enter the handled index", () => {

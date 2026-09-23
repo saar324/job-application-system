@@ -28,6 +28,7 @@ test("Remotive and We Work Remotely feeds preserve eligibility evidence", () => 
   assert.equal(remotive.items[0].location, "Worldwide");
   assert.deepEqual(remotive.items[0].compensation,
     { minimum: 70000, maximum: 90000, currency: "EUR", period: "year" });
+  assert.equal(remotive.items[0].applicationDestinationVerified, undefined);
   const rss = `<rss><channel><item><title>Acme: Backend Engineer</title>
     <region>Anywhere in the World</region><description>&lt;p&gt;Node.js and PostgreSQL&lt;/p&gt;</description>
     <link>https://weworkremotely.com/remote-jobs/acme-backend</link></item></channel></rss>`;
@@ -36,4 +37,5 @@ test("Remotive and We Work Remotely feeds preserve eligibility evidence", () => 
   assert.equal(wwr.items[0].title, "Backend Engineer");
   assert.equal(wwr.items[0].location, "Worldwide");
   assert.match(wwr.items[0].description, /Node\.js/);
+  assert.equal(wwr.items[0].applicationDestinationVerified, undefined);
 });

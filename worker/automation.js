@@ -186,6 +186,9 @@ function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, appr
   const unrelated = /company|employer|referr|manager|supervisor|emergency|school|recruiter|contact person/i
     .test(`${field.label} ${field.section}`);
   if (unrelated) return undefined;
+  if (/linkedin/i.test(label) && profileValues["linkedin url"]) {
+    return { value: profileValues["linkedin url"], source: "profile" };
+  }
   const bulgariaEligible = /\bbulgaria\b/i.test(String(opportunity.location ?? ""))
     || /\bBG\b/.test(String(opportunity.location ?? ""));
   if (/authoriz(?:ed|ation).*work/i.test(label)
@@ -703,6 +706,14 @@ async function activeSurface(page) {
   return page;
 }
 
+export function unavailablePostingUrl(value) {
+  try {
+    const url = new URL(value);
+    return /(?:^|\.)job-boards\.greenhouse\.io$/i.test(url.hostname)
+      && url.searchParams.get("error") === "true";
+  } catch { return false; }
+}
+
 export async function automateApplication({ page, profile, opportunity, application, artifactsDirectory,
   evidencePacket, draftProvider, markFinalActionStarted }) {
   const attemptStarted = performance.now();
@@ -744,6 +755,10 @@ export async function automateApplication({ page, profile, opportunity, applicat
   for (let step = 0; step < 16; step += 1) {
     timings.steps = step + 1;
     surface = await activeSurface(page);
+    if (step === 0 && unavailablePostingUrl(surface.url())) {
+      return pause({ status: "posting_unavailable", reasonCode: "posting_not_found",
+        message: "The employer redirected this expired role to its job board" }, step);
+    }
     const landingAction = await findAction(surface);
     if (landingAction?.ambiguous) return pause({
       status: "needs_human", message: "Multiple competing application actions were found",

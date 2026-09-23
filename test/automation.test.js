@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { after, before } from "node:test";
 import { chromium } from "playwright";
-import { automateApplication } from "../worker/automation.js";
+import { automateApplication, unavailablePostingUrl } from "../worker/automation.js";
 
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true }); });
@@ -238,12 +238,39 @@ test("Ashby custom answers are selected, verified, and shown in final preview", 
   [["Location", "Bulgaria"], ["Completed degree?", "Yes"], ["How did you hear about us?", "Job board"]]);
 });
 
+test("Ashby location and verified work facts reuse the saved profile", async () => {
+  const result = await run(`<form>
+    <div class="ashby-application-form-field-entry" data-field-path="location-id">
+      <label class="ashby-application-form-question-title _required_a1">Where are you located?</label>
+      <input role="combobox" aria-expanded="false" oninput="this.setAttribute('aria-expanded','true');choices.hidden=false">
+      <div id="choices" role="listbox" hidden><div role="option" onclick="document.querySelector('[role=combobox]').value='Sofia, Bulgaria';document.querySelector('[role=combobox]').setAttribute('aria-expanded','false');choices.hidden=true">Sofia, Bulgaria</div></div>
+    </div>
+    <div class="ashby-application-form-field-entry" data-field-path="authorization-id">
+      <label class="ashby-application-form-question-title _required_a1">Do you have work authorization to work in that country?</label>
+      <div class="ashby-application-form-input-yesno"><button type="button" data-option="yes" aria-pressed="false" onclick="this.setAttribute('aria-pressed','true')">Yes</button><button type="button" data-option="no" aria-pressed="false">No</button></div>
+    </div>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile, contact: { ...profile.contact, location: "Sofia, Bulgaria", country: "Bulgaria" },
+    applicationAnswers: { "Are you authorized to work in Bulgaria and for EU companies without visa sponsorship?": "Yes" }
+  }, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled
+    .filter((field) => field.type === "ashby_custom").map((field) => [field.label, field.value]),
+  [["Where are you located?", "Sofia, Bulgaria"],
+    ["Do you have work authorization to work in that country?", "Yes"]]);
+});
+
 test("an explicit missing employer posting stops without a form review", async () => {
   const result = await run(`<main><h1>Job not found</h1><p>The job you requested was not found.</p>
     <button>Cookie Management</button></main>`);
   assert.equal(result.status, "posting_unavailable");
   assert.equal(result.reasonCode, "posting_not_found");
   assert.equal(result.checkpoint.fields.length, 0);
+});
+
+test("an expired Greenhouse role redirect is classified as unavailable", () => {
+  assert.equal(unavailablePostingUrl("https://job-boards.greenhouse.io/appfire?error=true"), true);
+  assert.equal(unavailablePostingUrl("https://job-boards.greenhouse.io/appfire/jobs/123"), false);
 });
 
 test("worker fills known facts and records a verified submission receipt", async () => {

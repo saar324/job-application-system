@@ -124,6 +124,30 @@ function qualityExclusions(opportunity, profile, acceptedTypes, allowedLocations
       break;
     }
   }
+  const explicitTechnologyRequirements = [...description.matchAll(
+    /\b\d{1,2}\s*\+?\s*years?\s+(?:of\s+)?(?:hands-on\s+)?(?:experience\s+)?with\s+([A-Za-z][A-Za-z0-9.+#-]{1,30})\s+(?:in\s+)?production\b/gi
+  )];
+  for (const match of explicitTechnologyRequirements) {
+    const technology = match[1];
+    const normalized = technology.toLowerCase().replace(/[^a-z0-9+#.]+/g, "");
+    if (!normalizedSkills.has(normalized)) {
+      exclusions.push(`role requires production experience with ${technology}, which is absent from the verified skill profile`);
+      break;
+    }
+  }
+  if (/\bmust[- ]have\b[\s\S]{0,3000}\bproduction blockchain experience\b/i.test(description)
+    && ![...normalizedSkills].some((skill) => /blockchain|crypto/.test(skill))) {
+    exclusions.push("role requires production blockchain experience, which is absent from the verified skill profile");
+  }
+  const fluentLanguages = [...description.matchAll(/\bfluent\s+(?:in\s+)?(?:the\s+)?([A-Za-z]+)(?:\s+language)?\b/gi)]
+    .map((match) => match[1]);
+  for (const language of fluentLanguages) {
+    const verified = answers[`${language[0].toUpperCase()}${language.slice(1).toLowerCase()} proficiency`];
+    if (verified && /^(?:a1|a2|b1|b2|basic|elementary|intermediate)$/i.test(String(verified).trim())) {
+      exclusions.push(`role requires fluent ${language}; verified proficiency is ${verified}`);
+      break;
+    }
+  }
   if (acceptedTypes.length && !acceptedTypes.includes("contract")
     && /\b(?:contractor|contract)\s+(?:role|position|engagement)\b/i.test(description)) {
     exclusions.push("description identifies the opportunity as a contract role");
@@ -146,6 +170,11 @@ function qualityExclusions(opportunity, profile, acceptedTypes, allowedLocations
   if (describedLocation) {
     const reason = locationExclusion({ ...opportunity, location: describedLocation, remote: true }, allowedLocations);
     if (reason) exclusions.push(`description ${reason}`);
+  }
+  const titleLocation = title.match(/(?:remote\s*[@-]?\s*|\(remote\s+)([A-Za-z][A-Za-z ]{2,40})\)?\s*$/i)?.[1];
+  if (titleLocation) {
+    const reason = locationExclusion({ ...opportunity, location: titleLocation, remote: true }, allowedLocations);
+    if (reason) exclusions.push(`title ${reason}`);
   }
   return exclusions;
 }
