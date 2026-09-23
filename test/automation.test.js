@@ -387,6 +387,22 @@ test("worker uploads a resume through a CSS-hidden native file input", async () 
   assert.equal(result.status, "submitted");
 });
 
+test("a verified upload remains in review after the ATS replaces its file input", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
+  const resume = path.join(directory, "resume.pdf");
+  await writeFile(resume, "resume-body");
+  const result = await run(`<form>
+    <label>Upload resume* Required <input id="resume" type="file" required
+      onchange="this.outerHTML='<span>resume.pdf</span>'"></label>
+    <label>First name <input name="first_name" required></label>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile, documents: { resume } }, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  const uploaded = result.requirements[0].preview.filled.find((field) => field.type === "file");
+  assert.equal(uploaded.value, "resume.pdf");
+  assert.deepEqual(uploaded.files, [{ name: "resume.pdf", size: 11 }]);
+});
+
 test("worker recognizes composite resume labels and full-name labels", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-worker-document-"));
   const resume = path.join(directory, "resume.pdf");
