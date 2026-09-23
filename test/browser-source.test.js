@@ -70,6 +70,9 @@ test("browser source policy enforces conservative bounds and manual-only instruc
   assert.equal(policy.maxListingPages, 10);
   assert.equal(policy.maxRequests, 150);
   assert.equal(policy.minDelayMs, 500);
+  assert.equal(policy.sourceTimeoutMs, 50_000);
+  assert.equal(sourceAutomationPolicy({ id: "bounded", automation: { sourceTimeoutMs: 90_000 } },
+    { sourceTimeoutMs: 40_000 }).sourceTimeoutMs, 40_000);
   assert.equal(isBlockingStatus(403), true);
   assert.equal(isBlockingStatus(429), true);
   assert.equal(isBlockingStatus(500), false);

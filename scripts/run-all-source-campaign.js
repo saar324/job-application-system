@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const options = argumentsOf(process.argv.slice(2));
 if (!options.catalog) {
-  console.error("usage: run-all-source-campaign --catalog FILE [--target 10] [--reserve 10] [--reserve-only] [--server URL] [--token-file FILE] [--headed]");
+  console.error("usage: run-all-source-campaign --catalog FILE [--target 10] [--reserve 10] [--reserve-only] [--source-timeout-ms 50000] [--server URL] [--token-file FILE] [--headed]");
   process.exit(2);
 }
 const catalogPath = path.resolve(options.catalog);
@@ -39,7 +39,7 @@ if (options.query) childArgs.push("--query", options.query);
 if (options.userDataDir) childArgs.push("--user-data-dir", path.resolve(options.userDataDir));
 if (options.cdpEndpoint) childArgs.push("--cdp-endpoint", options.cdpEndpoint);
 if (options.channel) childArgs.push("--channel", options.channel);
-for (const key of ["maxCandidates", "maxListingPages", "maxDetailPages", "maxRequests", "minDelayMs", "navigationTimeoutMs"]) {
+for (const key of ["maxCandidates", "maxListingPages", "maxDetailPages", "maxRequests", "minDelayMs", "navigationTimeoutMs", "sourceTimeoutMs"]) {
   if (options[key] !== undefined) childArgs.push(`--${toKebab(key)}`, options[key]);
 }
 const exitCode = await new Promise((resolve, reject) => {

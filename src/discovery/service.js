@@ -534,7 +534,8 @@ export class DiscoveryService {
         .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)),
       completed: input.completed !== false, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
       rateLimited: input.rateLimited === true, exhausted: input.exhausted === true,
-      challenge: input.challenge === true, parseDrift: input.parseDrift === true,
+      challenge: input.challenge === true, timedOut: input.timedOut === true,
+      parseDrift: input.parseDrift === true,
       manual: input.manual === true,
       errors: [...errors, ...(input.errors ?? [])].slice(0, 100)
     }, identity);

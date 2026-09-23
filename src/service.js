@@ -737,14 +737,15 @@ export class ApplicationService {
         exclusionReasons: input.exclusionReasons ?? [],
         completed: input.completed, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
         rateLimited: input.rateLimited === true, exhausted: input.exhausted === true,
-        challenge: input.challenge === true, parseDrift: input.parseDrift === true,
+        challenge: input.challenge === true, timedOut: input.timedOut === true,
+        parseDrift: input.parseDrift === true,
         manual: input.manual === true,
         errors: input.errors ?? []
       });
       recordWorkflowStage(state, identity, campaignId, "discovery", { campaignId,
         sourceId: input.sourceId, found: input.found, qualifying: input.qualifying,
         excluded: input.excluded, handledFiltered: input.handledFiltered,
-        outcome: input.rateLimited ? "rate_limited" : "completed" });
+        outcome: input.rateLimited ? "rate_limited" : input.timedOut ? "timed_out" : "completed" });
       return this.campaignStatus(campaignId, identity.profileId, state);
     });
   }

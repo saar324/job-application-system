@@ -54,7 +54,8 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
       completed: z.boolean().optional(), errors: z.array(z.object({ error: z.string().max(500) }).passthrough()).max(100).optional(),
       pagesVisited: z.number().int().min(0).max(100).optional(),
       requestsMade: z.number().int().min(0).max(1000).optional(),
-      rateLimited: z.boolean().optional(), exhausted: z.boolean().optional(),
+      rateLimited: z.boolean().optional(), timedOut: z.boolean().optional(),
+      exhausted: z.boolean().optional(),
       items: z.array(z.object({
         title: z.string().min(1).max(300), company: z.string().min(1).max(300),
         applyUrl: z.string().url(), listingUrl: z.string().url().optional(),

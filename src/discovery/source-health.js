@@ -14,15 +14,17 @@ export function summarizeSourceHealth(sourceId, scans) {
   };
   const challenge = rows.some((row) => row.challenge === true);
   const rateLimited = rows.some((row) => row.rateLimited === true);
+  const timedOut = rows.some((row) => row.timedOut === true);
   const parseDrift = rows.some((row) => row.parseDrift === true);
   const manual = rows.some((row) => row.manual === true);
   const completed = rows.some((row) => row.completed !== false);
   const status = manual ? "manual" : challenge ? "challenge" : rateLimited ? "rate_limited"
+    : timedOut ? "timed_out"
     : parseDrift ? "parse_drift" : selected ? "yielding" : handledFiltered && (found === 0 || handledFiltered === found)
       ? "already_handled" : destinationPending && destinationPending >= found - excluded - handledFiltered
         ? "missing_destination" : excluded && excluded >= found - handledFiltered
           ? "ineligible" : !found && completed ? "zero_extractable" : completed ? "zero_accepted" : "in_progress";
   return { sourceId, status, completed, found, selected, handledFiltered, excluded, destinationPending,
     exclusionCounts, pagesVisited: sum("pagesVisited"), requestsMade: sum("requestsMade"),
-    challenge, rateLimited, parseDrift };
+    challenge, rateLimited, timedOut, parseDrift };
 }

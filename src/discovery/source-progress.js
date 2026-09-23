@@ -36,7 +36,8 @@ export class SourceProgress {
   }
 
   async finish(metadata) {
-    await this.flush();
+    if (metadata.timedOut) this.pending = [];
+    else await this.flush();
     const campaign = await this.report(this.sourceId, [], { ...metadata, completed: true });
     this.accepted = campaign.sourceCoverage?.scans?.filter((scan) => scan.sourceId === this.sourceId)
       .reduce((sum, scan) => sum + Number(scan.selected ?? 0), 0) ?? 0;

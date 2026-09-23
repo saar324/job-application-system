@@ -8,10 +8,11 @@ import { extractSourcePage, isBlockingStatus, isChallengePage,
   sourceAutomationPolicy } from "../src/discovery/browser-source.js";
 import { parsePublicFeed, publicFeedUrl } from "../src/discovery/public-feeds.js";
 import { SourceProgress } from "../src/discovery/source-progress.js";
+import { SourceBudget, SourceTimeoutError } from "../src/discovery/source-budget.js";
 
 const options = argumentsOf(process.argv.slice(2));
 if (!options.campaign || !options.catalog) {
-  console.error("usage: run-browser-source-campaign --campaign ID --catalog FILE [--server URL] [--token-file FILE] [--headed]");
+  console.error("usage: run-browser-source-campaign --campaign ID --catalog FILE [--server URL] [--token-file FILE] [--source-timeout-ms 50000] [--headed]");
   process.exit(2);
 }
 const catalog = JSON.parse(await readFile(path.resolve(options.catalog), "utf8"));
@@ -40,24 +41,36 @@ const hostLastRequest = new Map();
 
 try {
   for (const source of sources) {
-    const current = await api("GET", `/v1/campaigns/${options.campaign}`);
-    if (!current.sourceCoverage?.fallbackRemaining?.includes(source.id)) continue;
     const policy = sourceAutomationPolicy(source, options);
+    const totalBudget = new SourceBudget(policy.sourceTimeoutMs);
+    const current = await api("GET", `/v1/campaigns/${options.campaign}`,
+      undefined, undefined, totalBudget.timeoutMs(5_000));
+    if (!current.sourceCoverage?.fallbackRemaining?.includes(source.id)) continue;
     if (policy.manual) {
       const recorded = await report(source.id, [], { completed: true, exhausted: true, manual: true,
-        errors: [{ error: "source policy requires manual browser search" }] });
+        errors: [{ error: "source policy requires manual browser search" }] },
+      totalBudget.timeoutMs(7_000));
       progress(source.id, 0, accepted(recorded, source.id), "manual-policy");
       continue;
     }
+    const budget = new SourceBudget(Math.max(1_000, totalBudget.remainingMs() - 7_000));
     const progressState = new SourceProgress({ sourceId: source.id,
-      maxAcceptedResults: policy.maxAcceptedResults, maxBatch: Math.min(10, policy.maxCandidates), report });
-    const result = await searchSource(source, policy, progressState);
+      maxAcceptedResults: policy.maxAcceptedResults, maxBatch: Math.min(10, policy.maxCandidates),
+      report: (sourceId, items, metadata) => report(sourceId, items, metadata,
+        metadata.completed ? totalBudget.timeoutMs(7_000) : budget.timeoutMs(120_000)) });
+    const result = await searchSource(source, policy, progressState, budget);
+    if (!result.timedOut && progressState.pending.length && budget.remainingMs() < 2_000) {
+      result.timedOut = true;
+      result.exhausted = false;
+      result.errors.push({ error: "source wall-clock budget exceeded before final batch" });
+    }
     const recorded = await progressState.finish({ exhausted: result.exhausted,
       pagesVisited: result.pagesVisited, requestsMade: result.requestsMade,
-      rateLimited: result.rateLimited, challenge: result.challenge,
+      rateLimited: result.rateLimited, challenge: result.challenge, timedOut: result.timedOut,
       parseDrift: result.parseDrift, errors: result.errors });
     progress(source.id, progressState.found, accepted(recorded, source.id),
-      result.rateLimited ? "rate-limited" : "complete");
+      result.rateLimited ? "rate-limited" : result.challenge ? "challenge"
+        : result.timedOut ? "timed-out" : "complete");
   }
 } finally {
   if (!externallyOwned) {
@@ -66,30 +79,34 @@ try {
   }
 }
 
-async function searchSource(source, policy, progressState) {
-  const page = await context.newPage();
+async function searchSource(source, policy, progressState, budget) {
+  let page;
   const visitedListings = new Set(); const visitedDetails = new Set(); const errors = [];
   let nextUrl = source.url; let pagesVisited = 0; let requestsMade = 0;
-  let rateLimited = false; let challenge = false; let parseDrift = false;
+  let rateLimited = false; let challenge = false; let parseDrift = false; let timedOut = false;
   try {
+    page = await budget.run(() => context.newPage());
     const feedQueries = source.id === "jobgether" ? jobgetherQueries(options.query) : [options.query ?? "engineer"];
     const feedUrl = publicFeedUrl(source.id, { query: feedQueries[0],
       limit: source.id === "remotive" || source.id === "weworkremotely" ? 100 : 10 });
     if (feedUrl) {
-      const response = await fetch(feedUrl, { headers: { "user-agent": "job-application-system/1.0 personal search" },
-        signal: AbortSignal.timeout(policy.navigationTimeoutMs) });
-      requestsMade += 1; pagesVisited += 1;
+      requestsMade += 1;
+      const response = await budget.run(() => fetch(feedUrl, {
+        headers: { "user-agent": "job-application-system/1.0 personal search" },
+        signal: AbortSignal.timeout(budget.timeoutMs(policy.navigationTimeoutMs)) }));
+      pagesVisited += 1;
       if (isBlockingStatus(response.status)) { rateLimited = true; return result(); }
       else if (!response.ok) {
         errors.push({ error: `feed returned HTTP ${response.status}: ${feedUrl}` });
         return result();
       }
       else {
-        const feedText = await response.text();
+        const feedText = await budget.run(() => response.text());
         if (isChallengePage(feedText)) { challenge = true; return result(); }
         const feed = parsePublicFeed(source.id, feedText);
         if (source.id !== "jobgether") {
-          await progressState.add(feed.items);
+          await budget.run(() => progressState.add(feed.items));
+          await budget.run(() => progressState.flush());
           return result(!feed.hasMore);
         }
         nextUrl = null;
@@ -97,21 +114,23 @@ async function searchSource(source, policy, progressState) {
         let hasMore = feedQueries.length === 1 && feed.hasMore;
         while (pagesVisited < policy.maxListingPages && requestsMade < policy.maxRequests
           && !progressState.done) {
+          budget.timeoutMs(1);
           const query = feedQueries[pagesVisited] ?? feedQueries[0];
           if (!hasMore && pagesVisited >= feedQueries.length) break;
           const pageNumber = pagesVisited + 1;
           const pageUrl = publicFeedUrl(source.id, { query,
             page: feedQueries.length === 1 ? pageNumber : 1, limit: feedQueries.length === 1 ? 25 : 10 });
-          const pageResponse = await fetch(pageUrl, { headers: {
+          requestsMade += 1;
+          const pageResponse = await budget.run(() => fetch(pageUrl, { headers: {
             "user-agent": "job-application-system/1.0 personal search"
-          }, signal: AbortSignal.timeout(policy.navigationTimeoutMs) });
-          requestsMade += 1; pagesVisited += 1;
+          }, signal: AbortSignal.timeout(budget.timeoutMs(policy.navigationTimeoutMs)) }));
+          pagesVisited += 1;
           if (isBlockingStatus(pageResponse.status)) { rateLimited = true; break; }
           if (!pageResponse.ok) {
             errors.push({ error: `feed returned HTTP ${pageResponse.status}: ${pageUrl}` });
             break;
           }
-          const nextText = await pageResponse.text();
+          const nextText = await budget.run(() => pageResponse.text());
           if (isChallengePage(nextText)) { challenge = true; break; }
           const nextFeed = parsePublicFeed(source.id, nextText);
           for (const item of nextFeed.items) seeds.set(item.listingUrl, item);
@@ -119,35 +138,40 @@ async function searchSource(source, policy, progressState) {
         }
         const detailQueue = [...seeds.keys()].slice(0, policy.maxDetailPages);
         while (detailQueue.length && requestsMade < policy.maxRequests && !progressState.done && !challenge) {
+          budget.timeoutMs(1);
           const link = detailQueue.shift();
-          const detail = await navigate(page, link, policy); requestsMade += 1;
+          requestsMade += 1;
+          const detail = await navigate(page, link, policy, budget);
           if (isBlockingStatus(detail.status)) { rateLimited = true; break; }
           if (detail.challenge) { challenge = true; break; }
           if (!detail.ok) continue;
-          const extracted = extractSourcePage(await page.content(), page.url(), source.id);
+          const extracted = extractSourcePage(await budget.run(() => page.content()), page.url(), source.id);
           if (extracted.jobs.length) {
-            await progressState.add(extracted.jobs.map((job) => ({ ...seeds.get(link), ...job,
+            await budget.run(() => progressState.add(extracted.jobs.map((job) => ({ ...seeds.get(link), ...job,
               location: job.location || seeds.get(link)?.location,
-              listingUrl: link, externalId: seeds.get(link)?.externalId ?? job.externalId })));
-          } else if (seeds.has(link)) await progressState.add([seeds.get(link)]);
-          await progressState.flush();
+              listingUrl: link, externalId: seeds.get(link)?.externalId ?? job.externalId }))));
+          } else if (seeds.has(link)) await budget.run(() => progressState.add([seeds.get(link)]));
+          await budget.run(() => progressState.flush());
         }
-        return result(true);
+        return result(!hasMore && detailQueue.length === 0);
       }
     }
     while (nextUrl && pagesVisited < policy.maxListingPages && requestsMade < policy.maxRequests
       && !progressState.done) {
+      budget.timeoutMs(1);
       if (visitedListings.has(nextUrl)) break;
       visitedListings.add(nextUrl);
-      const listing = await navigate(page, nextUrl, policy); requestsMade += 1;
+      requestsMade += 1;
+      const listing = await navigate(page, nextUrl, policy, budget);
       if (isBlockingStatus(listing.status)) { rateLimited = true; break; }
       if (listing.challenge) { challenge = true; break; }
       if (!listing.ok) { errors.push({ error: `listing returned HTTP ${listing.status}: ${nextUrl}` }); break; }
-      if (pagesVisited === 0) await applyBroadSearch(page, options.query ?? "engineer", options.location ?? "Portugal");
+      if (pagesVisited === 0) await budget.run(() => applyBroadSearch(page,
+        options.query ?? "engineer", options.location ?? "Portugal", budget));
       pagesVisited += 1;
-      const extracted = extractSourcePage(await page.content(), page.url(), source.id);
-      await progressState.add(extracted.jobs);
-      await progressState.flush();
+      const extracted = extractSourcePage(await budget.run(() => page.content()), page.url(), source.id);
+      await budget.run(() => progressState.add(extracted.jobs));
+      await budget.run(() => progressState.flush());
       const detailQueue = [...extracted.jobLinks];
       while (detailQueue.length) {
         const link = detailQueue.shift();
@@ -155,13 +179,15 @@ async function searchSource(source, policy, progressState) {
           || requestsMade >= policy.maxRequests) break;
         if (visitedDetails.has(link)) continue;
         visitedDetails.add(link);
-        const detail = await navigate(page, link, policy); requestsMade += 1;
+        budget.timeoutMs(1);
+        requestsMade += 1;
+        const detail = await navigate(page, link, policy, budget);
         if (isBlockingStatus(detail.status)) { rateLimited = true; break; }
         if (detail.challenge) { challenge = true; break; }
         if (!detail.ok) continue;
-        const detailPage = extractSourcePage(await page.content(), page.url(), source.id);
-        await progressState.add(detailPage.jobs);
-        await progressState.flush();
+        const detailPage = extractSourcePage(await budget.run(() => page.content()), page.url(), source.id);
+        await budget.run(() => progressState.add(detailPage.jobs));
+        await budget.run(() => progressState.flush());
         if (!detailPage.jobs.length) {
           const nestedLinks = [];
           for (const nested of detailPage.jobLinks) {
@@ -174,30 +200,45 @@ async function searchSource(source, policy, progressState) {
       nextUrl = extracted.nextUrl;
     }
   } catch (error) {
-    errors.push({ error: String(error.message ?? error).slice(0, 500) });
-  } finally { await page.close(); }
-  parseDrift = visitedDetails.size > 0 && progressState.found === 0 && !rateLimited && !challenge;
-  return result(!nextUrl || pagesVisited >= policy.maxListingPages || requestsMade >= policy.maxRequests);
+    if (error instanceof SourceTimeoutError || budget.remainingMs() <= 0) timedOut = true;
+    else errors.push({ error: String(error.message ?? error).slice(0, 500) });
+  } finally {
+    if (page) await Promise.race([page.close().catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 2_000))]);
+  }
+  if (timedOut) errors.push({ error: "source wall-clock budget exceeded" });
+  parseDrift = visitedDetails.size > 0 && progressState.found === 0
+    && !rateLimited && !challenge && !timedOut;
+  return result(!nextUrl);
 
   function result(exhausted = false) {
-    return { pagesVisited, requestsMade, rateLimited, challenge, parseDrift, exhausted, errors };
+    if (budget.remainingMs() <= 0 && !rateLimited && !challenge) {
+      timedOut = true;
+      if (!errors.some((item) => item.error === "source wall-clock budget exceeded")) {
+        errors.push({ error: "source wall-clock budget exceeded" });
+      }
+    }
+    return { pagesVisited, requestsMade, rateLimited, challenge, timedOut, parseDrift,
+      exhausted: exhausted && !timedOut && !rateLimited && !challenge, errors };
   }
 }
 
-async function navigate(page, url, policy) {
+async function navigate(page, url, policy, budget) {
   const host = new URL(url).hostname;
   const elapsed = Date.now() - (hostLastRequest.get(host) ?? 0);
   const wait = policy.minDelayMs + Math.floor(Math.random() * 500) - elapsed;
-  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-  const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: policy.navigationTimeoutMs });
-  await settle(page);
+  if (wait > 0) await budget.sleep(wait);
+  const response = await budget.run(() => page.goto(url, { waitUntil: "domcontentloaded",
+    timeout: budget.timeoutMs(policy.navigationTimeoutMs) }));
+  await settle(page, budget);
   hostLastRequest.set(host, Date.now());
   const status = response?.status() ?? 0;
-  const challenge = status >= 200 && status < 400 && isChallengePage(await page.content());
+  const challenge = status >= 200 && status < 400
+    && isChallengePage(await budget.run(() => page.content()));
   return { status, challenge, ok: status >= 200 && status < 400 && !challenge };
 }
 
-async function applyBroadSearch(page, query, location) {
+async function applyBroadSearch(page, query, location, budget) {
   const selectors = [
     'input[type="search"]', 'input[name*="keyword" i]', 'input[name*="search" i]',
     'input[placeholder*="job" i]', 'input[placeholder*="role" i]', 'input[placeholder*="keyword" i]'
@@ -212,7 +253,7 @@ async function applyBroadSearch(page, query, location) {
       const locationInput = page.locator('input[placeholder*="location" i]').filter({ visible: true }).first();
       if (await locationInput.isVisible().catch(() => false)) {
         await locationInput.fill(location);
-        await page.waitForTimeout(400);
+        await budget.sleep(400);
         const option = page.getByRole("option", { name: new RegExp(`^${escapePattern(location)}$`, "i") })
           .filter({ visible: true }).first();
         if (await option.isVisible().catch(() => false)) await option.click({ timeout: 2_000 }).catch(() => undefined);
@@ -221,12 +262,12 @@ async function applyBroadSearch(page, query, location) {
       if (await submit.isVisible().catch(() => false)) {
         await submit.click({ timeout: 3_000, noWaitAfter: true }).catch(() => undefined);
       } else await input.press("Enter");
-      await settle(page);
+      await settle(page, budget);
       if (page.url() === before) {
         const button = page.getByRole("button", { name: /^search$/i }).filter({ visible: true }).first();
         if (await button.isVisible().catch(() => false)) {
           await button.click({ timeout: 3_000, noWaitAfter: true }).catch(() => undefined);
-          await settle(page);
+          await settle(page, budget);
         }
       }
       return true;
@@ -242,24 +283,30 @@ function jobgetherQueries(query) {
   return ["engineer"];
 }
 
-async function settle(page) {
-  await page.waitForLoadState("networkidle", { timeout: 1_500 }).catch(() => undefined);
-  await page.evaluate(() => window.scrollTo(0, Math.min(document.body.scrollHeight, 4000))).catch(() => undefined);
-  await page.waitForTimeout(250);
+async function settle(page, budget) {
+  await budget.run(() => page.waitForLoadState("networkidle",
+    { timeout: budget.timeoutMs(1_500) }), 1_500).catch((error) => {
+    if (error instanceof SourceTimeoutError) throw error;
+  });
+  await budget.run(() => page.evaluate(() => window.scrollTo(0,
+    Math.min(document.body.scrollHeight, 4000)))).catch((error) => {
+    if (error instanceof SourceTimeoutError) throw error;
+  });
+  await budget.sleep(250);
 }
 
-async function report(sourceId, items, metadata) {
+async function report(sourceId, items, metadata, timeoutMs = 120_000) {
   return api("POST", `/v1/campaigns/${options.campaign}/source-results`, {
     sourceId, items: items.map(compactJob), ...metadata
-  }, `source-${options.campaign}-${sourceId}-${randomUUID()}`);
+  }, `source-${options.campaign}-${sourceId}-${randomUUID()}`, timeoutMs);
 }
 
-async function api(method, pathname, body, idempotencyKey) {
+async function api(method, pathname, body, idempotencyKey, timeoutMs = 120_000) {
   const response = await fetch(`${server}${pathname}`, { method, headers: {
     ...(token ? { authorization: `Bearer ${token}` } : {}),
     ...(body ? { "content-type": "application/json" } : {}),
     ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {})
-  }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(120_000) });
+  }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(timeoutMs) });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
   return payload;

@@ -31,7 +31,9 @@ async function fixture() {
       return service.recordCampaignSourceScan(id, { sourceId: input.sourceId,
         found: input.items.length, qualifying: 0, excluded: input.items.length,
         handledFiltered: 0, selected: 0, completed: input.completed !== false,
-        pagesVisited: input.pagesVisited, requestsMade: input.requestsMade, errors: [] }, identity);
+        pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
+        timedOut: input.timedOut, exhausted: input.exhausted,
+        errors: input.errors ?? [] }, identity);
     }
   };
   const authenticate = (request) => request.headers.authorization === "Bearer profile-one-token"
@@ -161,6 +163,29 @@ test("campaign source results are authenticated, idempotent, and record page cov
     assert.equal(result.sourceCoverage.scans.length, 1);
     assert.equal(result.sourceCoverage.scans[0].pagesVisited, 3);
     assert.deepEqual(result.sourceCoverage.fallbackRemaining, []);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test("campaign source timeout is durable and distinct from pagination exhaustion", async () => {
+  const { server, campaignId, base } = await fixture();
+  try {
+    const started = await fetch(`${base}/v1/campaigns`, {
+      method: "POST", headers: { authorization: "Bearer profile-one-token", "content-type": "application/json" },
+      body: JSON.stringify({ target: 2, reserve: 0, fallbackSources: ["browser_one"] })
+    });
+    assert.equal(started.status, 202);
+    const response = await fetch(`${base}/v1/campaigns/${campaignId}/source-results`, {
+      method: "POST", headers: { authorization: "Bearer profile-one-token", "content-type": "application/json" },
+      body: JSON.stringify({ sourceId: "browser_one", items: [], completed: true,
+        pagesVisited: 1, requestsMade: 2, exhausted: false, timedOut: true,
+        errors: [{ error: "source wall-clock budget exceeded" }] })
+    });
+    assert.equal(response.status, 200);
+    const campaign = await response.json();
+    assert.equal(campaign.sourceCoverage.scans[0].timedOut, true);
+    assert.equal(campaign.sourceCoverage.scans[0].exhausted, false);
+    assert.equal(campaign.sourceCoverage.health[0].status, "timed_out");
+    assert.deepEqual(campaign.sourceCoverage.fallbackRemaining, []);
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 

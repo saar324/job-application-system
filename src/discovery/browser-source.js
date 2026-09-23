@@ -58,6 +58,8 @@ export function sourceAutomationPolicy(source, overrides = {}) {
     maxDetailPages: bounded(overrides.maxDetailPages ?? source.automation?.maxDetailPages, 1, 100, 35),
     maxRequests: bounded(overrides.maxRequests ?? source.automation?.maxRequests, 1, 150, 45),
     minDelayMs: bounded(overrides.minDelayMs ?? source.automation?.minDelayMs, 500, 30_000, 1_500),
+    sourceTimeoutMs: bounded(overrides.sourceTimeoutMs
+      ?? source.automation?.sourceTimeoutMs, 10_000, 300_000, 50_000),
     navigationTimeoutMs: bounded(overrides.navigationTimeoutMs
       ?? source.automation?.navigationTimeoutMs, 5_000, 120_000, 15_000)
   };

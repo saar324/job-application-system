@@ -44,6 +44,11 @@ test("source health separates rate limits, challenges, missing destinations and 
     completed: true }]).status, "missing_destination");
   assert.equal(summarizeSourceHealth("a", [{ sourceId: "a", rateLimited: true, completed: true }]).status,
     "rate_limited");
+  const timeout = summarizeSourceHealth("a", [{ sourceId: "a", timedOut: true,
+    exhausted: false, completed: true, requestsMade: 4 }]);
+  assert.equal(timeout.status, "timed_out");
+  assert.equal(timeout.requestsMade, 4);
+  assert.equal(timeout.timedOut, true);
   assert.equal(summarizeSourceHealth("a", [{ sourceId: "a", challenge: true, completed: true }]).status,
     "challenge");
   assert.equal(summarizeSourceHealth("a", [{ sourceId: "a", parseDrift: true, completed: true }]).status,
@@ -55,4 +60,18 @@ test("source health separates rate limits, challenges, missing destinations and 
   assert.equal(official.status, "ineligible");
   assert.deepEqual(official.exclusionCounts, {
     hardExclusion: 1, belowScore: 2, opportunisticRequirements: 0 });
+});
+
+test("a timed-out source drops unsent candidates and records terminal timeout", async () => {
+  const reports = [];
+  const progress = new SourceProgress({ sourceId: "slow", report: async (sourceId, items, metadata) => {
+    reports.push({ sourceId, items, metadata });
+    return { sourceCoverage: { scans: [] } };
+  } });
+  await progress.add([job(1)]);
+  await progress.finish({ timedOut: true, exhausted: false, requestsMade: 3 });
+  assert.equal(reports.length, 1);
+  assert.deepEqual(reports[0].items, []);
+  assert.equal(reports[0].metadata.timedOut, true);
+  assert.equal(reports[0].metadata.exhausted, false);
 });
