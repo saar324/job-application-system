@@ -93,6 +93,25 @@ test("custom combobox values are committed through an exact visible option", asy
   assert.deepEqual(result.requirements[0].preview.filled.map((field) => field.value), ["Bulgaria"]);
 });
 
+test("dynamic combobox rerenders converge without refilling committed choices", async () => {
+  const result = await run(`<form>
+    <label>Country* Required <input id="country" role="combobox"
+      oninput="country_box.hidden=false"></label>
+    <div id="country_box" role="listbox" hidden><button type="button" role="option"
+      onclick="country.value='Bulgaria';country_box.hidden=true;this.parentElement.insertAdjacentHTML('afterend','<input type=hidden value=BG>')">Bulgaria</button></div>
+    <label>Location* Required <input id="location" role="combobox"
+      oninput="location_box.hidden=false"></label>
+    <div id="location_box" role="listbox" hidden><button type="button" role="option"
+      onclick="location.value='Sofia, Bulgaria';location_box.hidden=true;this.parentElement.insertAdjacentHTML('afterend','<input type=hidden value=Sofia>')">Sofia, Bulgaria</button></div>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile, contact: { ...profile.contact, country: "Bulgaria", city: "Sofia",
+    location: "Sofia, Bulgaria" } },
+  { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled.map((field) => field.value),
+    ["Bulgaria", "Sofia, Bulgaria"]);
+});
+
 test("radio answers verify by readable label or stored option value", async () => {
   const byLabel = await run(`<form><fieldset><legend>Visa sponsorship* Required</legend>
     <label><input type="radio" name="visa" value="true">Yes</label>
@@ -127,6 +146,16 @@ test("visual required text does not break deterministic profile aliases", async 
   assert.equal(result.requirements[0].kind, "final_submission_approval");
   assert.deepEqual(result.requirements[0].preview.filled.map((field) => field.value),
     ["Ada", "https://www.linkedin.com/in/example/", "5", "Yes"]);
+});
+
+test("phone widgets may normalize spacing without invalidating the verified number", async () => {
+  const result = await run(`<form><label>Phone number with country code
+    <input name="phone" type="tel" oninput="this.value=this.value.replace(/\\s/g,'')"></label>
+    <button type="submit">Submit Application</button></form>`, {}, {
+    ...profile, contact: { ...profile.contact, phone: "+359 888 898 836" }
+  }, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.equal(result.requirements[0].preview.filled[0].value, "+359888898836");
 });
 
 test("worker fills safe fields before pausing for an embedded challenge", async () => {
@@ -393,7 +422,7 @@ test("a verified upload remains in review after the ATS replaces its file input"
   await writeFile(resume, "resume-body");
   const result = await run(`<form>
     <label>Upload resume* Required <input id="resume" type="file" required
-      onchange="this.outerHTML='<span>resume.pdf</span>'"></label>
+      onchange="this.outerHTML='<span>Uploaded</span>'"></label>
     <label>First name <input name="first_name" required></label>
     <button type="submit">Submit Application</button>
   </form>`, {}, { ...profile, documents: { resume } }, { finalApprovalRequired: true });

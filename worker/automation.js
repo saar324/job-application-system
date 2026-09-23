@@ -197,10 +197,11 @@ function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, appr
     && profileValues["__visa sponsorship required"] !== undefined) {
     return { value: profileValues["__visa sponsorship required"], source: "verified profile fact" };
   }
-  if (field.type === "file" && /\b(?:resume|cv)\b/.test(label) && profileValues.resume) {
+  const fileHint = normalize([field.label, field.name, field.id].filter(Boolean).join(" "));
+  if (field.type === "file" && /\b(?:resume|cv)\b/.test(fileHint) && profileValues.resume) {
     return { value: profileValues.resume, source: "profile" };
   }
-  if (field.type === "file" && /\bcover letter\b/.test(label) && profileValues["cover letter"]) {
+  if (field.type === "file" && /\bcover letter\b/.test(fileHint) && profileValues["cover letter"]) {
     return { value: profileValues["cover letter"], source: "profile" };
   }
   // Profile links are URLs. Never pass one to a file chooser just because its
@@ -243,6 +244,7 @@ async function describe(locator) {
 
 async function fillControl(locator, field, value, surface) {
   if (field.type === "file") {
+    const file = { name: path.basename(String(value)), size: (await stat(String(value))).size };
     const isAshby = new URL(surface.url()).hostname === "jobs.ashbyhq.com";
     const rootPage = typeof surface.page === "function" ? surface.page() : surface;
     const fileAcknowledged = isAshby ? rootPage.waitForResponse((response) =>
@@ -257,6 +259,7 @@ async function fillControl(locator, field, value, surface) {
         throw new Error(`file upload was not acknowledged for ${field.label}`);
       }
     }
+    return { uploadAcknowledged: true, files: [file] };
   } else if (field.tag === "select") {
     const desired = normalize(value);
     const option = field.options.find((item) => normalize(item.label) === desired || normalize(item.value) === desired);
@@ -294,12 +297,20 @@ async function fillControl(locator, field, value, surface) {
     const desired = normalize(value);
     await locator.press("ArrowDown").catch(() => undefined);
     const options = surface.locator('[role="option"]:visible');
+    await options.first().waitFor({ state: "visible", timeout: 1500 }).catch(() => undefined);
     let selected = false;
     for (let index = 0; index < await options.count(); index += 1) {
       const option = options.nth(index);
       const text = normalize(await option.innerText().catch(() => ""));
       if (text !== desired && !text.startsWith(`${desired} `)) continue;
       await option.click();
+      await locator.evaluate((element, answer) => {
+        const shell = element.closest(".select-shell") ?? element;
+        const visual = shell.querySelector(".select__single-value")?.innerText?.trim().replace(/\s+/g, " ")
+          || element.value;
+        shell.dataset.jobApplicationVerifiedAnswer = String(answer);
+        shell.dataset.jobApplicationVerifiedVisual = visual;
+      }, value).catch(() => undefined);
       selected = true;
       break;
     }
@@ -380,8 +391,41 @@ async function readControl(locator, field) {
       return (label?.innerText || selected.closest("label")?.innerText || selected.value || "")
         .trim().replace(/\s+/g, " ");
     }
+    if (element.getAttribute("role") === "combobox") {
+      const shell = element.closest(".select-shell") ?? element;
+      const answer = shell.dataset.jobApplicationVerifiedAnswer;
+      const expectedVisual = shell.dataset.jobApplicationVerifiedVisual;
+      const visual = shell.querySelector(".select__single-value")?.innerText?.trim().replace(/\s+/g, " ")
+        || element.value;
+      if (answer && visual === expectedVisual) return answer;
+      return visual;
+    }
     return element.value;
   });
+}
+
+async function controlMatches(locator, field, answer, observed) {
+  const expected = field.type === "file" ? path.basename(String(answer.value))
+    : field.type === "checkbox" ? Boolean(answer.value === true || normalize(answer.value) === "yes"
+      || normalize(answer.value) === "true")
+      : field.type === "radio" ? normalize(answer.value) : String(answer.value);
+  if (field.type === "file") return observed.some((file) => file.name === expected && file.size > 0);
+  if (field.type === "checkbox") return observed === expected;
+  if (field.type === "tel") return String(observed).replace(/\D/g, "") === String(expected).replace(/\D/g, "");
+  if (field.type === "radio") {
+    const value = await locator.evaluate((element) =>
+      [...document.querySelectorAll('input[type="radio"]')]
+        .find((item) => item.name === element.name && item.form === element.form && item.checked)?.value ?? "");
+    return normalize(observed) === expected || normalize(value) === expected;
+  }
+  if (field.tag === "select") return field.options.some((option) => option.value === observed
+    && (normalize(option.label) === normalize(answer.value) || normalize(option.value) === normalize(answer.value)));
+  if (field.tag === "input" && await locator.getAttribute("role") === "combobox") {
+    const actual = normalize(observed);
+    const desired = normalize(expected);
+    return actual === desired || actual.startsWith(`${desired} `);
+  }
+  return observed === expected;
 }
 
 function inventoryStamp(fields) {
@@ -389,7 +433,7 @@ function inventoryStamp(fields) {
     field.name, field.id, field.label, field.type, field.required]));
 }
 
-async function fillVisibleFields(page, profile, opportunity, answers, preparedAnswers = {}) {
+export async function fillVisibleFields(page, profile, opportunity, answers, preparedAnswers = {}) {
   const controls = page.locator(CONTROL_SELECTOR);
   const inventory = await inventoryFormStep(page);
   const profileValues = flattenProfile(profile, page.url());
@@ -443,16 +487,23 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
       }
       continue;
     }
+    let fillEvidence;
     try {
-      await fillControl(locator, field, answer.value, page);
+      const existing = await readControl(locator, field).catch(() => undefined);
+      if (existing !== undefined && await controlMatches(locator, field, answer, existing)) {
+        fields.push(fieldSummary(field, answer, existing));
+        continue;
+      }
+      fillEvidence = await fillControl(locator, field, answer.value, page);
       let observed;
       try { observed = await readControl(locator, field); }
       catch (error) {
         if (field.type !== "file") throw error;
-        const filename = path.basename(String(answer.value));
-        const body = await page.locator("body").innerText().catch(() => "");
-        if (!body.includes(filename)) throw error;
-        observed = [{ name: filename, size: (await stat(String(answer.value))).size }];
+        if (!fillEvidence?.uploadAcknowledged) throw error;
+        observed = fillEvidence.files;
+      }
+      if (field.type === "file" && !observed.length && fillEvidence?.uploadAcknowledged) {
+        observed = fillEvidence.files;
       }
       let validity;
       try {
@@ -462,28 +513,14 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
         if (field.type !== "file") throw error;
         validity = { valid: true, problem: "" };
       }
-      const expected = field.type === "file" ? path.basename(String(answer.value))
-        : field.type === "checkbox" ? Boolean(answer.value === true || normalize(answer.value) === "yes" || normalize(answer.value) === "true")
-          : field.type === "radio" ? normalize(answer.value) : String(answer.value);
-      const radioValue = field.type === "radio" ? await locator.evaluate((element) =>
-        [...document.querySelectorAll('input[type="radio"]')]
-          .find((item) => item.name === element.name && item.form === element.form && item.checked)?.value ?? "") : "";
-      const matches = field.type === "file" ? observed.some((file) => file.name === expected && file.size > 0)
-        : field.type === "radio" ? normalize(observed) === expected || normalize(radioValue) === expected
-          : field.tag === "select" ? field.options.some((option) => option.value === observed
-            && (normalize(option.label) === normalize(answer.value) || normalize(option.value) === normalize(answer.value)))
-            : observed === expected;
+      const matches = await controlMatches(locator, field, answer, observed);
       if (!matches || !validity.valid) throw new Error(validity.problem || "live value did not match the planned answer");
-      fields.push(fieldSummary(field, answer, observed));
+      fields.push({ ...fieldSummary(field, answer, observed),
+        ...(fillEvidence?.uploadAcknowledged ? { uploadAcknowledged: true } : {}) });
     } catch (error) {
-      if (field.type === "file") {
-        const filename = path.basename(String(answer.value));
-        const body = await page.locator("body").innerText().catch(() => "");
-        if (body.includes(filename)) {
-          const observed = [{ name: filename, size: (await stat(String(answer.value))).size }];
-          fields.push(fieldSummary(field, answer, observed));
-          if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
-        }
+      if (field.type === "file" && fillEvidence?.uploadAcknowledged) {
+        fields.push({ ...fieldSummary(field, answer, fillEvidence.files), uploadAcknowledged: true });
+        if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
       }
       if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
       unresolved.push({
@@ -735,7 +772,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
     );
     const retainedFilledFields = new Map(fields.filter((field) => field.status === "filled")
       .map((field) => [`${field.key}:${field.label}`, field]));
-    for (let pass = 0; pass < 3; pass += 1) {
+    for (let pass = 0; pass < 12; pass += 1) {
       const current = await inventoryFormStep(surface);
       if (!formChanged && inventoryStamp(current) === inventoryStamp(inventory)) break;
       ({ unresolved, fields, signature, inventory, formChanged } = await fillVisibleFields(
@@ -919,7 +956,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
         if (field.type === "ashby_custom") continue;
         if (field.detached) {
           const body = await surface.locator("body").innerText().catch(() => "");
-          if (field.type === "file" && body.includes(field.value)) continue;
+          if (field.type === "file" && (body.includes(field.value) || field.uploadAcknowledged)) continue;
           return pause({ status: "needs_input", message: "A field changed before final submission",
             requirements: [{ kind: "final_review_changed", fields: [field.key],
               message: `Review ${field.label} again before submission` }] }, step);
