@@ -90,7 +90,11 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
           if (!identity.roles?.includes("owner")) return send(response, 403, { error: "owner authority required" });
           const policy = await profiles.setStandingSubmissionPolicy(
             identity.profileId, await jsonBody(request), identity);
-          await service.recordStandingPolicyChange(policy, identity);
+          // The profile write atomically includes its versioned owner history.
+          // The state audit is secondary and must not turn a successful policy
+          // mutation into an ambiguous HTTP failure.
+          await service.recordStandingPolicyChange(policy, identity).catch((error) =>
+            console.error("secondary standing policy audit failed", error));
           return send(response, 200, { policy });
         }
       }

@@ -121,7 +121,12 @@ export class ProfileStore {
       const index = document.profiles.findIndex((profile) => profile.id === profileId);
       const current = index >= 0 ? document.profiles[index] : { id: profileId };
       const standingSubmissionPolicy = nextStandingPolicy(current.standingSubmissionPolicy, input, identity);
-      const updated = { ...current, standingSubmissionPolicy };
+      const updated = { ...current, standingSubmissionPolicy,
+        standingPolicyHistory: [...(current.standingPolicyHistory ?? []).slice(-99), {
+          policyId: standingSubmissionPolicy.id, version: standingSubmissionPolicy.version,
+          mode: standingSubmissionPolicy.mode, ownerActorId: identity.actorId,
+          recordedAt: standingSubmissionPolicy.updatedAt
+        }] };
       if (index >= 0) document.profiles[index] = updated;
       else document.profiles.push(updated);
       await this.#write(document);
