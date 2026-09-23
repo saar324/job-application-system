@@ -93,6 +93,21 @@ test("custom combobox values are committed through an exact visible option", asy
   assert.deepEqual(result.requirements[0].preview.filled.map((field) => field.value), ["Bulgaria"]);
 });
 
+test("radio answers verify by readable label or stored option value", async () => {
+  const byLabel = await run(`<form><fieldset><legend>Visa sponsorship* Required</legend>
+    <label><input type="radio" name="visa" value="true">Yes</label>
+    <label><input type="radio" name="visa" value="false">No</label></fieldset>
+    <button type="submit">Submit Application</button></form>`, { visa: "No" }, profile,
+  { finalApprovalRequired: true });
+  assert.equal(byLabel.requirements[0].preview.filled[0].value, "No");
+  const byValue = await run(`<form><fieldset><legend>Notice* Required</legend>
+    <label><input type="radio" name="notice" value="1">Immediate Available</label>
+    <label><input type="radio" name="notice" value="2">Two weeks</label></fieldset>
+    <button type="submit">Submit Application</button></form>`, { notice: "1" }, profile,
+  { finalApprovalRequired: true });
+  assert.equal(byValue.requirements[0].preview.filled[0].value, "Immediate Available");
+});
+
 test("visual required text does not break deterministic profile aliases", async () => {
   const result = await run(`<form>
     <label>First name* <span>Required</span><input name="candidate[first_name]"></label>
