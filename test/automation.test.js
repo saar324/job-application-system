@@ -527,6 +527,17 @@ test("worker follows Apply Now before inspecting unrelated landing-page forms", 
   assert.equal(result.status, "submitted");
 });
 
+test("worker waits for a delayed application action after the shell loads", async () => {
+  const result = await run(`<main id="root"><button>Cookie settings</button></main>
+    <script>setTimeout(function () { var button = document.createElement('button');
+      button.textContent = 'Apply Now'; button.onclick = function () {
+        root.innerHTML = '<form><label>First name <input name="first_name" required></label><button type="submit">Submit Application</button></form>';
+      }; root.appendChild(button); }, 700)</script>`,
+  {}, profile, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.equal(result.requirements[0].preview.filled[0].value, "Ada");
+});
+
 test("a disabled duplicate Apply button does not make the start action ambiguous", async () => {
   const result = await run(`<button onclick="this.remove();document.querySelector('form').hidden=false">Apply for this job</button>
     <button disabled>Apply for this job</button>
