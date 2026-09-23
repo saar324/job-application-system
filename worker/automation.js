@@ -264,6 +264,21 @@ async function fillControl(locator, field, value, surface) {
       }
     }
     throw new Error(`answer does not match a radio option for ${field.label}`);
+  } else if (field.tag === "input" && await locator.getAttribute("role") === "combobox") {
+    await locator.fill(String(value));
+    const desired = normalize(value);
+    await locator.press("ArrowDown").catch(() => undefined);
+    const options = surface.locator('[role="option"]:visible');
+    let selected = false;
+    for (let index = 0; index < await options.count(); index += 1) {
+      const option = options.nth(index);
+      const text = normalize(await option.innerText().catch(() => ""));
+      if (text !== desired && !text.startsWith(`${desired} `)) continue;
+      await option.click();
+      selected = true;
+      break;
+    }
+    if (!selected) throw new Error(`answer does not match a combobox option for ${field.label}`);
   } else {
     await locator.fill(String(value));
   }
@@ -648,6 +663,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
       const popup = page.context().pages().find((candidate) => !pagesBeforeClick.has(candidate));
       if (popup) page = popup;
       await surface.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
+      await waitForInventoryStability(surface);
       continue;
     }
     if (await openSignupForGeneratedCredential(surface, profile.siteCredential)) continue;
@@ -922,6 +938,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
     if (popup) page = popup;
     if (!action.final) {
       await surface.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
+      await waitForInventoryStability(surface);
       timings.transitionMs += performance.now() - transitionStarted;
       continue;
     }
@@ -972,6 +989,20 @@ export async function automateApplication({ page, profile, opportunity, applicat
 async function waitForStepChange(page, priorBody) {
   await page.waitForFunction((before) => document.body?.innerText !== before,
     priorBody, { timeout: 1500 }).catch(() => undefined);
+}
+
+async function waitForInventoryStability(surface, timeoutMs = 3500) {
+  const deadline = Date.now() + timeoutMs;
+  let previous = "";
+  let stable = 0;
+  while (Date.now() < deadline) {
+    const current = inventoryStamp(await inventoryFormStep(surface).catch(() => []));
+    if (current !== "[]" && current === previous) stable += 1;
+    else stable = 0;
+    if (stable >= 2) return;
+    previous = current;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
 }
 
 function previewOf(observedFields, destination, opportunity) {

@@ -80,6 +80,19 @@ test("visually required option groups use their question and choices", async () 
   assert.deepEqual(result.requirements[0].options.map((item) => item.label), ["Immediate", "Later"]);
 });
 
+test("custom combobox values are committed through an exact visible option", async () => {
+  const result = await run(`<form>
+    <label>Country* <span>Required</span><input id="country" role="combobox"
+      oninput="document.querySelector('[role=listbox]').hidden=false"></label>
+    <div role="listbox" hidden><button type="button" role="option"
+      onclick="country.value='Bulgaria';this.parentElement.hidden=true">Bulgaria</button></div>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile, contact: { ...profile.contact, country: "Bulgaria" } },
+  { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled.map((field) => field.value), ["Bulgaria"]);
+});
+
 test("worker fills safe fields before pausing for an embedded challenge", async () => {
   const result = await run(`
     <form>
