@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { evaluatePolicy } from "./policy.js";
-import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailableError } from "./adapters/errors.js";
+import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailableError,
+  RetryableExecutionError } from "./adapters/errors.js";
 import { telemetry as defaultTelemetry } from "./telemetry.js";
 
 function now() { return new Date().toISOString(); }
@@ -925,6 +926,15 @@ export class ApplicationService {
           throw error;
         }
       }
+      if (error instanceof RetryableExecutionError) {
+        const retried = await this.#retryTransient(applicationId, identity, error, attemptId);
+        if (retried) return retried;
+        return this.#needsReview(applicationId, identity,
+          new NeedsReviewError("The browser repeatedly stopped before the final action", [{
+            kind: "transient_worker_failure", action: "manual_review",
+            message: "The form is safe to retry, but the automatic retry limit was reached"
+          }]), attemptId);
+      }
       if (error instanceof NeedsInputError) return this.#needsInput(applicationId, identity, error, attemptId);
       if (error instanceof NeedsResearchError) return this.#needsResearch(applicationId, identity, error, attemptId);
       if (error instanceof NeedsReviewError) return this.#needsReview(applicationId, identity, error, attemptId);
@@ -965,6 +975,26 @@ export class ApplicationService {
       return item;
     });
     recordWorkerMetrics(this.telemetry, receipt.metrics, "submitted");
+    return saved;
+  }
+
+  async #retryTransient(applicationId, identity, error, attemptId) {
+    const saved = await this.store.mutate(async (state) => {
+      const retries = state.attempts.filter((entry) => entry.applicationId === applicationId
+        && entry.status === "transient_retry").length;
+      if (retries >= 2) return null;
+      const item = state.applications.find((entry) => entry.id === applicationId);
+      item.status = "queued";
+      item.claim = undefined;
+      item.queuedAt = now();
+      item.updatedAt = item.queuedAt;
+      const attempt = state.attempts.find((entry) => entry.id === attemptId);
+      if (attempt) Object.assign(attempt, { status: "transient_retry", completedAt: item.updatedAt,
+        errorCode: "worker_stopped_before_final_action" });
+      audit(state, identity, "application.transient_retry", item.id, { reason: error.message, retry: retries + 1 });
+      return item;
+    });
+    if (saved) this.enqueue(saved.id);
     return saved;
   }
 
