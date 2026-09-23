@@ -98,9 +98,9 @@ export class DiscoveryService {
   async startCampaign(input, identity) {
     const target = Number(input.target ?? 10);
     const reserve = Number(input.reserve ?? Math.min(10, target));
-    if (!Number.isInteger(target) || target < 1 || target > 50
+    if (!Number.isInteger(target) || target < 1 || target > 100
       || !Number.isInteger(reserve) || reserve < 0 || reserve > 50) {
-      throw Object.assign(new Error("target must be 1 to 50 and reserve must be 0 to 50"), { status: 400 });
+      throw Object.assign(new Error("target must be 1 to 100 and reserve must be 0 to 50"), { status: 400 });
     }
     const campaignId = randomUUID();
     const mode = input.mode ?? (await this.profiles.get(identity.profileId))?.defaultMode ?? this.config.defaultMode;
