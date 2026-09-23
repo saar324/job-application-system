@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { companyQuestion, eligibleProseField, needsCompanyResearch } from "./draft-provider.js";
 import { fillAshbyRequiredControls, verifyAshbyRequiredControls } from "./ashby-adapter.js";
@@ -65,6 +65,7 @@ function flattenProfile(profile, currentUrl) {
     "your email": contact.email,
     phone: contact.phone,
     "phone number": contact.phone,
+    "phone number with country code": contact.phone,
     location: contact.location,
     "current location": contact.location,
     city: contact.city,
@@ -444,9 +445,23 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
     }
     try {
       await fillControl(locator, field, answer.value, page);
-      const observed = await readControl(locator, field);
-      const validity = await locator.evaluate((element) => ({ valid: element.validity?.valid ?? true,
-        problem: element.validationMessage ?? "" }));
+      let observed;
+      try { observed = await readControl(locator, field); }
+      catch (error) {
+        if (field.type !== "file") throw error;
+        const filename = path.basename(String(answer.value));
+        const body = await page.locator("body").innerText().catch(() => "");
+        if (!body.includes(filename)) throw error;
+        observed = [{ name: filename, size: (await stat(String(answer.value))).size }];
+      }
+      let validity;
+      try {
+        validity = await locator.evaluate((element) => ({ valid: element.validity?.valid ?? true,
+          problem: element.validationMessage ?? "" }));
+      } catch (error) {
+        if (field.type !== "file") throw error;
+        validity = { valid: true, problem: "" };
+      }
       const expected = field.type === "file" ? path.basename(String(answer.value))
         : field.type === "checkbox" ? Boolean(answer.value === true || normalize(answer.value) === "yes" || normalize(answer.value) === "true")
           : field.type === "radio" ? normalize(answer.value) : String(answer.value);
@@ -461,6 +476,15 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
       if (!matches || !validity.valid) throw new Error(validity.problem || "live value did not match the planned answer");
       fields.push(fieldSummary(field, answer, observed));
     } catch (error) {
+      if (field.type === "file") {
+        const filename = path.basename(String(answer.value));
+        const body = await page.locator("body").innerText().catch(() => "");
+        if (body.includes(filename)) {
+          const observed = [{ name: filename, size: (await stat(String(answer.value))).size }];
+          fields.push(fieldSummary(field, answer, observed));
+          if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
+        }
+      }
       if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
       unresolved.push({
         key: field.name || field.id || normalize(field.label), label: field.label,
@@ -709,17 +733,26 @@ export async function automateApplication({ page, profile, opportunity, applicat
     let { unresolved, fields, signature, inventory, formChanged } = await fillVisibleFields(
       surface, profile, opportunity, application.answers ?? {}, preparedAnswers
     );
+    const retainedFilledFields = new Map(fields.filter((field) => field.status === "filled")
+      .map((field) => [`${field.key}:${field.label}`, field]));
     for (let pass = 0; pass < 3; pass += 1) {
       const current = await inventoryFormStep(surface);
       if (!formChanged && inventoryStamp(current) === inventoryStamp(inventory)) break;
       ({ unresolved, fields, signature, inventory, formChanged } = await fillVisibleFields(
         surface, profile, opportunity, application.answers ?? {}, preparedAnswers
       ));
+      for (const field of fields.filter((item) => item.status === "filled")) {
+        retainedFilledFields.set(`${field.key}:${field.label}`, field);
+      }
     }
     if (formChanged || inventoryStamp(await inventoryFormStep(surface)) !== inventoryStamp(inventory)) {
       return pause({ status: "needs_human", message: "The application form kept changing during entry",
       requirements: [{ kind: "unstable_form", action: "manual_review",
         message: "Inspect the current form before continuing" }] }, step);
+    }
+    const currentFieldKeys = new Set(fields.map((field) => `${field.key}:${field.label}`));
+    for (const [key, field] of retainedFilledFields) {
+      if (!currentFieldKeys.has(key)) fields.push({ ...field, detached: true });
     }
     timings.planFillMs += performance.now() - planStarted;
     timings.fields += inventory.length;
@@ -884,6 +917,13 @@ export async function automateApplication({ page, profile, opportunity, applicat
         requirements: validation }, step);
       for (const field of [...observedFields.values()].filter((item) => item.step === step)) {
         if (field.type === "ashby_custom") continue;
+        if (field.detached) {
+          const body = await surface.locator("body").innerText().catch(() => "");
+          if (field.type === "file" && body.includes(field.value)) continue;
+          return pause({ status: "needs_input", message: "A field changed before final submission",
+            requirements: [{ kind: "final_review_changed", fields: [field.key],
+              message: `Review ${field.label} again before submission` }] }, step);
+        }
         const locator = surface.locator(CONTROL_SELECTOR).nth(field.controlIndex);
         const live = await readControl(locator, field);
         const currentValue = field.type === "password" ? "[stored securely]"
