@@ -50,6 +50,36 @@ test("worker pauses for an unknown required answer", async () => {
   assert.deepEqual(result.requirements[0].fields, ["kotlin_years"]);
 });
 
+test("visual required markers cannot produce an empty final approval", async () => {
+  const result = await run(`<form>
+    <label>First name* <span class="sr-only">Required</span><input name="first_name"></label>
+    <label>Years of backend experience* <span class="sr-only">Required</span><input name="years" type="number"></label>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, profile, { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.deepEqual(result.requirements.map((item) => item.fields[0]), ["years"]);
+  assert.ok(result.requirements.every((item) => item.kind !== "final_submission_approval"));
+});
+
+test("visually required option groups use their question and choices", async () => {
+  const result = await run(`<form>
+    <fieldset><legend>Which domains do you know?* <span>Required</span></legend>
+      <label><input type="checkbox" name="domains" value="cards">Cards</label>
+      <label><input type="checkbox" name="domains" value="payments">Payments</label>
+    </fieldset>
+    <fieldset><legend>Preferred schedule* <span>Required</span></legend>
+      <label><input type="radio" name="schedule" value="now">Immediate</label>
+      <label><input type="radio" name="schedule" value="later">Later</label>
+    </fieldset>
+    <button type="submit">Submit Application</button>
+  </form>`, { "Which domains do you know?* Required": ["Payments"] }, profile,
+  { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements.length, 1);
+  assert.deepEqual(result.requirements[0].fields, ["schedule"]);
+  assert.deepEqual(result.requirements[0].options.map((item) => item.label), ["Immediate", "Later"]);
+});
+
 test("worker fills safe fields before pausing for an embedded challenge", async () => {
   const result = await run(`
     <form>
