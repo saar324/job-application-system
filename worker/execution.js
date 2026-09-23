@@ -2,9 +2,11 @@ import path from "node:path";
 import { automateApplication } from "./automation.js";
 
 export async function executeInFreshContext({ browser, payload, urlPolicy, artifactsDirectory,
-  automate = automateApplication, adaptiveController, draftProvider, egressProxy, markFinalActionStarted }) {
+  automate = automateApplication, adaptiveController, draftProvider, egressProxy, markFinalActionStarted,
+  authorizeFinal, commitFinal }) {
   const initialHostname = new URL(payload.opportunity.applyUrl).hostname.toLowerCase();
-  const requestDomains = payload.opportunity.userRequested === true ? [initialHostname] : [];
+  const requestDomains = payload.opportunity.userRequested === true
+    || payload.opportunity.applicationDestinationVerified === true ? [initialHostname] : [];
   try {
     urlPolicy.assertAllowed(payload.opportunity.applyUrl, requestDomains);
     await urlPolicy.assertPublic(payload.opportunity.applyUrl);
@@ -22,7 +24,11 @@ export async function executeInFreshContext({ browser, payload, urlPolicy, artif
     const requestUrl = route.request().url();
     try {
       if (/^https?:/i.test(requestUrl)) await urlPolicy.assertPublic(requestUrl);
-      if (route.request().isNavigationRequest()) urlPolicy.assertAllowed(requestUrl, requestDomains);
+      // Embedded challenge frames may navigate to their own public hosts. Only the
+      // application page's top-level navigation needs the application allowlist.
+      if (route.request().isNavigationRequest() && route.request().frame().parentFrame() === null) {
+        urlPolicy.assertAllowed(requestUrl, requestDomains);
+      }
       else if (/^https?:/i.test(requestUrl)) urlPolicy.assertNetworkSafe(requestUrl);
       await route.continue();
     } catch (error) {
@@ -38,6 +44,7 @@ export async function executeInFreshContext({ browser, payload, urlPolicy, artif
       const result = await automate({
         page, profile: payload.profile, opportunity: payload.opportunity, application: payload.application,
         evidencePacket: payload.evidencePacket, draftProvider, markFinalActionStarted,
+        authorizeFinal, commitFinal,
         artifactsDirectory: path.join(artifactsDirectory, payload.profile.id)
       });
       if (result.status === "needs_human"

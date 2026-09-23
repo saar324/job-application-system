@@ -5,13 +5,15 @@ import path from "node:path";
 import { createServer } from "node:http";
 import test from "node:test";
 import { chromium } from "playwright";
-import { automateApplication } from "../worker/automation.js";
+import { automateApplication, inventoryFormStep } from "../worker/automation.js";
 import { NeedsInputError, NeedsResearchError, NeedsReviewError } from "../src/adapters/errors.js";
 import { ApplicationService } from "../src/service.js";
 import { DiscoveryService } from "../src/discovery/service.js";
 import { ProfileStore } from "../src/profile-store.js";
 import { JsonStore } from "../src/store.js";
 import { WebhookAdapter } from "../src/adapters/webhook.js";
+import { answerEvidenceFingerprint, approvedAnswerFingerprint } from "../src/approved-answers.js";
+import { HttpDraftProvider } from "../worker/draft-provider.js";
 
 const identity = { actorId: "owner", profileId: "owner" };
 const profile = { id: "owner", contact: { firstName: "Ada", lastName: "Lovelace", email: "ada@example.test" },
@@ -54,6 +56,37 @@ test("complete review preserves long answers and repeated fields on separate ste
   } finally { await browser.close(); }
 });
 
+test("worker replans when a conditional answer removes later controls", async () => {
+  const browser = await chromium.launch();
+  try {
+    const html = `<form><label>Path <select name="path" required
+      onchange="document.querySelector('#old').remove();document.querySelector('#new').hidden=false">
+      <option value="">Choose</option><option value="yes">Yes</option></select></label>
+      <label id="old">Old question <input name="old" required></label>
+      <label>Email <input name="email" type="email" required></label>
+      <label id="new" hidden>New question <input name="new" required></label>
+      <button type="submit">Submit Application</button></form>`;
+    const result = await browserRun(browser, html, { answers: { path: "Yes" }, finalApprovalRequired: true });
+    assert.equal(result.status, "needs_input");
+    assert.ok(result.requirements.some((item) => item.kind === "missing_answer"
+      && item.fields?.includes("new")));
+    assert.equal(result.requirements.some((item) => item.kind === "submission_unverified"), false);
+  } finally { await browser.close(); }
+});
+
+test("inventory omits accessibility backing inputs and Ashby autofill picker", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<form><input name="email" type="email" required>
+      <div class="select-shell"><input required aria-hidden="true" tabindex="-1"></div>
+      <div class="ashby-application-form-autofill-input-root"><input type="file" tabindex="-1"></div>
+      </form>`);
+    assert.deepEqual((await inventoryFormStep(page)).map((field) => field.name), ["email"]);
+    await page.close();
+  } finally { await browser.close(); }
+});
+
 test("draft provider receives only unresolved prose and replay uses the saved draft", async () => {
   const browser = await chromium.launch();
   const html = `<form onsubmit="event.preventDefault();document.body.textContent='Application submitted'">
@@ -77,8 +110,14 @@ test("draft provider receives only unresolved prose and replay uses the saved dr
     const second = await browserRun(browser, html, {
       preparedAnswers: first.preparedAnswers,
       finalSubmissionApproval: { previewFingerprint: first.requirements[0].previewFingerprint }
-    });
+    }, undefined, { listing: "Build reliable software" });
     assert.equal(second.status, "submitted");
+    const stale = await browserRun(browser, html, {
+      preparedAnswers: first.preparedAnswers,
+      finalSubmissionApproval: { previewFingerprint: first.requirements[0].previewFingerprint }
+    }, undefined, { listing: "The role description changed" });
+    assert.equal(stale.status, "needs_input");
+    assert.equal(stale.requirements[0].kind, "missing_answer");
   } finally { await browser.close(); }
 });
 
@@ -122,9 +161,12 @@ test("generic name and email attributes do not fill company and referral fields"
 test("scoped approved answers apply only to their employer", async () => {
   const browser = await chromium.launch();
   const question = "Why this company?";
-  const approved = { ...profile, approvedAnswers: [{ id: "motivation-one", question,
-    value: "I like this company's work.", approvedAt: "2026-09-01T00:00:00Z",
-    scope: { employer: "Example" } }] };
+  const answer = { id: "motivation-one", question, value: "I like this company's work.",
+    approvedAt: new Date().toISOString(), reviewAfter: new Date(Date.now() + 86_400_000).toISOString(),
+    scope: { employer: "Example" }, evidenceFingerprint: answerEvidenceFingerprint(profile),
+    ownerActorId: "owner" };
+  const approved = { ...profile, approvedAnswers: [{ ...answer,
+    contentFingerprint: approvedAnswerFingerprint(answer) }] };
   try {
     const html = `<form><label>${question}<textarea name="motivation" required></textarea></label>
       <button type="submit">Submit Application</button></form>`;
@@ -134,6 +176,39 @@ test("scoped approved answers apply only to their employer", async () => {
     const other = await browserRun(browser, html, { finalApprovalRequired: true }, undefined, undefined,
       { ...approved, approvedAnswers: [{ ...approved.approvedAnswers[0], scope: { employer: "Other" } }] });
     assert.equal(other.requirements[0].kind, "missing_answer");
+    const stale = await browserRun(browser, html, { finalApprovalRequired: true }, undefined, undefined,
+      { ...approved, contact: { ...approved.contact, email: "changed@example.test" } });
+    assert.equal(stale.requirements[0].kind, "missing_answer");
+  } finally { await browser.close(); }
+});
+
+test("draft provider timeout holds the form and leaves the sequential lane free", async () => {
+  const browser = await chromium.launch();
+  const provider = new HttpDraftProvider({ endpoint: "https://draft.example.test", timeoutMs: 20,
+    fetchImpl: async (_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }) });
+  try {
+    const result = await browserRun(browser, `<form><label>Describe a technical project
+      <textarea name="project" required></textarea></label><button type="submit">Submit</button></form>`,
+    {}, provider, { applicant: { skills: ["TypeScript"] }, listing: "Build reliable software" });
+    assert.equal(result.status, "needs_human");
+    assert.equal(result.requirements[0].kind, "draft_provider_failed");
+    assert.equal(result.metrics.draftCalls, 1);
+  } finally { await browser.close(); }
+});
+
+test("a prose draft citing unknown evidence is held for correction", async () => {
+  const browser = await chromium.launch();
+  try {
+    const result = await browserRun(browser, `<form><label>Describe a technical project
+      <textarea name="project" required></textarea></label><button type="submit">Submit</button></form>`,
+    {}, { async draft() { return [{ fieldId: "project", text: "I led an unsupported project.",
+      evidenceIds: ["invented-source"] }]; } },
+    { applicant: { skills: ["TypeScript"] }, listing: "Build reliable software" });
+    assert.equal(result.status, "needs_input");
+    assert.equal(result.requirements[0].kind, "missing_answer");
+    assert.equal(result.preparedAnswers.project, undefined);
   } finally { await browser.close(); }
 });
 
@@ -246,6 +321,11 @@ test("an older automatic application adopts current final-review policy on a saf
     applyUrl: "https://example.test/apply", score: 90 }, identity);
   await service.requestApplication(job.id, {}, identity);
   await service.waitForIdle();
+  // Model a pre-migration application created under the old automatic default.
+  await service.store.mutate((state) => {
+    state.applications[0].finalApprovalRequired = false;
+    state.applications[0].submissionApproval = "automatic";
+  });
   assert.equal(service.list("applications", identity.profileId)[0].finalApprovalRequired, false);
   service.config.modes.full_time.submissionApproval = "always";
   const confirmation = service.list("confirmations", identity.profileId)[0];

@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { companyQuestion, eligibleProseField, needsCompanyResearch } from "./draft-provider.js";
+import { draftContextFingerprint, reusableApprovedAnswer } from "../src/approved-answers.js";
+import { fillAshbyRequiredControls, verifyAshbyRequiredControls } from "./ashby-adapter.js";
 
 const FINAL_BUTTON = /submit(?: application)?|send application|complete application/i;
 const NEXT_BUTTON = /next|continue|save and continue|review/i;
 const START_BUTTON = /^(?:apply|apply manually)$|apply now|apply for this job|start application/i;
 const AUTH_BUTTON = /sign in|log in|create account|register|sign up/i;
 const SIGNUP_BUTTON = /create account|register|sign up/i;
-const SUCCESS_TEXT = /thank you|application (?:has been |was )?submitted|application received|received your application/i;
+const SUCCESS_TEXT = /thank you|application (?:has been |was )?(?:successfully )?submitted|application received|received your application/i;
+const BLOCKED_SUBMISSION_TEXT = /we couldn't submit your application[\s\S]*flagged as possible spam/i;
 const CHALLENGE_TEXT = /captcha|verify you are human|security check|unusual traffic|cloudflare/i;
 const VERIFICATION_FIELD = /\b(otp|one.?time|verification code|security code|authenticator|two.?factor|2fa|mfa|passkey)\b/i;
 
@@ -18,12 +21,13 @@ export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSub
   while (Date.now() < deadline) {
     const currentUrl = page.url();
     const body = (await page.locator("body").innerText().catch(() => "")).slice(0, 50_000);
+    if (BLOCKED_SUBMISSION_TEXT.test(body)) return false;
     const confirmationUrl = /confirmation|thank|success|submitted/i.test(currentUrl) && currentUrl !== previousUrl;
     const invalidControls = await page.locator("input:invalid, textarea:invalid, select:invalid").count().catch(() => 0);
     const activeForm = await page.locator("form:visible").count().catch(() => 0);
     const newSuccessText = !successAlreadyPresent && SUCCESS_TEXT.test(body)
       && activeForm === 0 && body.length < 2000;
-    if ((confirmationUrl || newSuccessText) && invalidControls === 0) return true;
+    if ((confirmationUrl || newSuccessText) && activeForm === 0 && invalidControls === 0) return true;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return false;
@@ -32,6 +36,30 @@ export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSub
 function normalize(value) {
   return String(value ?? "").normalize("NFKD").replace(/\p{Diacritic}/gu, "")
     .toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function escapePattern(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+const countryCodeCache = new Map();
+function countryCodeFor(name) {
+  const country = normalize(name);
+  if (!country) return undefined;
+  if (countryCodeCache.has(country)) return countryCodeCache.get(country);
+  const display = new Intl.DisplayNames(["en"], { type: "region" });
+  let found;
+  for (let first = 65; first <= 90 && !found; first += 1) {
+    for (let second = 65; second <= 90; second += 1) {
+      const code = String.fromCharCode(first, second);
+      if (normalize(display.of(code)) === country) { found = code; break; }
+    }
+  }
+  countryCodeCache.set(country, found);
+  return found;
+}
+
+function withoutRequiredMarker(value) {
+  return String(value ?? "").replace(/\*+\s*(?:required)?\b/gi, " ")
+    .replace(/\brequired\b/gi, " ").replace(/\s+/g, " ").trim();
 }
 
 function flattenProfile(profile, currentUrl) {
@@ -57,9 +85,16 @@ function flattenProfile(profile, currentUrl) {
     "your email": contact.email,
     phone: contact.phone,
     "phone number": contact.phone,
+    "phone number with country code": contact.phone,
     location: contact.location,
+    "current location": contact.location,
     city: contact.city,
+    "candidate location": contact.city ?? contact.location,
+    "location city": contact.city ?? contact.location,
+    "where are you based": contact.location,
+    "where are you based out of": contact.location,
     country: contact.country,
+    "__residence country code": countryCodeFor(contact.country),
     address: contact.address,
     "street address": contact.address,
     "postal code": contact.postalCode,
@@ -67,14 +102,52 @@ function flattenProfile(profile, currentUrl) {
     "zip code": contact.postalCode,
     linkedin: links.linkedin,
     "linkedin profile": links.linkedin,
+    "linkedin url": links.linkedin,
     github: links.github,
+    "github url": links.github,
     portfolio: links.portfolio,
     website: links.portfolio,
+    "personal website": links.portfolio,
+    "website url": links.portfolio,
+    "online cv or linkedin profile": links.linkedin,
+    "please share your online cv or linkedin profile with us": links.linkedin,
     resume: documents.resume,
     cv: documents.resume,
     "cover letter": documents.coverLetter,
-    // Unscoped historical answers are not authoritative for a new employer or jurisdiction.
   };
+  // Reuse only exact normalized questions from the owner's verified answer bank.
+  // This avoids fuzzy legal or jurisdictional matches while eliminating repeated
+  // questions such as referral source, current employer, and current title.
+  for (const [question, answer] of Object.entries(profile.applicationAnswers ?? {})) {
+    if (answer === undefined || answer === null || answer === "" || typeof answer === "object") continue;
+    const key = normalize(question);
+    if (key && values[key] === undefined) values[key] = answer;
+  }
+  const storedAnswers = profile.applicationAnswers ?? {};
+  const residenceCountry = String(contact.country ?? "").trim();
+  values["what would be your availability to join us"] = storedAnswers["What is your availability?"]
+    ?? storedAnswers.Availability ?? storedAnswers.availability;
+  values["what are your strongest professionally used programming languages"] = storedAnswers.Languages;
+  values["__residence work authorization"] = residenceCountry ? storedAnswers[
+    `Are you authorized to work in ${residenceCountry} and for EU companies without visa sponsorship?`
+  ] : undefined;
+  values["__visa sponsorship required"] = storedAnswers[
+    "Will you now or in the future require employer visa sponsorship?"
+  ];
+  values["please share a link to your linkedin profile"] = links.linkedin;
+  values["how many years of backend development experience do you have with node js and typescript"]
+    = storedAnswers.nodejs_years;
+  const awsBand = String(storedAnswers.awsExperienceBand ?? "").match(/^\s*(\d+)/)?.[1];
+  values["how many years of work experience do you have with aws"] = awsBand;
+  values["do you have any experience working with a startup or in a global remote role"]
+    = storedAnswers.worked_as_internal_employee_at_saas_startup_or_scaleup === true
+      || Number(storedAnswers.remote_work_years_approx) > 0 ? "Yes" : undefined;
+  values["what is your current monthly base salary in usd"] = storedAnswers.currentMonthlyBaseSalaryUsd;
+  values["what is your expected monthly base salary in usd"] = storedAnswers.expectedMonthlyBaseSalaryUsd;
+  values["what is your current residency status in the indicated job location e g open work permit permanent resident citizen etc if you are not currently based in that location please specify your current location"]
+    = residenceCountry ? storedAnswers[`Legal residence status in ${residenceCountry}`] : undefined;
+  values["are you willing to undergo a reference check and a background check in accordance with local law regulations after accepting the conditional job offer by the end of the hiring process"]
+    = storedAnswers.backgroundCheckWilling === true ? "Yes" : undefined;
   if (credentialMatches(profile.siteCredential, currentUrl)) {
     values.username = profile.siteCredential.username;
     values["user name"] = profile.siteCredential.username;
@@ -86,8 +159,18 @@ function flattenProfile(profile, currentUrl) {
   return values;
 }
 
-function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, approvedAnswers = [], opportunity = {}) {
-  const candidates = [field.name, field.id, field.label].filter(Boolean);
+function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, approvedAnswers = [], opportunity = {}, skills = [], profile = {}) {
+  const candidates = [...new Set([field.name, field.id, field.label, field.groupQuestion]
+    .filter(Boolean).flatMap((value) => [value, withoutRequiredMarker(value)]))];
+  if (field.type === "checkbox" && field.groupQuestion) {
+    for (const candidate of [field.name, field.groupQuestion]) {
+      const direct = Object.hasOwn(answers, candidate) ? answers[candidate] : answers[normalize(candidate)];
+      if (direct === undefined) continue;
+      const selected = Array.isArray(direct) ? direct : [direct];
+      return { value: selected.some((item) => normalize(item) === normalize(field.label)),
+        source: "application answer" };
+    }
+  }
   for (const candidate of candidates) {
     if (Object.hasOwn(answers, candidate)) return { value: answers[candidate], source: "application answer" };
     const key = normalize(candidate);
@@ -100,27 +183,58 @@ function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, appr
   }
   const label = normalize(field.label);
   const approved = approvedAnswers.find((item) => {
-    if (!item || normalize(item.question) !== label || !item.approvedAt
-      || item.reviewAfter && Date.parse(item.reviewAfter) < Date.now()) return false;
-    if (item.scope?.employer && normalize(item.scope.employer) !== normalize(opportunity.company)) return false;
-    if (item.scope?.role && normalize(item.scope.role) !== normalize(opportunity.title)) return false;
-    if (item.scope?.jurisdiction && !label.includes(normalize(item.scope.jurisdiction))) return false;
-    if (/authoriz|visa|sponsor|citizen|compens|salary|legal|consent|demograph/i.test(label)
-      && !item.scope?.jurisdiction && !item.scope?.employer) return false;
-    return true;
+    if (/authoriz|visa|sponsor|citizen|compens|salary|legal|consent|demograph/i.test(label)) return false;
+    return reusableApprovedAnswer(item, profile, opportunity, withoutRequiredMarker(field.label));
   });
   if (approved) return { value: approved.value, source: `approved answer:${approved.id}` };
+  if (field.type === "checkbox" && !field.required && Array.isArray(skills)) {
+    const compact = (value) => normalize(value).replace(/\s+/g, "");
+    if (skills.some((skill) => compact(skill) === compact(field.label))) {
+      return { value: true, source: "profile skill" };
+    }
+  }
+  if (field.type === "checkbox" && /\blocations?\b/i.test(field.groupQuestion ?? "")
+    && normalize(field.label) === normalize(profileValues.country)) {
+    return { value: true, source: "profile" };
+  }
   // A generic name or email attribute is not enough when the label identifies
   // another person or organization.
   const unrelated = /company|employer|referr|manager|supervisor|emergency|school|recruiter|contact person/i
     .test(`${field.label} ${field.section}`);
   if (unrelated) return undefined;
-  if (field.type === "file" && /\b(?:resume|cv)\b/.test(label) && profileValues.resume) {
+  if (/linkedin/i.test(label) && profileValues["linkedin url"]) {
+    return { value: profileValues["linkedin url"], source: "profile" };
+  }
+  const residenceCountry = String(profileValues.country ?? "").trim();
+  const namedWorkJurisdiction = String(field.label ?? "")
+    .match(/\bwork\s+in\s+([^?.,;]+)/i)?.[1]?.trim();
+  const jurisdictionMatches = !namedWorkJurisdiction
+    || normalize(namedWorkJurisdiction).includes(normalize(residenceCountry));
+  const residenceMentioned = residenceCountry
+    && (new RegExp(`\\b${escapePattern(residenceCountry)}\\b`, "i")
+      .test(`${opportunity.location ?? ""} ${field.label}`)
+      || (profileValues["__residence country code"]
+        && new RegExp(`\\b${profileValues["__residence country code"]}\\b`)
+          .test(String(opportunity.location ?? ""))));
+  if (/authoriz(?:ed|ation).*work/i.test(label)
+    && jurisdictionMatches && residenceMentioned
+    && profileValues["__residence work authorization"] !== undefined) {
+    return { value: profileValues["__residence work authorization"], source: "verified profile fact" };
+  }
+  if (/visa sponsorship|require sponsorship/i.test(label)
+    && profileValues["__visa sponsorship required"] !== undefined) {
+    return { value: profileValues["__visa sponsorship required"], source: "verified profile fact" };
+  }
+  const fileHint = normalize([field.label, field.name, field.id].filter(Boolean).join(" "));
+  if (field.type === "file" && /\b(?:resume|cv)\b/.test(fileHint) && profileValues.resume) {
     return { value: profileValues.resume, source: "profile" };
   }
-  if (field.type === "file" && /\bcover letter\b/.test(label) && profileValues["cover letter"]) {
+  if (field.type === "file" && /\bcover letter\b/.test(fileHint) && profileValues["cover letter"]) {
     return { value: profileValues["cover letter"], source: "profile" };
   }
+  // Profile links are URLs. Never pass one to a file chooser just because its
+  // label (for example, "Portfolio") matches an optional upload control.
+  if (field.type === "file") return undefined;
   const normalizedCandidates = new Set(candidates.map(normalize));
   for (const [key, value] of Object.entries(profileValues)) {
     if (value !== undefined && value !== "" && (label === key || normalizedCandidates.has(key))) {
@@ -158,15 +272,39 @@ async function describe(locator) {
 
 async function fillControl(locator, field, value, surface) {
   if (field.type === "file") {
+    const file = { name: path.basename(String(value)), size: (await stat(String(value))).size };
+    const isAshby = new URL(surface.url()).hostname === "jobs.ashbyhq.com";
+    const rootPage = typeof surface.page === "function" ? surface.page() : surface;
     await locator.setInputFiles(String(value));
+    if (isAshby) {
+      // Ashby's GraphQL operation name has changed over time, so binding the
+      // upload to one request payload creates a slow false failure. Trust the
+      // stable user-visible evidence instead: the selected file remains on a
+      // live input, or Ashby replaces the input with the uploaded filename.
+      await rootPage.waitForFunction((expected) =>
+        document.body?.innerText?.includes(expected)
+          || [...document.querySelectorAll('input[type="file"]')]
+            .some((input) => [...(input.files ?? [])].some((item) => item.name === expected)),
+      file.name, { timeout: 8_000 });
+    }
+    return { uploadAcknowledged: true, files: [file] };
   } else if (field.tag === "select") {
     const desired = normalize(value);
     const option = field.options.find((item) => normalize(item.label) === desired || normalize(item.value) === desired);
     if (!option) throw new Error(`answer does not match an option for ${field.label}`);
     await locator.selectOption(option.value);
   } else if (field.type === "checkbox") {
-    if (value === true || normalize(value) === "yes" || normalize(value) === "true") await locator.check();
-    else await locator.uncheck();
+    const checked = value === true || normalize(value) === "yes" || normalize(value) === "true";
+    if (await locator.isVisible()) {
+      if (checked) await locator.check();
+      else await locator.uncheck();
+    } else {
+      // Some ATSes hide the native control and render a styled label. A DOM
+      // click still dispatches the native input/change events their models use.
+      await locator.evaluate((element, desired) => {
+        if (element.checked !== desired) element.click();
+      }, checked);
+    }
   } else if (field.type === "radio") {
     const radios = surface.locator('input[type="radio"]');
     const desired = normalize(value);
@@ -176,11 +314,35 @@ async function fillControl(locator, field, value, surface) {
       const candidateField = await describe(candidate);
       const candidateValue = await candidate.getAttribute("value");
       if (normalize(candidateField.label).includes(desired) || normalize(candidateValue) === desired) {
-        await candidate.check();
+        if (await candidate.isVisible()) await candidate.check();
+        else await candidate.evaluate((element) => element.click());
         return;
       }
     }
     throw new Error(`answer does not match a radio option for ${field.label}`);
+  } else if (field.tag === "input" && await locator.getAttribute("role") === "combobox") {
+    await locator.fill(String(value));
+    const desired = normalize(value);
+    await locator.press("ArrowDown").catch(() => undefined);
+    const options = surface.locator('[role="option"]:visible');
+    await options.first().waitFor({ state: "visible", timeout: 1500 }).catch(() => undefined);
+    let selected = false;
+    for (let index = 0; index < await options.count(); index += 1) {
+      const option = options.nth(index);
+      const text = normalize(await option.innerText().catch(() => ""));
+      if (text !== desired && !text.startsWith(`${desired} `)) continue;
+      await option.click();
+      await locator.evaluate((element, answer) => {
+        const shell = element.closest(".select-shell") ?? element;
+        const visual = shell.querySelector(".select__single-value")?.innerText?.trim().replace(/\s+/g, " ")
+          || element.value;
+        shell.dataset.jobApplicationVerifiedAnswer = String(answer);
+        shell.dataset.jobApplicationVerifiedVisual = visual;
+      }, value).catch(() => undefined);
+      selected = true;
+      break;
+    }
+    if (!selected) throw new Error(`answer does not match a combobox option for ${field.label}`);
   } else {
     await locator.fill(String(value));
   }
@@ -198,26 +360,45 @@ export async function inventoryFormStep(page) {
       }
       return true;
     };
+    // These controls are planned and verified by the Ashby adapter. Including
+    // their backing inputs here would mislabel custom selections as raw inputs.
+    const ashbyEntry = element.closest(".ashby-application-form-field-entry");
+    if (element.closest(".ashby-application-form-input-radio-group")
+      || element.closest(".ashby-application-form-autofill-input-root")
+      || element.getAttribute("aria-hidden") === "true"
+      || ashbyEntry && (element.matches('[role="combobox"]')
+        || element.closest(".ashby-application-form-input-yesno"))) return null;
     if (element.type === "file" ? !visible(form ?? element.parentElement) : !visible(element)) return null;
     const labels = [...(element.labels ?? [])].map((label) => label.innerText.trim()).filter(Boolean);
     const ariaLabelledBy = (element.getAttribute("aria-labelledby") ?? "").split(/\s+/)
       .map((id) => document.getElementById(id)?.innerText?.trim()).filter(Boolean).join(" ");
-    const label = element.getAttribute("aria-label") || ariaLabelledBy || labels.join(" ")
-      || element.getAttribute("placeholder") || element.getAttribute("name") || element.id || "Unlabelled field";
+    const stableLabel = element.getAttribute("aria-label") || ariaLabelledBy || labels.join(" ")
+      || element.getAttribute("placeholder") || element.getAttribute("name") || element.id;
+    if (!stableLabel || element.matches('.iti__search-input, [id^="iti-"][type="search"]')) return null;
+    const rawLabel = stableLabel;
+    const section = element.closest("fieldset")?.querySelector("legend")?.innerText?.trim()
+      .replace(/\s+/g, " ") ?? "";
     const tag = element.tagName.toLowerCase();
     const type = (element.getAttribute("type") ?? "text").toLowerCase();
+    const groupQuestion = ["radio", "checkbox"].includes(type) ? section : "";
+    const label = type === "radio" && groupQuestion ? groupQuestion : rawLabel;
+    const visuallyRequired = (value) => /\brequired\b/i.test(value)
+      || /(?:^|\s)\*(?:\s|$)/.test(value);
+    const groupRequired = Boolean(groupQuestion && visuallyRequired(groupQuestion));
+    const required = element.required || element.getAttribute("aria-required") === "true"
+      || visuallyRequired(rawLabel) || type === "radio" && groupRequired;
     const options = tag === "select"
       ? [...element.options].filter((option) => option.value).map((option) => ({ value: option.value, label: option.text.trim() }))
       : [];
     return {
       index, id: element.id, name: element.getAttribute("name") ?? "",
-      label: label.replace(/\s+/g, " ").trim(), tag, type,
-      required: element.required || element.getAttribute("aria-required") === "true",
+      label: label.replace(/\s+/g, " ").trim(), tag, type, required,
+      groupQuestion, groupRequired,
       disabled: element.disabled, readOnly: element.readOnly,
       options, maxLength: element.maxLength >= 0 ? element.maxLength : null,
       pattern: element.getAttribute("pattern"), autocomplete: element.getAttribute("autocomplete"),
       placeholder: element.getAttribute("placeholder"),
-      section: element.closest("fieldset")?.querySelector("legend")?.innerText?.trim() ?? "",
+      section,
       formIndex: form ? [...document.forms].indexOf(form) : -1
     };
   }).filter(Boolean));
@@ -232,18 +413,62 @@ async function readControl(locator, field) {
     if (element.type === "radio") {
       const group = [...document.querySelectorAll('input[type="radio"]')]
         .filter((item) => item.name === element.name && item.form === element.form);
-      return group.find((item) => item.checked)?.value ?? "";
+      const selected = group.find((item) => item.checked);
+      if (!selected) return "";
+      const label = selected.id ? document.querySelector(`label[for="${CSS.escape(selected.id)}"]`) : null;
+      return (label?.innerText || selected.closest("label")?.innerText || selected.value || "")
+        .trim().replace(/\s+/g, " ");
+    }
+    if (element.getAttribute("role") === "combobox") {
+      const shell = element.closest(".select-shell") ?? element;
+      const answer = shell.dataset.jobApplicationVerifiedAnswer;
+      const expectedVisual = shell.dataset.jobApplicationVerifiedVisual;
+      const visual = shell.querySelector(".select__single-value")?.innerText?.trim().replace(/\s+/g, " ")
+        || element.value;
+      if (answer && visual === expectedVisual) return answer;
+      return visual;
     }
     return element.value;
   });
 }
 
-async function fillVisibleFields(page, profile, opportunity, answers, preparedAnswers = {}) {
+async function controlMatches(locator, field, answer, observed) {
+  const expected = field.type === "file" ? path.basename(String(answer.value))
+    : field.type === "checkbox" ? Boolean(answer.value === true || normalize(answer.value) === "yes"
+      || normalize(answer.value) === "true")
+      : field.type === "radio" ? normalize(answer.value) : String(answer.value);
+  if (field.type === "file") return observed.some((file) => file.name === expected && file.size > 0);
+  if (field.type === "checkbox") return observed === expected;
+  if (field.type === "tel") return String(observed).replace(/\D/g, "") === String(expected).replace(/\D/g, "");
+  if (field.type === "radio") {
+    const value = await locator.evaluate((element) =>
+      [...document.querySelectorAll('input[type="radio"]')]
+        .find((item) => item.name === element.name && item.form === element.form && item.checked)?.value ?? "");
+    return normalize(observed) === expected || normalize(value) === expected;
+  }
+  if (field.tag === "select") return field.options.some((option) => option.value === observed
+    && (normalize(option.label) === normalize(answer.value) || normalize(option.value) === normalize(answer.value)));
+  if (field.tag === "input" && await locator.getAttribute("role") === "combobox") {
+    const actual = normalize(observed);
+    const desired = normalize(expected);
+    return actual === desired || actual.startsWith(`${desired} `);
+  }
+  return observed === expected;
+}
+
+function inventoryStamp(fields) {
+  return JSON.stringify(fields.map((field) => [field.index, field.formIndex,
+    field.name, field.id, field.label, field.type, field.required]));
+}
+
+export async function fillVisibleFields(page, profile, opportunity, answers, preparedAnswers = {}) {
   const controls = page.locator(CONTROL_SELECTOR);
   const inventory = await inventoryFormStep(page);
   const profileValues = flattenProfile(profile, page.url());
   const unresolved = [];
   const fields = [];
+  const sameInventory = (current) => inventoryStamp(current) === inventoryStamp(inventory);
+  const changedPlan = () => ({ unresolved, fields, inventory, signature: null, formChanged: true });
   const seenRadioGroups = new Set();
   // Resolve the complete step from one DOM snapshot before changing any value.
   // Later readback is deliberately separate from this answer plan.
@@ -257,13 +482,22 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
     const answer = field.type === "checkbox" && field.required
       ? resolveAnswer(field, answers, {})
       : resolveAnswer(field, answers, profileValues, preparedAnswers,
-        Array.isArray(profile.approvedAnswers) ? profile.approvedAnswers : [], opportunity);
+        Array.isArray(profile.approvedAnswers) ? profile.approvedAnswers : [], opportunity, profile.skills, profile);
     answerPlan.entries.push({ field, answer });
   }
   for (const { field, answer } of answerPlan.entries) {
+    if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
     const locator = controls.nth(field.index);
     if (!answer || answer.value === undefined || answer.value === "") {
-      const observed = await readControl(locator, field);
+      let observed;
+      try { observed = await readControl(locator, field); }
+      catch (error) {
+        if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
+        unresolved.push({ key: field.name || field.id || normalize(field.label), label: field.label,
+          required: field.required, type: field.type, problem: error.message });
+        fields.push(fieldSummary(field, undefined, undefined));
+        continue;
+      }
       const prefilled = Array.isArray(observed) ? observed.length > 0
         : typeof observed === "boolean" ? observed : String(observed ?? "").trim() !== "";
       fields.push(fieldSummary(field,
@@ -281,22 +515,42 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
       }
       continue;
     }
+    let fillEvidence;
     try {
-      await fillControl(locator, field, answer.value, page);
-      const observed = await readControl(locator, field);
-      const validity = await locator.evaluate((element) => ({ valid: element.validity?.valid ?? true,
-        problem: element.validationMessage ?? "" }));
-      const expected = field.type === "file" ? path.basename(String(answer.value))
-        : field.type === "checkbox" ? Boolean(answer.value === true || normalize(answer.value) === "yes" || normalize(answer.value) === "true")
-          : field.type === "radio" ? normalize(answer.value) : String(answer.value);
-      const matches = field.type === "file" ? observed.some((file) => file.name === expected && file.size > 0)
-        : field.type === "radio" ? normalize(observed) === expected
-          : field.tag === "select" ? field.options.some((option) => option.value === observed
-            && (normalize(option.label) === normalize(answer.value) || normalize(option.value) === normalize(answer.value)))
-            : observed === expected;
+      const existing = await readControl(locator, field).catch(() => undefined);
+      if (existing !== undefined && await controlMatches(locator, field, answer, existing)) {
+        fields.push(fieldSummary(field, answer, existing));
+        continue;
+      }
+      fillEvidence = await fillControl(locator, field, answer.value, page);
+      let observed;
+      try { observed = await readControl(locator, field); }
+      catch (error) {
+        if (field.type !== "file") throw error;
+        if (!fillEvidence?.uploadAcknowledged) throw error;
+        observed = fillEvidence.files;
+      }
+      if (field.type === "file" && !observed.length && fillEvidence?.uploadAcknowledged) {
+        observed = fillEvidence.files;
+      }
+      let validity;
+      try {
+        validity = await locator.evaluate((element) => ({ valid: element.validity?.valid ?? true,
+          problem: element.validationMessage ?? "" }));
+      } catch (error) {
+        if (field.type !== "file") throw error;
+        validity = { valid: true, problem: "" };
+      }
+      const matches = await controlMatches(locator, field, answer, observed);
       if (!matches || !validity.valid) throw new Error(validity.problem || "live value did not match the planned answer");
-      fields.push(fieldSummary(field, answer, observed));
+      fields.push({ ...fieldSummary(field, answer, observed),
+        ...(fillEvidence?.uploadAcknowledged ? { uploadAcknowledged: true } : {}) });
     } catch (error) {
+      if (field.type === "file" && fillEvidence?.uploadAcknowledged) {
+        fields.push({ ...fieldSummary(field, answer, fillEvidence.files), uploadAcknowledged: true });
+        if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
+      }
+      if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
       unresolved.push({
         key: field.name || field.id || normalize(field.label), label: field.label,
         required: field.required,
@@ -305,6 +559,20 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
       });
       fields.push(fieldSummary(field, undefined, await readControl(locator, field)));
     }
+  }
+  const checkboxGroups = new Map(inventory.filter((field) => field.type === "checkbox"
+    && field.groupQuestion && field.groupRequired).map((field) => [field.name, field]));
+  for (const [name, representative] of checkboxGroups) {
+    const group = inventory.filter((field) => field.type === "checkbox" && field.name === name);
+    const selected = [];
+    for (const field of group) {
+      if (await readControl(controls.nth(field.index), field)) selected.push(field.label);
+    }
+    if (!selected.length) unresolved.push({
+      key: name || normalize(representative.groupQuestion), label: representative.groupQuestion,
+      required: true, type: "checkbox", tag: "input", section: representative.section,
+      maxLength: null, options: group.map((field) => ({ value: field.label, label: field.label }))
+    });
   }
   const signature = createHash("sha256").update(JSON.stringify({
     origin: new URL(page.url()).origin,
@@ -381,7 +649,12 @@ async function inlineValidationQuestions(surface, inventory) {
 
 async function detectChallenge(page) {
   const body = (await page.locator("body").innerText().catch(() => "")).slice(0, 50_000);
-  const challengeFrame = page.frames().some((frame) => /recaptcha|hcaptcha|turnstile/i.test(frame.url()));
+  // Greenhouse mounts an invisible reCAPTCHA badge on ordinary forms. It is
+  // not a human challenge unless the site later opens an interactive frame.
+  const challengeFrame = page.frames().some((frame) =>
+    frame !== page.mainFrame() && /recaptcha|hcaptcha|turnstile/i.test(frame.url())
+      && !(/recaptcha\/[^?]*\/anchor\?/i.test(frame.url())
+        && /[?&]size=invisible(?:&|$)/i.test(frame.url())));
   return challengeFrame || CHALLENGE_TEXT.test(body);
 }
 
@@ -403,9 +676,16 @@ async function findAction(page) {
     return selected ? [...document.forms].indexOf(selected) : -1;
   });
   const scoped = activeForm >= 0 ? actions.filter((item) => item.form === activeForm) : actions;
-  const unique = (items, final) => items.length === 1
-    ? { locator: items[0].locator, text: items[0].text, final }
-    : items.length > 1 ? { ambiguous: true, text: items.map((item) => item.text).join(" / ") } : null;
+  const unique = (items, final) => {
+    if (items.length === 1) return { locator: items[0].locator, text: items[0].text, final };
+    if (items.length > 1) {
+      const sameAction = items.every((item) => item.form === items[0].form
+        && normalize(item.text) === normalize(items[0].text));
+      if (sameAction) return { locator: items[0].locator, text: items[0].text, final };
+      return { ambiguous: true, text: items.map((item) => item.text).join(" / ") };
+    }
+    return null;
+  };
   // A landing-page Apply action takes precedence over unrelated page forms.
   const starts = actions.filter((item) => START_BUTTON.test(item.text));
   if (starts.length && activeForm < 0) return unique(starts, false);
@@ -458,23 +738,47 @@ async function activeSurface(page) {
   return page;
 }
 
+export function unavailablePostingUrl(value) {
+  try {
+    const url = new URL(value);
+    return /(?:^|\.)job-boards\.greenhouse\.io$/i.test(url.hostname)
+      && url.searchParams.get("error") === "true";
+  } catch { return false; }
+}
+
 export async function automateApplication({ page, profile, opportunity, application, artifactsDirectory,
-  evidencePacket, draftProvider, markFinalActionStarted }) {
+  evidencePacket, draftProvider, markFinalActionStarted, authorizeFinal, commitFinal }) {
   const attemptStarted = performance.now();
   const timings = { loadMs: 0, planFillMs: 0, draftMs: 0, transitionMs: 0, receiptMs: 0, steps: 0,
     fields: 0, draftCalls: 0 };
-  await page.goto(opportunity.applyUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  const initialResponse = await page.goto(opportunity.applyUrl,
+    { waitUntil: "domcontentloaded", timeout: 45_000 });
+  if ([403, 429].includes(initialResponse?.status())) {
+    return { status: "needs_human", phase: "before_final_action",
+      message: `The employer returned HTTP ${initialResponse.status()} before the application opened`,
+      requirements: [{ kind: "access_restricted", action: "manual_review",
+        message: "Stop this source and inspect its access restriction before any retry" }] };
+  }
   // React-based ATS pages can finish DOMContentLoaded before the application
   // controls are mounted. Wait for a real control so the first inspection does
   // not incorrectly classify a supported form as empty.
   await page.locator("input, textarea, select, button, iframe").first()
     .waitFor({ state: "attached", timeout: 10_000 }).catch(() => undefined);
-  await page.waitForTimeout(250);
+  const surfaceDeadline = Date.now() + 10_000;
+  while (Date.now() < surfaceDeadline) {
+    if (await findAction(page).catch(() => null)) break;
+    await page.waitForTimeout(200);
+  }
+  await page.waitForTimeout(150);
   timings.loadMs = performance.now() - attemptStarted;
   const observedFields = new Map();
   const visitedSteps = new Set();
   let surface = page;
-  const preparedAnswers = { ...(application.preparedAnswers ?? {}) };
+  const draftFingerprint = draftContextFingerprint(profile, opportunity, evidencePacket,
+    application.answers ?? {});
+  const preparedAnswers = application.preparedAnswers?.__contextFingerprint === draftFingerprint
+    ? { ...application.preparedAnswers } : {};
+  preparedAnswers.__contextFingerprint = draftFingerprint;
   const pause = (result, step, phase = "before_final_action") => ({
     ...result, phase, preparedAnswers,
     metrics: { ...timings, activeMs: performance.now() - attemptStarted },
@@ -494,12 +798,9 @@ export async function automateApplication({ page, profile, opportunity, applicat
   for (let step = 0; step < 16; step += 1) {
     timings.steps = step + 1;
     surface = await activeSurface(page);
-    if (await detectChallenge(page)) {
-      return pause({
-        status: "needs_human",
-        message: "The application site presented a human verification challenge",
-        requirements: [{ kind: "human_challenge", action: "manual_review", message: "Complete or inspect the browser challenge" }]
-      }, step);
+    if (step === 0 && unavailablePostingUrl(surface.url())) {
+      return pause({ status: "posting_unavailable", reasonCode: "posting_not_found",
+        message: "The employer redirected this expired role to its job board" }, step);
     }
     const landingAction = await findAction(surface);
     if (landingAction?.ambiguous) return pause({
@@ -515,6 +816,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
       const popup = page.context().pages().find((candidate) => !pagesBeforeClick.has(candidate));
       if (popup) page = popup;
       await surface.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
+      await waitForInventoryStability(surface);
       continue;
     }
     if (await openSignupForGeneratedCredential(surface, profile.siteCredential)) continue;
@@ -526,17 +828,31 @@ export async function automateApplication({ page, profile, opportunity, applicat
       requirements: [{ kind: "unsupported_control", action: "manual_review",
         message: "Inspect the custom form control before submission" }]
     }, step);
+    const custom = await fillAshbyRequiredControls(surface, profile, application.answers ?? {});
     const planStarted = performance.now();
-    let { unresolved, fields, signature, inventory } = await fillVisibleFields(
+    let { unresolved, fields, signature, inventory, formChanged } = await fillVisibleFields(
       surface, profile, opportunity, application.answers ?? {}, preparedAnswers
     );
-    for (let pass = 0; pass < 3; pass += 1) {
+    const retainedFilledFields = new Map(fields.filter((field) => field.status === "filled")
+      .map((field) => [`${field.key}:${field.label}`, field]));
+    for (let pass = 0; pass < 12; pass += 1) {
       const current = await inventoryFormStep(surface);
-      if (JSON.stringify(current.map((field) => [field.name, field.id, field.label]))
-        === JSON.stringify(inventory.map((field) => [field.name, field.id, field.label]))) break;
-      ({ unresolved, fields, signature, inventory } = await fillVisibleFields(
+      if (!formChanged && inventoryStamp(current) === inventoryStamp(inventory)) break;
+      ({ unresolved, fields, signature, inventory, formChanged } = await fillVisibleFields(
         surface, profile, opportunity, application.answers ?? {}, preparedAnswers
       ));
+      for (const field of fields.filter((item) => item.status === "filled")) {
+        retainedFilledFields.set(`${field.key}:${field.label}`, field);
+      }
+    }
+    if (formChanged || inventoryStamp(await inventoryFormStep(surface)) !== inventoryStamp(inventory)) {
+      return pause({ status: "needs_human", message: "The application form kept changing during entry",
+      requirements: [{ kind: "unstable_form", action: "manual_review",
+        message: "Inspect the current form before continuing" }] }, step);
+    }
+    const currentFieldKeys = new Set(fields.map((field) => `${field.key}:${field.label}`));
+    for (const [key, field] of retainedFilledFields) {
+      if (!currentFieldKeys.has(key)) fields.push({ ...field, detached: true });
     }
     timings.planFillMs += performance.now() - planStarted;
     timings.fields += inventory.length;
@@ -608,6 +924,19 @@ export async function automateApplication({ page, profile, opportunity, applicat
     for (const field of fields) observedFields.set(`${step}:${signature}:${field.key}:${field.label}`, {
       ...field, step, stepSignature: signature
     });
+    for (const field of custom.fields) observedFields.set(`${step}:${signature}:${field.key}:${field.label}`, {
+      ...field, step, stepSignature: signature
+    });
+    if (await detectChallenge(page)) {
+      return pause({
+        status: "needs_human",
+        message: "The application site presented a human verification challenge",
+        requirements: [{ kind: "human_challenge", action: "manual_review", message: "Complete or inspect the browser challenge" }]
+      }, step);
+    }
+    if (custom.requirements.length) return pause({ status: "needs_input",
+      message: "Required custom application questions need review",
+      requirements: custom.requirements }, step);
     if (unresolved.length) {
       const verification = unresolved.find((field) => VERIFICATION_FIELD.test(`${field.key} ${field.label}`));
       if (verification) {
@@ -650,6 +979,10 @@ export async function automateApplication({ page, profile, opportunity, applicat
     }
     if (!action) {
       const body = await surface.locator("body").innerText().catch(() => "");
+      if (await detectChallenge(page)) return pause({ status: "needs_human",
+        message: "The application site presented a human verification challenge",
+        requirements: [{ kind: "human_challenge", action: "manual_review",
+          message: "Complete or inspect the browser challenge" }] }, step);
       if (!inventory.length && /\bJob not found\b\s*The job you requested was not found\./i.test(body)) {
         return pause({ status: "posting_unavailable", reasonCode: "posting_not_found",
           message: "The employer application page says the job was not found" }, step);
@@ -660,10 +993,26 @@ export async function automateApplication({ page, profile, opportunity, applicat
       }, step);
     }
     const previousUrl = surface.url();
+    let reviewedLiveState;
+    if (action.final) {
+      // Controlled ATS fixtures reproduce values that appear filled until a
+      // delayed blur/change handler discards them. Trigger that handler, then
+      // inspect the form again after its debounce window before any permit.
+      await surface.locator("body").evaluate((body) => body.ownerDocument.activeElement?.blur());
+      await surface.waitForTimeout(650);
+      if (new URL(surface.url()).hostname === "jobs.ashbyhq.com") {
+        await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
+      }
+    }
     const bodyBeforeSubmit = action.final
       ? (await surface.locator("body").innerText().catch(() => "")).slice(0, 50_000)
       : "";
     if (action.final) {
+      if (!await verifyAshbyRequiredControls(surface, custom.fields)) return pause({
+        status: "needs_input", message: "A custom answer changed before final submission",
+        requirements: [{ kind: "final_review_changed", fields: custom.fields.map((field) => field.key),
+          message: "Review the custom application answers again before submission" }]
+      }, step);
       const current = await inventoryFormStep(surface);
       if (JSON.stringify(current.map((field) => [field.name, field.id, field.label]))
         !== JSON.stringify(inventory.map((field) => [field.name, field.id, field.label]))) {
@@ -676,6 +1025,14 @@ export async function automateApplication({ page, profile, opportunity, applicat
         message: "The application has field errors before final submission",
         requirements: validation }, step);
       for (const field of [...observedFields.values()].filter((item) => item.step === step)) {
+        if (field.type === "ashby_custom") continue;
+        if (field.detached) {
+          const body = await surface.locator("body").innerText().catch(() => "");
+          if (field.type === "file" && body.includes(field.value)) continue;
+          return pause({ status: "needs_input", message: "A field changed before final submission",
+            requirements: [{ kind: "final_review_changed", fields: [field.key],
+              message: `Review ${field.label} again before submission` }] }, step);
+        }
         const locator = surface.locator(CONTROL_SELECTOR).nth(field.controlIndex);
         const live = await readControl(locator, field);
         const currentValue = field.type === "password" ? "[stored securely]"
@@ -695,14 +1052,24 @@ export async function automateApplication({ page, profile, opportunity, applicat
               message: `Review ${field.label} again before submission` }] }, step);
         }
       }
+      reviewedLiveState = await finalLiveState(surface);
       const preview = previewOf(observedFields, surface.url(), opportunity);
+      // A fresh ATS render can assign different DOM IDs or reorder hidden
+      // backing controls. Approval binds to the reviewed answers and files,
+      // while the live readback above checks the current form before Submit.
+      const approvedContent = {
+        ...preview,
+        filled: preview.filled.map(({ controlIndex, stepSignature, ...field }) => field),
+        unfilled: preview.unfilled.map(({ controlIndex, stepSignature, ...field }) => field)
+      };
       const previewFingerprint = createHash("sha256").update(JSON.stringify({
-        preview,
+        preview: approvedContent,
         privateFingerprints: [...observedFields.values()].map((field) => [
           field.step, field.key, field.secretFingerprint, field.stagedPathFingerprint
         ])
       })).digest("hex");
-      if ((application.finalApprovalRequired || [...observedFields.values()].some((field) => field.source === "drafted prose"))
+      if ((application.finalApprovalRequired || application.standingPolicyVersion === undefined
+        && [...observedFields.values()].some((field) => field.source === "drafted prose"))
         && application.finalSubmissionApproval?.previewFingerprint !== previewFingerprint) {
         return pause({
           status: "needs_input", message: "Review all fields before the final submission",
@@ -712,6 +1079,24 @@ export async function automateApplication({ page, profile, opportunity, applicat
           }]
         }, step);
       }
+      if (application.standingPolicyVersion !== undefined) {
+        if (!authorizeFinal || !commitFinal) return pause({ status: "needs_human",
+          message: "The server final-decision gate is unavailable",
+          requirements: [{ kind: "final_policy_unavailable", action: "manual_review",
+            message: "Review this application before submitting" }] }, step);
+        let decision;
+        try { decision = await authorizeFinal({ applicationId: application.id,
+          attemptId: application.claim?.attemptId, previewFingerprint, preview }); }
+        catch { return pause({ status: "needs_human", message: "The final-decision gate failed",
+          requirements: [{ kind: "final_policy_unavailable", action: "manual_review",
+            message: "Review this application before submitting" }] }, step); }
+        if (decision.decision !== "permit") return pause({ status: "needs_input",
+          message: "The standing submission policy requires review",
+          requirements: [{ kind: "final_policy_hold", action: "manual_review",
+            message: (decision.reasonCodes ?? []).join(", ") || "Policy hold", preview,
+            previewFingerprint }] }, step);
+        application.finalPermit = { permit: decision.permit, previewFingerprint };
+      }
     }
     const pagesBeforeClick = new Set(page.context().pages());
     // Sites frequently keep authentication and multi-step transitions entirely
@@ -720,6 +1105,43 @@ export async function automateApplication({ page, profile, opportunity, applicat
     // navigations while DOM-only transitions can continue immediately.
     const priorBody = await surface.locator("body").innerText().catch(() => "");
     const transitionStarted = performance.now();
+    const networkEvents = [];
+    const networkBodies = [];
+    const consoleErrors = [];
+    if (action.final) {
+      page.on("response", (response) => {
+        const url = response.url();
+        if (!/ashbyhq\.com|comeet\.co|splitmetrics\.com/.test(url)) return;
+        const event = { status: response.status(), method: response.request().method(),
+          url: new URL(url).origin + new URL(url).pathname };
+        networkEvents.push(event);
+        if (event.method === "POST" && event.url.endsWith("/api/non-user-graphql")) {
+          networkBodies.push(response.text().then((body) => { event.body = body.slice(0, 4000); })
+            .catch(() => undefined));
+        }
+      });
+      page.on("requestfailed", (request) => {
+        const url = request.url();
+        networkEvents.push({ failed: request.failure()?.errorText, method: request.method(),
+          url: new URL(url).origin + new URL(url).pathname });
+      });
+      page.on("console", (message) => {
+        if (message.type() === "error") consoleErrors.push(message.text().slice(0, 300));
+      });
+    }
+    if (action.final && (!await verifyAshbyRequiredControls(surface, custom.fields)
+      || await finalLiveState(surface) !== reviewedLiveState)) {
+      return pause({ status: "needs_input", message: "The form changed after final review",
+        requirements: [{ kind: "final_review_changed", fields: [],
+          message: "Review the changed form before submitting" }] }, step);
+    }
+    if (action.final && application.finalPermit) {
+      try { await commitFinal({ applicationId: application.id,
+        attemptId: application.claim?.attemptId, ...application.finalPermit }); }
+      catch { return pause({ status: "needs_human", message: "The final submission permit expired or was revoked",
+        requirements: [{ kind: "final_policy_revoked", action: "manual_review",
+          message: "Review the current policy and form before submitting" }] }, step); }
+    }
     if (action.final) await markFinalActionStarted?.();
     await action.locator.click({ noWaitAfter: true });
     if (!action.final) await waitForStepChange(surface, priorBody);
@@ -727,6 +1149,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
     if (popup) page = popup;
     if (!action.final) {
       await surface.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
+      await waitForInventoryStability(surface);
       timings.transitionMs += performance.now() - transitionStarted;
       continue;
     }
@@ -734,6 +1157,29 @@ export async function automateApplication({ page, profile, opportunity, applicat
     const verified = await waitForSubmissionEvidence(surface, previousUrl, bodyBeforeSubmit);
     timings.receiptMs += performance.now() - transitionStarted;
     if (!verified) {
+      await Promise.allSettled(networkBodies);
+      await mkdir(artifactsDirectory, { recursive: true, mode: 0o700 });
+      await page.screenshot({ path: path.join(artifactsDirectory, `${application.id}.unverified.png`),
+        fullPage: true }).catch(() => undefined);
+      const diagnostic = {
+        url: surface.url(),
+        body: (await surface.locator("body").innerText().catch(() => "")).slice(0, 8000),
+        invalid: await surface.locator("input:invalid, textarea:invalid, select:invalid")
+          .evaluateAll((elements) => elements.map((element) => ({
+            name: element.name, type: element.type, message: element.validationMessage
+          }))).catch(() => []),
+        visibleForms: await surface.locator("form:visible").count().catch(() => 0),
+        networkEvents: networkEvents.slice(-40), consoleErrors: consoleErrors.slice(-20)
+      };
+      await writeFile(path.join(artifactsDirectory, `${application.id}.unverified.json`),
+        JSON.stringify(diagnostic), { mode: 0o600 }).catch(() => undefined);
+      if (BLOCKED_SUBMISSION_TEXT.test(diagnostic.body)) {
+        return pause({
+          status: "needs_human", message: "The employer blocked the submission as possible spam",
+          requirements: [{ kind: "submission_blocked", action: "manual_review",
+            message: "Ashby flagged this application as possible spam. Continue in a regular browser and verify its outcome." }]
+        }, step, "final_action_started");
+      }
       return pause({
         status: "needs_human",
         message: "The submit action ran, but the site did not provide a verifiable confirmation",
@@ -751,9 +1197,39 @@ export async function automateApplication({ page, profile, opportunity, applicat
   }, 16);
 }
 
+async function finalLiveState(surface) {
+  const inventory = await inventoryFormStep(surface);
+  const controls = surface.locator(CONTROL_SELECTOR);
+  const values = [];
+  const validity = [];
+  for (const field of inventory) {
+    try { values.push(await readControl(controls.nth(field.index), field)); }
+    catch { values.push("[control disappeared]"); }
+    validity.push(await controls.nth(field.index).evaluate((element) => [
+      element.validity?.valid ?? true, element.getAttribute("aria-invalid")
+    ]).catch(() => [false, "detached"]));
+  }
+  const errors = (await inlineValidationQuestions(surface, inventory)).map((item) => [item.kind, item.fields]);
+  return JSON.stringify([surface.url(), inventoryStamp(inventory), values, validity, errors]);
+}
+
 async function waitForStepChange(page, priorBody) {
   await page.waitForFunction((before) => document.body?.innerText !== before,
     priorBody, { timeout: 1500 }).catch(() => undefined);
+}
+
+async function waitForInventoryStability(surface, timeoutMs = 3500) {
+  const deadline = Date.now() + timeoutMs;
+  let previous = "";
+  let stable = 0;
+  while (Date.now() < deadline) {
+    const current = inventoryStamp(await inventoryFormStep(surface).catch(() => []));
+    if (current !== "[]" && current === previous) stable += 1;
+    else stable = 0;
+    if (stable >= 2) return;
+    previous = current;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
 }
 
 function previewOf(observedFields, destination, opportunity) {

@@ -55,6 +55,36 @@ The script normalizes all runtime paths, fixes private-file ownership before mig
 
 OpenClaw installation is deliberately separate. Provision each applicant only after API authentication and worker health are verified.
 
+### Optional reserve refresh timers
+
+`deploy/systemd/job-application-reserve-refresh.{service,timer}` and
+`job-application-browser-reserve.{service,timer}` are opt-in templates. The deployment script does not install or enable
+them. The official timer uses a profile-bound agent token to refresh only configured Ashby, Greenhouse, and Lever feeds;
+the browser timer runs a no-submit campaign against the private source catalog. Both share a lock, and browser sites
+retain their per-host request, page, delay, and 403/429/challenge limits.
+
+Before installing either timer, create a private `/etc/job-application/reserve.env` containing `JOB_SERVER_URL` and a
+profile-bound `JOB_SERVER_TOKEN`. Provision the private catalog at the path used by the browser unit and confirm the
+service user can read it and launch Playwright. The checked-in units use the conventional `jobapp-api` user and
+`/opt/job-application-system`; hosts with an immutable release path or a different account must override `User`,
+`Group`, `WorkingDirectory`, `EnvironmentFile`, and `ExecStart`. Inspect the active server unit first, then point both
+refresh services at the same tested release. Keep the catalog and token in private deployment files with mode `0600`.
+
+For rollout, first run the two `--reserve-only` commands manually against staging with that profile and catalog. Check
+their source health, 403/429/challenge stops, request totals, reserve counts, and zero application records. Then run
+`systemd-analyze verify` on the substituted service and timer files, test each service once with
+`systemctl start`, and inspect its journal without printing credentials. Enable only the official timer initially.
+The official timer covers configured Ashby, Greenhouse, and Lever server adapters, not all 50 catalog sources. Enable
+the browser timer only after its no-submit scan succeeds within the site budgets; its daily schedule cannot keep a
+45-minute reserve continuously fresh. To roll back a timer, disable and stop its timer and service, then restore the
+prior immutable release path or remove the copied unit. Existing reserved roles still require independent freshness
+verification before any final action.
+
+Run each no-submit command manually with the intended private token, verify source health and HTTP 403/429 handling,
+then install the adapted unit and timer files and enable them separately. Do not enable the browser timer before its
+browser runtime, catalog, private environment, and measured request budget pass staging validation. A timer failure
+does not authorize a submission or turn stale reserve entries into fresh candidates.
+
 ## Upgrades and recovery
 
 Back up `/var/lib/job-application`, `/etc/job-application`, private applicant documents, and external OpenClaw reference files. Run `npm run check` on the candidate revision, deploy, then verify health, profile binding, credential isolation, and worker authentication before enabling discovery or live submission.

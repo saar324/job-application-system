@@ -14,7 +14,7 @@ Treat each scheduled or continuous invocation as one bounded cycle, not as a per
 
 1. Check `health` and `profile`, then inspect `applications` and `inbox` before discovering new work.
 2. Surface new confirmations or failures that need the owner. Do not repeat notifications for unchanged items.
-3. Scan configured sources, evaluate results from listing and profile evidence, and request eligible applications within policy limits.
+3. Scan configured sources, evaluate results from listing and profile evidence, and request eligible applications within policy limits. For a comprehensive campaign, use the all-source pool below.
 4. Observe newly queued applications for a bounded period. Never repeat an apply request because polling ended or a transport call timed out.
 5. Report new verified submissions and actionable blocks, then yield. Leave queued, blocked, and waiting-confirmation work on the server for the next cycle.
 
@@ -33,11 +33,32 @@ Do not overlap cycles for the same profile or start a new application sub-agent 
 9. Close the external application tab after every completed or paused attempt. The server persists a checkpoint; the next attempt reconstructs the form in a fresh context. Never treat an abandoned tab as the durable state.
 10. During a multi-application batch, checkpoint a CAPTCHA or other owner blocker, close that tab, and continue with the next application. Return to blocked applications one at a time after the owner can act. Never solve a CAPTCHA.
 
-When an application needs original prose, read [references/writing-style.json](references/writing-style.json) before drafting or filling it. Use only relevant verified job, company, and applicant evidence. A new model-written answer always needs owner review. Review the complete application for accuracy, fit, grammar, and empty required fields. A prepared batch may be approved once with `jobctl approve-batch` only when the owner's explicit approval names every application ID and complete-preview fingerprint. Submit those exact applications sequentially and verify each receipt.
+When an application needs original prose, read [references/writing-style.json](references/writing-style.json) before drafting or filling it. Use only relevant verified job, company, and applicant evidence. Review the complete application for accuracy, fit, grammar, and empty required fields. An active owner-issued standing policy may permit grounded prose and final submission for a verified official ATS role after the server's final decision and commit checks. If the role, destination, answer class, or form falls outside that policy, obtain exact approval for the complete preview. A prepared manual-review batch may be approved once with `jobctl approve-batch` only when the owner's explicit approval names every application ID and complete-preview fingerprint. Submit sequentially and verify each receipt.
 
 For an `account_credentials` custom answer, check the encrypted profile vault for a credential bound to the current HTTPS origin before creating an account. Reuse the existing account when present. Create a managed credential only when no matching account exists, then store it in the vault for later applications. If owner-supplied credentials are required, ask for `site_username` and `site_password` in the private owner chat, warn that Telegram retains message history, and send them once to `jobctl confirm`. The server never stores passwords in application state. Prefer the generated managed-account button when offered. Never echo a password or include it in a later message.
 
 Never handle another profile by changing a request parameter. Profile identity comes exclusively from `JOB_SERVER_TOKEN`. Never expose tokens, passwords, CV contents, or one profile's history in another chat.
+
+## All-source campaign pool
+
+When the owner asks for a comprehensive search or a measured application batch, create one campaign containing every
+configured `serverAdapters` source and every `visibleBrowserSources` source from the private catalog. The campaign must
+collect candidates before it opens application forms:
+
+1. Ask each source for at most 10 new eligible roles. A server adapter uses `limitPerSource: 10`. A browser source follows
+   pagination until it has 10 accepted roles, reaches the real end, or reaches the source safety budget.
+2. Exclude every canonical role already present in opportunities or applications, including submitted, skipped, rejected,
+   failed, and still-active records. Deduplicate again after an aggregator resolves to an employer ATS URL.
+3. Search browser sources one at a time. Default safety limits are five result pages, 35 detail pages, 45 navigations, and
+   at least 1.5 seconds between navigations to the same host. Stop that source on HTTP 403, 429, or a challenge page and record the outcome.
+   Do not bypass login, CAPTCHA, access controls, or a catalog instruction that requires manual use.
+4. Send each browser source result through `jobctl campaign-add-source CAMPAIGN_ID`, including pages visited, requests made,
+   exhaustion, and rate-limit state. Mark a source complete only after its pagination work is finished or a recorded policy,
+   access, or rate-limit outcome prevents further work.
+5. Finish every planned source. The server keeps at most 10 candidates per source, ranks the combined pool globally, and only
+   then prepares the campaign target plus reserve sequentially. Early sources cannot consume the application quota.
+
+Use one browser context and one application worker. Never create one agent per source or per application.
 
 ## Visible browser handoff
 
@@ -45,7 +66,7 @@ When the owner uses LinkedIn to choose jobs, treat every `linkedin.com` page as 
 
 The source catalog distinguishes server adapters from public boards that require visible-browser discovery. Do not pass a browser-only source ID to `jobctl scan`. LinkedIn is excluded from every autonomous source list.
 
-On an external application page, fill repeatable contact and link fields from the saved profile, then review the visible values. Pause for any unknown fact, legal attestation, verification step, or résumé upload that was not explicitly requested. In a batch, defer CAPTCHAs using step 10 instead of pausing the whole batch. Never click the final submission control without the owner's explicit approval for that application. After approval, click the final control and verify the result. Keep the current form available for manual corrections or takeover.
+On an external application page, fill repeatable contact and link fields from the saved profile, then review the visible values. Pause for any unknown fact, legal attestation, verification step, or résumé upload that was not explicitly requested. In a batch, defer CAPTCHAs using step 10 instead of pausing the whole batch. A verified official ATS role covered by an active owner standing policy may pass the server's final permit and commit checks without another owner approval. This includes a browser-discovered role only when the server has independently fetched and verified its exact current official ATS board, role, and destination. Direct links, unverified browser roles, and any uncovered or changed form require exact owner approval for that application. After the authorized final action, verify the result. Keep the current form available for manual corrections or takeover.
 
 Read [references/commands.md](references/commands.md) when constructing commands or request payloads.
 

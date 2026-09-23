@@ -68,3 +68,32 @@ test("a crashed pre-final attempt remains distinguishable from a started final a
   assert.equal(retried, false);
   assert.equal(fenced.requirements[0].kind, "submission_unverified");
 });
+
+test("safe pre-final replay obtains a fresh decision and a lost response reuses the durable receipt", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-receipts-test-"));
+  const store = new ReceiptStore(directory);
+  let decisions = 0;
+  let clicks = 0;
+  const first = await store.run(payload(), async () => {
+    decisions += 1;
+    return { status: "needs_input", requirements: [{ kind: "missing_answer" }] };
+  });
+  assert.equal(first.status, "needs_input");
+  assert.equal((await store.status("application-one")).status, "before_final_action");
+  // Simulate the caller losing the successful HTTP response after the receipt
+  // was durably written. A new worker process must return it without a click.
+  await new ReceiptStore(directory).run(payload(), async (markFinalActionStarted) => {
+    decisions += 1;
+    await markFinalActionStarted();
+    clicks += 1;
+    return { status: "submitted", receipt: { submittedAt: "now",
+      finalUrl: "https://example.test/done" } };
+  });
+  const recovered = await new ReceiptStore(directory).run(payload(), async () => {
+    clicks += 1;
+    throw new Error("must not click again");
+  });
+  assert.equal(decisions, 2);
+  assert.equal(clicks, 1);
+  assert.equal(recovered.status, "submitted");
+});

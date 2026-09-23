@@ -323,6 +323,34 @@ test("a named country list accepts Canada when it is included", () => {
   assert.equal(scored.scoreDetails.hardExclusion, undefined);
 });
 
+test("ISO country-code lists accept the applicant residence code", () => {
+  const scored = scoreOpportunity({
+    title: "Senior Platform Developer", description: "Python Node.js PostgreSQL", tags: [],
+    location: "DE, FR, PT, RO", remote: true, employmentType: "Full-Time"
+  }, {
+    skills: ["Python", "Node.js", "PostgreSQL"],
+    preferences: { fullTime: {
+      jobTitles: ["Platform Developer"], remoteOnly: true,
+      allowedLocations: ["Portugal", "Europe"], employmentTypes: ["full_time"]
+    } }
+  }, "full_time");
+  assert.equal(scored.scoreDetails.hardExclusion, undefined);
+});
+
+test("ISO country-code lists still exclude a missing residence code", () => {
+  const scored = scoreOpportunity({
+    title: "Senior Platform Developer", description: "Python", tags: [],
+    location: "US, CA", remote: true, employmentType: "Full-Time"
+  }, {
+    skills: ["Python"],
+    preferences: { fullTime: {
+      jobTitles: ["Platform Developer"], remoteOnly: true,
+      allowedLocations: ["Portugal", "Europe"], employmentTypes: ["full_time"]
+    } }
+  }, "full_time");
+  assert.match(scored.scoreDetails.hardExclusion, /does not include the applicant residence/);
+});
+
 test("a city-specific remote role excludes an applicant living elsewhere", () => {
   const scored = scoreOpportunity({
     title: "Example Systems Specialist", description: "Example integrations", tags: [],
@@ -376,6 +404,60 @@ test("known employment and compensation conflicts cannot silently auto-apply", (
     location: "Worldwide", employmentType: "full_time",
     compensation: { maximum: 100000, period: "year", currency: "USD" } }, profile, "full_time");
   assert.deepEqual(currency.conflicts, ["compensation_conflict"]);
+  const clearlyLowForeignPay = scoreOpportunity({ title: "Junior Node.js Engineer", description: "Node.js", remote: true,
+    location: "Worldwide", employmentType: "full_time",
+    compensation: { maximum: 600, period: "monthly", currency: "AUD" } }, profile, "full_time");
+  assert.match(clearlyLowForeignPay.scoreDetails.hardExclusion, /clearly below the configured minimum/);
+});
+
+test("quality gates reject verified schedule, experience, contract, and core-stack mismatches", () => {
+  const applicant = {
+    skills: ["TypeScript", "Node.js", "React"],
+    applicationAnswers: {
+      "Can you work U.S. business hours?": "No",
+      "Years of professional software engineering experience": "5"
+    },
+    preferences: { locations: ["Portugal", "Europe"], fullTime: {
+      jobTitles: ["Platform Developer"], allowedLocations: ["Portugal", "Europe"],
+      employmentTypes: ["full_time"]
+    } }
+  };
+  const base = { title: "Senior Platform Developer", description: "TypeScript services", remote: true,
+    location: "Europe", employmentType: "full_time" };
+  assert.match(scoreOpportunity({ ...base, description: "Work U.S. business hours." }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /U\.S\./);
+  assert.match(scoreOpportunity({ ...base,
+    description: "6+ years of professional software engineering experience." }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /verified profile has 5/);
+  assert.match(scoreOpportunity({ ...base, description: "The offer is a contractor role." }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /contract role/);
+  assert.match(scoreOpportunity({ ...base, title: "Senior C# .NET Engineer" }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /C#\/\.NET/);
+  assert.match(scoreOpportunity({ ...base,
+    description: "Must-have: Last 2+ years with NestJS in production." }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /NestJS/);
+  assert.match(scoreOpportunity({ ...base,
+    description: "Must-have: production blockchain experience with real funds." }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /blockchain/);
+  const languageApplicant = { ...applicant, applicationAnswers: {
+    ...applicant.applicationAnswers, "Russian proficiency": "A1"
+  } };
+  assert.match(scoreOpportunity({ ...base,
+    description: "English B2. Fluent in the Russian language." }, languageApplicant, "full_time")
+    .scoreDetails.hardExclusion, /fluent Russian/);
+  assert.match(scoreOpportunity({ ...base,
+    title: "Software Development Engineer II (Remote @ Colombia)" }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /title location restriction Colombia/);
+});
+
+test("description-level hiring countries cannot override an ineligible generic Europe label", () => {
+  const applicant = { skills: ["TypeScript"], preferences: { locations: ["Portugal", "Europe"], fullTime: {
+    jobTitles: ["ML Developer"], allowedLocations: ["Portugal", "Europe"], employmentTypes: ["full_time"]
+  } } };
+  const scored = scoreOpportunity({ title: "Staff ML Developer", description:
+    "For this role, we can hire candidates based in the UK, Ireland, Germany, Italy, Spain, or the Netherlands.",
+  remote: true, location: "Europe", employmentType: "full_time" }, applicant, "full_time");
+  assert.match(scored.scoreDetails.hardExclusion, /description location restriction/);
 });
 
 test("compensation floors can distinguish gross, net, and unspecified pay", () => {

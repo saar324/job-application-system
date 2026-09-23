@@ -32,7 +32,7 @@ export async function runIdempotent({ store, profileId, action, key, input, exec
       await store.completeIdempotency({ ...identity, response });
       return response;
     } catch (error) {
-      await store.abortIdempotency(identity).catch(() => undefined);
+      try { await store.abortIdempotency(identity); } catch {}
       throw error;
     } finally {
       active.delete(activeKey);

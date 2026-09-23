@@ -12,6 +12,9 @@ import { credentialVaultFromEnv } from "./credential-vault.js";
 import { semanticEnricherFromEnv } from "./discovery/enrichment.js";
 
 const config = await loadConfig();
+if (config.execution.adapter === "webhook") {
+  config.execution.workerCallbackToken = process.env.APPLICATION_WEBHOOK_TOKEN;
+}
 const store = await initializeStore();
 const profiles = await new ProfileStore(
   process.env.JOB_SERVER_PROFILES_FILE ?? "./config/profiles.json",

@@ -46,6 +46,15 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
           telemetry: telemetry.health()
         });
       }
+      if (url.pathname === "/v1/internal/final-decision" || url.pathname === "/v1/internal/final-commit") {
+        if (request.method !== "POST" || !config.execution?.workerCallbackToken
+          || request.headers.authorization !== `Bearer ${config.execution.workerCallbackToken}`) {
+          return send(response, 403, { error: "worker authority required" });
+        }
+        const input = await jsonBody(request);
+        return send(response, 200, url.pathname.endsWith("final-decision")
+          ? await service.prepareFinalSubmission(input) : await service.commitFinalSubmission(input));
+      }
       const identity = authenticate(request);
       if (!identity) return send(response, 401, { error: "invalid or missing bearer token" });
 
@@ -73,8 +82,35 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "PATCH" && url.pathname === "/v1/profile") {
         return send(response, 200, await profiles.patch(identity.profileId, await jsonBody(request)));
       }
+      if (request.method === "PUT" && url.pathname === "/v1/profile/approved-answers") {
+        if (!identity.roles?.includes("owner")) return send(response, 403, { error: "owner authority required" });
+        const body = await jsonBody(request);
+        return send(response, 200, await profiles.setApprovedAnswers(identity.profileId, body.answers, identity));
+      }
+      if (url.pathname === "/v1/standing-submission-policy") {
+        if (request.method === "GET") {
+          return send(response, 200, { policy: (await profiles.get(identity.profileId))?.standingSubmissionPolicy ?? null });
+        }
+        if (request.method === "PUT") {
+          if (!identity.roles?.includes("owner")) return send(response, 403, { error: "owner authority required" });
+          const policy = await profiles.setStandingSubmissionPolicy(
+            identity.profileId, await jsonBody(request), identity);
+          // The profile write atomically includes its versioned owner history.
+          // The state audit is secondary and must not turn a successful policy
+          // mutation into an ambiguous HTTP failure.
+          await service.recordStandingPolicyChange(policy, identity).catch((error) =>
+            console.error("secondary standing policy audit failed", error));
+          return send(response, 200, { policy });
+        }
+      }
       if (request.method === "POST" && url.pathname === "/v1/discovery/scan") {
         return send(response, 200, await discovery.scan(await jsonBody(request), identity));
+      }
+      if (request.method === "POST" && url.pathname === "/v1/discovery/reserve/refresh") {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "reserve_refresh", body,
+          async () => ({ status: 200, body: await discovery.refreshReserve(body, identity) }));
+        return send(response, saved.status, saved.body);
       }
       if (request.method === "GET" && url.pathname === "/v1/discovery/sources") {
         return send(response, 200, await discovery.describeSources(identity));
@@ -83,6 +119,39 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         const body = await jsonBody(request);
         const saved = await idempotentHttp(service, request, identity, "discovery_query", body,
           async () => ({ status: 200, body: await discovery.query(body, identity) }));
+        return send(response, saved.status, saved.body);
+      }
+      if (request.method === "POST" && url.pathname === "/v1/campaigns") {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "start_campaign", body,
+          async () => ({ status: 202, body: await discovery.startCampaign(body, identity) }));
+        return send(response, saved.status, saved.body);
+      }
+      if (request.method === "GET" && url.pathname === "/v1/campaigns") {
+        return send(response, 200, { items: service.listCampaigns(identity.profileId) });
+      }
+      const campaign = url.pathname.match(/^\/v1\/campaigns\/([^/]+)$/);
+      if (request.method === "GET" && campaign) {
+        return send(response, 200, service.campaignStatus(campaign[1], identity.profileId));
+      }
+      const campaignWorkflowReport = url.pathname.match(/^\/v1\/campaigns\/([^/]+)\/workflow-report$/);
+      if (request.method === "GET" && campaignWorkflowReport) {
+        return send(response, 200, service.campaignWorkflowReport(campaignWorkflowReport[1], identity.profileId));
+      }
+      const campaignApproval = url.pathname.match(/^\/v1\/campaigns\/([^/]+)\/approve$/);
+      if (request.method === "POST" && campaignApproval) {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "approve_campaign", body,
+          async () => ({ status: 200,
+            body: await service.approveCampaign(campaignApproval[1], body.entries, identity) }));
+        return send(response, saved.status, saved.body);
+      }
+      const campaignSource = url.pathname.match(/^\/v1\/campaigns\/([^/]+)\/source-results$/);
+      if (request.method === "POST" && campaignSource) {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "campaign_source_results", body,
+          async () => ({ status: 200,
+            body: await discovery.addCampaignSourceResults(campaignSource[1], body, identity) }));
         return send(response, saved.status, saved.body);
       }
       if (request.method === "POST" && url.pathname === "/v1/direct-applications") {
@@ -115,6 +184,15 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         const body = await jsonBody(request);
         const saved = await idempotentHttp(service, request, identity, "approve_prepared_batch", body,
           async () => ({ status: 200, body: await service.approvePreparedBatch(body.entries, identity) }));
+        return send(response, saved.status, saved.body);
+      }
+      const refreshPreview = url.pathname.match(/^\/v1\/applications\/([^/]+)\/refresh-preview$/);
+      if (request.method === "POST" && refreshPreview) {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "refresh_final_preview",
+          { applicationId: refreshPreview[1], body },
+          async () => ({ status: 202,
+            body: await service.refreshFinalPreview(refreshPreview[1], identity, body) }));
         return send(response, saved.status, saved.body);
       }
 
