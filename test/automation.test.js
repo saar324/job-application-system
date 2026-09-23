@@ -276,6 +276,22 @@ test("Ashby location searches by city when the full saved location has no sugges
     .find((field) => field.key === "location-id").value, "Sofia, Bulgaria");
 });
 
+test("Ashby contract location can fall back from a city to its country", async () => {
+  const result = await run(`<form>
+    <div class="ashby-application-form-field-entry" data-field-path="location-id">
+      <label class="ashby-application-form-question-title _required_a1">What would be your preferred main location for your contract?</label>
+      <input role="combobox" aria-expanded="false" oninput="this.setAttribute('aria-expanded','true');choices.hidden=this.value!=='Bulgaria'">
+      <div id="choices" role="listbox" hidden><div role="option" onclick="document.querySelector('[role=combobox]').value='Bulgaria';document.querySelector('[role=combobox]').setAttribute('aria-expanded','false');choices.hidden=true">Bulgaria</div></div>
+    </div>
+    <button type="submit">Submit Application</button>
+  </form>`, { "location-id": "Sofia, Bulgaria" }, { ...profile,
+    contact: { ...profile.contact, city: "Sofia", country: "Bulgaria", location: "Sofia, Bulgaria" }
+  }, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.equal(result.requirements[0].preview.filled
+    .find((field) => field.key === "location-id").value, "Bulgaria");
+});
+
 test("an explicit missing employer posting stops without a form review", async () => {
   const result = await run(`<main><h1>Job not found</h1><p>The job you requested was not found.</p>
     <button>Cookie Management</button></main>`);

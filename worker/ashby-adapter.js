@@ -33,7 +33,7 @@ export async function fillAshbyRequiredControls(surface, profile, answers = {}) 
     let value = Object.hasOwn(answers, field.key) ? answers[field.key]
       : Object.hasOwn(answers, field.label) ? answers[field.label] : undefined;
     let source = "application answer";
-    const locationQuestion = /^(?:location|where are you located\??|current location)$/i.test(field.label.trim());
+    const locationQuestion = /(?:^|\b)(?:location|located)(?:\b|$)/i.test(field.label.trim());
     if (value === undefined && field.type === "combobox" && locationQuestion
       && (profile?.contact?.location || profile?.contact?.country || profile?.contact?.city)) {
       value = [profile.contact.location, profile.contact.country, profile.contact.city].filter(Boolean);
