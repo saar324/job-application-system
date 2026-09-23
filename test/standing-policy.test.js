@@ -8,6 +8,8 @@ import { JsonStore } from "../src/store.js";
 import { ApplicationService } from "../src/service.js";
 import { SimulationAdapter } from "../src/adapters/simulation.js";
 import { createHttpServer } from "../src/http.js";
+import { DiscoveryService } from "../src/discovery/service.js";
+import { officialAtsDestination } from "../src/discovery/official-ats.js";
 
 const agent = { actorId: "agent", profileId: "person", roles: ["agent"] };
 const owner = { actorId: "owner", profileId: "person", roles: ["owner"] };
@@ -187,4 +189,97 @@ test("work authorization and sponsorship wording holds automatic final action", 
     }));
     assert.ok(result.reasonCodes.includes("legal_answer_unconfirmed"), label);
   }
+});
+
+test("an official Ashby campaign result reaches the standing final permit", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.patch("person", { skills: ["TypeScript"], preferences: { locations: ["Remote"],
+    fullTime: { jobTitles: ["Engineer"], automatedDiscoverySources: ["ashby"] } } });
+  service.config.discovery = { limitPerSource: 10, sourceOptions: { ashby: {
+    boards: [{ slug: "example", company: "Example" }] } } };
+  service.config.modes.full_time.sources = ["ashby"];
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, sources: ["ashby"],
+    destinationHosts: ["jobs.ashbyhq.com"] }, owner);
+  const id = "11111111-1111-4111-8111-111111111111";
+  const applyUrl = `https://jobs.ashbyhq.com/example/${id}/application`;
+  const job = { id, title: "Engineer", jobUrl: `https://jobs.ashbyhq.com/example/${id}`,
+    applyUrl, descriptionPlain: "TypeScript", location: "Remote", isRemote: true,
+    isListed: true, publishedAt: new Date().toISOString() };
+  const discovery = new DiscoveryService({ applicationService: service, profiles,
+    config: service.config, fetchImpl: async () => new Response(JSON.stringify({ jobs: [job] })) });
+  const campaign = await discovery.startCampaign({ target: 1, reserve: 0,
+    sources: ["ashby"], fallbackSources: [] }, agent);
+  assert.equal(campaign.applications.length, 1);
+  const application = service.list("applications", "person")[0];
+  const role = service.list("opportunities", "person")[0];
+  assert.equal(role.applicationDestinationVerified, true);
+  assert.equal(application.finalApprovalRequired, false);
+  await service.store.mutate((state) => {
+    const item = state.applications.find((entry) => entry.id === application.id);
+    item.status = "submitting";
+    item.claim = { attemptId: "attempt-one" };
+  });
+  const result = await service.prepareFinalSubmission(decisionInput(application, {
+    preview: { ...decisionInput(application).preview, destination: applyUrl,
+      title: "Engineer", company: "Example" }
+  }));
+  assert.equal(result.decision, "permit", result.reasonCodes?.join(", "));
+});
+
+test("official ATS destination requires matching host, board, and role ID", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const role = { source: "ashby", externalId: `example:${id}`,
+    applyUrl: `https://jobs.ashbyhq.com/example/${id}/application` };
+  assert.equal(officialAtsDestination(role), true);
+  assert.equal(officialAtsDestination({ ...role, applyUrl: `https://evil.example/example/${id}` }), false);
+  assert.equal(officialAtsDestination({ ...role, applyUrl: `https://jobs.ashbyhq.com/other/${id}` }), false);
+});
+
+test("a stale official ATS role is revalidated once before final permit", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, sources: ["ashby"],
+    destinationHosts: ["jobs.ashbyhq.com"] }, owner);
+  const id = "11111111-1111-4111-8111-111111111111";
+  const applyUrl = `https://jobs.ashbyhq.com/example/${id}/application`;
+  const role = await service.addOpportunity({ title: "Engineer", company: "Example", source: "ashby",
+    externalId: `example:${id}`, applyUrl, score: 100, mode: "full_time",
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  let fetches = 0;
+  service.fetchImpl = async () => { fetches += 1; return new Response(JSON.stringify({ jobs: [{
+    id, title: "Engineer", applyUrl, isListed: true }] })); };
+  await service.store.mutate((state) => {
+    state.opportunities[0].discoveryVerification.verifiedAt =
+      new Date(Date.now() - 20 * 60_000).toISOString();
+  });
+  const application = await service.requestApplication(role.id, {}, agent);
+  assert.equal(application.finalApprovalRequired, false);
+  assert.equal(fetches, 1);
+  await service.store.mutate((state) => {
+    state.applications[0].status = "submitting";
+    state.applications[0].claim = { attemptId: "attempt-one" };
+  });
+  const result = await service.prepareFinalSubmission(decisionInput(application, {
+    preview: { ...decisionInput(application).preview, destination: applyUrl }
+  }));
+  assert.equal(result.decision, "permit", result.reasonCodes?.join(", "));
+  assert.equal(fetches, 1);
+});
+
+test("a closed official ATS role cannot refresh standing authorization", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, sources: ["ashby"],
+    destinationHosts: ["jobs.ashbyhq.com"] }, owner);
+  const id = "11111111-1111-4111-8111-111111111111";
+  const role = await service.addOpportunity({ title: "Engineer", company: "Example", source: "ashby",
+    externalId: `example:${id}`, applyUrl: `https://jobs.ashbyhq.com/example/${id}/application`,
+    score: 100, mode: "full_time", applicationDestinationVerified: true },
+  agent, { serverVerifiedDiscovery: true });
+  await service.store.mutate((state) => {
+    state.opportunities[0].discoveryVerification.verifiedAt =
+      new Date(Date.now() - 20 * 60_000).toISOString();
+  });
+  service.fetchImpl = async () => new Response(JSON.stringify({ jobs: [] }));
+  const application = await service.requestApplication(role.id, {}, agent);
+  assert.equal(application.finalApprovalRequired, true);
+  assert.equal(application.status, "waiting_confirmation");
 });
