@@ -6,7 +6,9 @@ This is the shared follow-up list for the efficiency upgrade and the 22 Septembe
 | --- | --- | --- |
 | Done | Finish the ten verified-submission pilot. | Ten employer receipts were verified and recorded on 22 September 2026; total wall time was 3 hours 4 minutes 38 seconds. |
 | P0 | Validate the implemented [30-second end-to-end campaign flow](30-second-throughput-plan.md) on a fresh real batch; finish bounded production drafting and exception auto-replacement if the trace shows they are needed. | A fresh ten-role campaign produces ten suitable verified receipts within five minutes, counting search, review, owner wait, failures, and recovery; quality gates remain green. |
-| Done | Exclude already handled roles from every search result using the profile's durable application history and stable ATS role IDs. Keep unattempted discovered roles searchable. | 162 tests and privacy gate pass. Production Ashby query for an already handled Kestra role returned `handledFiltered: 1`, `found: 0`, and no items. |
+| Done | Implement the initial handled-role filter using application history and stable ATS role IDs. Keep unattempted discovered roles searchable. | The original Kestra query was filtered. The 23 September pilot exposed receipt URL and direct-intake gaps, tracked in the next row. |
+| P0 | Roll out and verify the 23 September cross-source duplicate correction. | The isolated branch indexes employer receipt URLs and matches listing/application ATS variants; 218 tests and privacy check pass. Verify a live RapidSOS, Wayflyer, and n8n lookup is filtered before production deployment. |
+| P0 | Replace failed headless Ashby submissions with a reliable regular-browser path. | The 23 September pilot yielded one headless success but regular Chrome was needed for five Ashby receipts. Compare verified success and challenge rates without bypassing anti-bot controls. |
 | P0 | Recheck official posting status and Bulgaria remote eligibility before preparing a form. | Stale and geographically restricted roles are removed before a browser attempt. |
 | P0 | Fill relevant optional answers when supported by verified applicant evidence; review all filled and unfilled fields. | Dash0-style AI and startup questions receive grounded answers or an explicit owner decision to leave blank; refreshed preview is accurate. |
 | P1 | Reuse confirmed links, facts, and employer-scoped answers without treating unreviewed drafts as facts. | Fewer repeated owner questions and no incorrect cross-employer answer reuse. |
@@ -22,3 +24,7 @@ target remains open. The follow-up pilot is recorded in [the second pilot report
 items remain open unless their completion evidence is recorded here.
 
 The follow-up pilot exposed one additional performance blocker: production prose drafting is disabled (`draftCalls: 0`), so every company-specific answer reaches the owner. Evaluate a securely configured draft provider with factual grounding and final review before counting any time gain. The optional-portfolio upload mapping was fixed and deployed in `1dfcaf4`.
+
+The [23 September pilot](pilot-2026-09-23.md) produced seven new verified receipts from ten owner-approved roles. Three
+were already submitted in earlier runs, exposing cross-source and URL-variant duplicate misses. A fresh scan found no
+replacement candidates. The 30-second acceptance target remains unmet.

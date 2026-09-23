@@ -197,6 +197,40 @@ test("the same application URL is deduplicated across direct and feed sources", 
   assert.equal(service.list("opportunities", identity.profileId).length, 1);
 });
 
+test("Ashby listing and application URLs share one opportunity", async () => {
+  const service = await fixture();
+  const old = await service.addOpportunity({ title: "AI Engineer", company: "Example",
+    applyUrl: "https://jobs.ashbyhq.com/example/d195a389-6af5-4b95-82e5-2258953c7297/application",
+    score: 90 }, identity);
+  const direct = await service.directApplication({
+    url: "https://jobs.ashbyhq.com/example/d195a389-6af5-4b95-82e5-2258953c7297"
+  }, identity);
+  assert.equal(direct.opportunity.id, old.id);
+  assert.equal(service.list("opportunities", identity.profileId).length, 1);
+  await service.waitForIdle();
+});
+
+test("a submitted receipt prevents a second application through another board", async () => {
+  const service = await fixture();
+  const old = await service.addOpportunity({ title: "AI Engineer", company: "Example",
+    applyUrl: "https://himalayas.app/companies/example/jobs/ai-engineer", score: 90 }, identity);
+  const prior = await service.requestApplication(old.id, {}, identity);
+  await service.waitForIdle();
+  await service.store.mutate((state) => {
+    const item = state.applications.find((application) => application.id === prior.id);
+    item.status = "submitted";
+    item.receipt = { submittedAt: "2026-09-19T10:00:00.000Z",
+      finalUrl: "https://job-boards.greenhouse.io/example/jobs/5238049007/confirmation" };
+  });
+  const direct = await service.directApplication({
+    url: "https://job-boards.greenhouse.io/example/jobs/5238049007"
+  }, identity);
+  assert.equal(direct.opportunity.id, old.id);
+  assert.equal(direct.duplicate, true);
+  assert.equal(direct.application.id, prior.id);
+  assert.equal(service.list("opportunities", identity.profileId).length, 1);
+});
+
 test("direct user intent upgrades an existing low-scoring discovered opportunity", async () => {
   const service = await fixture();
   const discovered = await opportunity(service, {

@@ -16,6 +16,12 @@ final fresh scan made its complete decision in 13.181 seconds but found no new r
 a verified employer application destination. Candidate availability, owner review time, prose drafting, and anti-bot
 handoffs remain inside the eventual acceptance clock.
 
+The [23 September ten-role pilot](pilot-2026-09-23.md) found a more immediate blocker: three approved roles were already
+submitted in previous runs. Seven new receipts took 196.75 minutes from first record to last receipt, including all
+preparation, review, and recovery. The branch now closes the direct-intake and cross-source receipt URL duplicate gaps;
+218 tests and the privacy check pass. Production has not received this correction yet. The headless worker also failed on
+most Ashby forms while ordinary Chrome succeeded, so reliable browser handoff takes priority over shaving click latency.
+
 ## Decision and measurement
 
 Target **ten new, suitable, verified submissions in at most five minutes of wall time**, starting with a fresh source scan and ending at the tenth employer receipt. The target is an average of 30 seconds per submission, not a promise that every individual form finishes in 30 seconds. Count every search, suitability check, model call, form preparation, review, approval wait, failed attempt, browser fallback, and receipt check inside that clock. Report attempted, blocked, rejected, and submitted roles separately. Keep one coordinating application agent and one sequential submission lane.

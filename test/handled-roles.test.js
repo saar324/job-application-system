@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { SimulationAdapter } from "../src/adapters/simulation.js";
 import { DiscoveryService } from "../src/discovery/service.js";
-import { handledRoleIndex, isHandledRole, roleKeys } from "../src/discovery/handled-roles.js";
+import { handledRoleIndex, isHandledRole, knownRoleIndex, roleKeys } from "../src/discovery/handled-roles.js";
 import { ProfileStore } from "../src/profile-store.js";
 import { ApplicationService } from "../src/service.js";
 import { JsonStore } from "../src/store.js";
@@ -44,6 +44,17 @@ test("only applications for the current profile enter the handled index", () => 
   assert.equal(isHandledRole(state.opportunities[0], keys), true);
   assert.equal(isHandledRole(state.opportunities[1], keys), false);
   assert.equal(isHandledRole(state.opportunities[2], keys), false);
+});
+
+test("a receipt filters an employer role found through another source", () => {
+  const state = { opportunities: [{ id: "old", profileId: "a",
+    applyUrl: "https://himalayas.app/companies/example/jobs/ai-engineer" }],
+  applications: [{ profileId: "a", opportunityId: "old", status: "submitted",
+    receipt: { finalUrl: "https://job-boards.greenhouse.io/example/jobs/5238049007/confirmation" } }] };
+  const employerRole = { applyUrl: "https://job-boards.greenhouse.io/example/jobs/5238049007" };
+  assert.equal(isHandledRole(employerRole, handledRoleIndex(state, "a")), true);
+  assert.equal(isHandledRole(employerRole, knownRoleIndex(state, "a")), true);
+  assert.equal(isHandledRole(employerRole, knownRoleIndex(state, "b")), false);
 });
 
 test("official board search excludes handled and previously seen roles before applying the result limit", async () => {

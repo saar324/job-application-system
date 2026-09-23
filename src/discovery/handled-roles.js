@@ -73,6 +73,9 @@ export function handledRoleIndex(state, profileId) {
     const opportunity = opportunities.get(application.opportunityId);
     if (!opportunity) continue;
     for (const key of roleKeys(opportunity)) keys.add(key);
+    if (application.receipt?.finalUrl) {
+      for (const key of roleKeys({ applyUrl: application.receipt.finalUrl })) keys.add(key);
+    }
   }
   return keys;
 }
@@ -82,6 +85,10 @@ export function knownRoleIndex(state, profileId) {
   for (const opportunity of state.opportunities ?? []) {
     if (opportunity.profileId !== profileId) continue;
     for (const key of roleKeys(opportunity)) keys.add(key);
+  }
+  for (const application of state.applications ?? []) {
+    if (application.profileId !== profileId || !application.receipt?.finalUrl) continue;
+    for (const key of roleKeys({ applyUrl: application.receipt.finalUrl })) keys.add(key);
   }
   return keys;
 }
