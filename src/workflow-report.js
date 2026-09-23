@@ -93,7 +93,7 @@ export function buildWorkflowReport(state, campaign, at = new Date().toISOString
       skipped: applications.filter((item) => item.status === "skipped").length,
       rejected: applications.filter((item) => item.status === "rejected").length,
       failed: applications.filter((item) => item.status === "failed").length },
-    sourceYield, stages: stageSummary,
+    sourceYield, sourceHealth: sourceCoverage.health ?? [], stages: stageSummary,
     cost: { modelCalls: attempts.length && draftSamples.length === attempts.length
       ? draftSamples.reduce((sum, value) => sum + value, 0) : null,
       observedModelCalls: draftSamples.length ? draftSamples.reduce((sum, value) => sum + value, 0) : null,

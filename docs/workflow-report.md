@@ -7,6 +7,8 @@ Run `jobctl campaign-report CAMPAIGN_ID` or `GET /v1/campaigns/CAMPAIGN_ID/workf
 For automatic standing-policy submissions, `final_action` records the server permit consumption immediately before the worker click. For older exact-approval submissions, the trace records `inferred_from_receipt` when a verified receipt arrives; its timestamp is the receipt time, not a measured click time.
 
 `counts.newVerified` requires a non-simulated, non-manual production-adapter receipt with a submission timestamp and final URL. Manual receipts and simulations are reported separately. `attemptedApplications`, total attempts, handled listings, blocked, skipped, rejected, and failed records are separate counts. Duplicates consume discovery work but do not increase `newVerified`. `sourceYield` shows found, qualifying, excluded, handled, destination-pending, and selected counts for each source.
+`sourceHealth` adds each source's terminal diagnosis, request/page counts where measured, and official-feed exclusion
+categories. A zero-extractable browser result is not proof that the site has no open jobs.
 
 `measurementKind: fresh_campaign` means the campaign has a recorded source scan and none of its selected opportunities predates the campaign. If candidates came from a preloaded reserve or acquisition is incomplete, the report says `preloaded_or_incomplete` and `endToEndEligible: false`. Rolling-reserve maintenance is currently `null` because it is not separately measured. A preloaded-queue run cannot prove the one-hour end-to-end goal. `target100InOneHourProven` remains false until the later live acceptance gate is implemented and passed.
 
