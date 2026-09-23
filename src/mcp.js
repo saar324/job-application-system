@@ -47,6 +47,29 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
     }
   )));
 
+  server.registerTool("add_campaign_source_results", {
+    description: "Add verified browser-source candidates to a campaign and record deterministic source coverage.",
+    inputSchema: {
+      campaignId: z.string().uuid(), sourceId: z.string().min(1).max(80),
+      completed: z.boolean().optional(), errors: z.array(z.object({ error: z.string().max(500) }).passthrough()).max(100).optional(),
+      pagesVisited: z.number().int().min(0).max(100).optional(),
+      requestsMade: z.number().int().min(0).max(1000).optional(),
+      rateLimited: z.boolean().optional(), exhausted: z.boolean().optional(),
+      items: z.array(z.object({
+        title: z.string().min(1).max(300), company: z.string().min(1).max(300),
+        applyUrl: z.string().url(), listingUrl: z.string().url().optional(),
+        externalId: z.string().max(500).optional(), description: z.string().max(100000).optional(),
+        location: z.string().max(500).optional(), employmentType: z.string().max(100).optional(),
+        remote: z.boolean().optional(), postedAt: z.string().max(100).optional(),
+        sourceUrl: z.string().url().optional(), tags: z.array(z.string().max(100)).max(100).optional(),
+        compensation: z.record(z.string(), z.unknown()).optional(), uncertainties: z.array(z.string().max(200)).max(50).optional()
+      })).max(200), idempotencyKey: z.string().min(8).max(200)
+    }, annotations: { openWorldHint: true, destructiveHint: false }
+  }, async ({ campaignId, idempotencyKey, ...input }) => result(await idempotent(
+    service, identity, "add_campaign_source_results", idempotencyKey, { campaignId, ...input },
+    async () => discovery.addCampaignSourceResults(campaignId, input, identity)
+  )));
+
   server.registerTool("describe_job_sources", {
     description: "Describe enabled, bounded search filters for the authenticated profile.",
     inputSchema: { mode: z.enum(["full_time", "freelance"]).optional() },
@@ -72,6 +95,7 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
       target: z.number().int().min(1).max(50).default(10),
       reserve: z.number().int().min(0).max(50).optional(),
       sources: z.array(z.string()).max(20).optional(),
+      fallbackSources: z.array(z.string()).max(100).optional(),
       limitPerSource: z.number().int().min(1).max(200).optional(),
       queryPlan: z.array(z.object({ filters: z.record(z.string(), z.union([z.string(), z.array(z.string())])),
         limit: z.number().int().min(1).max(200).optional() })).min(1).max(8).optional(),

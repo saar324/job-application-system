@@ -11,7 +11,7 @@ import { scoreOpportunity } from "./scoring.js";
 import { telemetry } from "../telemetry.js";
 import { normalizeOpportunity } from "./normalization.js";
 import { runIdempotent } from "../idempotency.js";
-import { handledRoleIndex, isHandledRole, roleKeys } from "./handled-roles.js";
+import { isHandledRole, knownRoleIndex, roleKeys } from "./handled-roles.js";
 
 const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever].map((source) => [source.id, source]));
 
@@ -103,13 +103,22 @@ export class DiscoveryService {
     }
     const campaignId = randomUUID();
     const mode = input.mode ?? (await this.profiles.get(identity.profileId))?.defaultMode ?? this.config.defaultMode;
+    const descriptor = await this.describeSources(identity, mode);
+    const primarySources = input.sources ?? descriptor.sources.map((source) => source.id);
+    const fallbackSources = [...new Set(input.fallbackSources ?? [])];
+    if (fallbackSources.length > 100 || fallbackSources.some((source) => typeof source !== "string"
+      || !/^[a-z0-9][a-z0-9_-]{0,79}$/i.test(source))) {
+      throw Object.assign(new Error("fallbackSources must contain at most 100 source IDs"), { status: 400 });
+    }
     await this.applicationService.createCampaign({
-      id: campaignId, target, reserve, mode, sources: input.sources, queryPlan: input.queryPlan
+      id: campaignId, target, reserve, mode, sources: primarySources,
+      fallbackSources, queryPlan: input.queryPlan
     }, identity);
     try {
       const scan = await this.scan({
-        mode, sources: input.sources, queryPlan: input.queryPlan,
-        limitPerSource: input.limitPerSource, prepareApplications: false, campaignId
+        mode, sources: primarySources, queryPlan: input.queryPlan,
+        limitPerSource: input.limitPerSource ?? (fallbackSources.length ? 10 : undefined),
+        prepareApplications: false, campaignId
       }, identity);
       if (!scan.readyToApply) {
         throw Object.assign(new Error(`profile is missing application fields: ${scan.missingForApplications.join(", ")}`),
@@ -117,12 +126,12 @@ export class DiscoveryService {
       }
       const ready = scan.items.filter((entry) => !entry.opportunity.applicationDestinationPending
         && /^https:\/\//i.test(entry.opportunity.applyUrl ?? ""));
-      const selected = [...ready]
-        .sort((left, right) => Number(right.opportunity.score ?? 0) - Number(left.opportunity.score ?? 0)
-          || Date.parse(right.opportunity.postedAt ?? 0) - Date.parse(left.opportunity.postedAt ?? 0))
-        .slice(0, target + reserve);
+      const ranked = [...ready].sort((left, right) => Number(right.opportunity.score ?? 0) - Number(left.opportunity.score ?? 0)
+        || Date.parse(right.opportunity.postedAt ?? 0) - Date.parse(left.opportunity.postedAt ?? 0));
+      const selected = fallbackSources.length
+        ? perSourceLimit(ranked, 10) : ranked.slice(0, target + reserve);
       const applicationIds = [];
-      for (const entry of selected) {
+      for (const entry of fallbackSources.length ? [] : selected) {
         try {
           const application = await this.applicationService.requestApplication(entry.opportunity.id, {
             campaignId, forceFinalApproval: true
@@ -132,17 +141,103 @@ export class DiscoveryService {
           if (error.status !== 409) throw error;
         }
       }
-      return await this.applicationService.recordCampaignScan(campaignId, {
+      const recorded = await this.applicationService.recordCampaignScan(campaignId, {
         found: scan.found, qualifying: scan.qualifying, excluded: scan.excluded,
         handledFiltered: scan.handledFiltered,
         destinationPending: scan.items.length - ready.length,
         selectedOpportunityIds: selected.map((entry) => entry.opportunity.id),
         applicationIds, errors: scan.errors
       }, identity);
+      return recorded;
     } catch (error) {
       await this.applicationService.recordCampaignFailure(campaignId, error, identity);
       throw error;
     }
+  }
+
+  async addCampaignSourceResults(campaignId, input, identity) {
+    const campaign = this.applicationService.campaignStatus(campaignId, identity.profileId);
+    const sourceId = String(input.sourceId ?? "");
+    if (!campaign.sourceCoverage.fallbackPlanned.includes(sourceId)) {
+      throw Object.assign(new Error("source is not in this campaign fallback plan"), { status: 400 });
+    }
+    if (!Array.isArray(input.items) || input.items.length > 200) {
+      throw Object.assign(new Error("items must be an array with at most 200 candidates"), { status: 400 });
+    }
+    if ((input.errors !== undefined && (!Array.isArray(input.errors) || input.errors.length > 100
+      || input.errors.some((error) => !error || typeof error !== "object" || typeof error.error !== "string")))
+      || (input.pagesVisited !== undefined && (!Number.isInteger(input.pagesVisited)
+        || input.pagesVisited < 0 || input.pagesVisited > 100))
+      || (input.requestsMade !== undefined && (!Number.isInteger(input.requestsMade)
+        || input.requestsMade < 0 || input.requestsMade > 1000))) {
+      throw Object.assign(new Error("source telemetry is invalid"), { status: 400 });
+    }
+    const profile = await this.profiles.get(identity.profileId);
+    const profileStatus = await this.profiles.status(identity.profileId, campaign.mode, this.config.defaultMode);
+    if (!profileStatus.readyToApply) {
+      throw Object.assign(new Error(`profile is missing application fields: ${profileStatus.missingForApplications.join(", ")}`),
+        { status: 409 });
+    }
+    const modeConfig = this.config.modes[campaign.mode];
+    const modePreferences = campaign.mode === "freelance"
+      ? profile?.preferences?.freelance ?? {} : profile?.preferences?.fullTime ?? {};
+    const scorerVersion = String(modePreferences.scorerVersion ?? this.config.discovery?.scorerVersion ?? "2");
+    const knownKeys = knownRoleIndex(this.applicationService.store.snapshot(), identity.profileId);
+    let excluded = 0; let handledFiltered = 0; let qualifying = 0; let selected = 0;
+    const errors = [];
+    const eligible = [];
+    const alreadySelected = campaign.sourceCoverage.scans.filter((scan) => scan.sourceId === sourceId)
+      .reduce((sum, scan) => sum + Number(scan.selected ?? 0), 0);
+    const remainingSourceSlots = Math.max(0, 10 - alreadySelected);
+    for (const candidate of input.items) {
+      try {
+        const raw = importedCandidate(candidate, sourceId);
+        if (isHandledRole(raw, knownKeys)) { handledFiltered += 1; continue; }
+        for (const key of roleKeys(raw)) knownKeys.add(key);
+        let scored = { ...raw, mode: campaign.mode,
+          ...scoreOpportunity(raw, profile, campaign.mode, { version: scorerVersion }) };
+        const opportunistic = scored.scoreDetails.rolePriority === "opportunistic";
+        const opportunisticRules = modePreferences.opportunisticRoles ?? {};
+        const opportunisticQualified = opportunistic && raw.remote === true
+          && scored.scoreDetails.compensationComparable === true
+          && scored.scoreDetails.matchedSkills.length >= Number(opportunisticRules.minimumMatchedSkills ?? 5)
+          && scored.score >= Number(opportunisticRules.minimumScore ?? 65);
+        if (scored.scoreDetails.hardExclusion
+          || (opportunistic ? !opportunisticQualified : scored.score < modeConfig.minimumScore)) {
+          excluded += 1; continue;
+        }
+        qualifying += 1;
+        if (scored.applicationDestinationPending) {
+          try { scored = await resolveEmployerApplicationUrl(scored, this.fetchImpl); }
+          catch (error) { errors.push({ stage: "application_destination", error: error.message }); }
+        }
+        if (scored.applicationDestinationPending || !/^https:\/\//i.test(scored.applyUrl ?? "")) {
+          errors.push({ stage: "application_destination", error: "verified HTTPS employer application URL required" });
+          continue;
+        }
+        eligible.push(scored);
+      } catch (error) {
+        errors.push({ stage: "candidate_import", error: String(error.message ?? error).slice(0, 500) });
+      }
+    }
+    const opportunityIds = [];
+    for (const scored of eligible.sort((left, right) => Number(right.score ?? 0) - Number(left.score ?? 0)
+      || Date.parse(right.postedAt ?? 0) - Date.parse(left.postedAt ?? 0)).slice(0, remainingSourceSlots)) {
+      const opportunity = await this.applicationService.addOpportunity({ ...scored, lastCampaignId: campaignId }, identity);
+      opportunityIds.push(opportunity.id); selected += 1;
+      for (const key of roleKeys(opportunity)) knownKeys.add(key);
+    }
+    const recorded = await this.applicationService.recordCampaignSourceScan(campaignId, {
+      sourceId, found: input.items.length, qualifying, excluded, handledFiltered, selected,
+      opportunityIds,
+      completed: input.completed !== false, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
+      rateLimited: input.rateLimited === true, exhausted: input.exhausted === true,
+      errors: [...errors, ...(input.errors ?? [])].slice(0, 100)
+    }, identity);
+    if (!recorded.sourceCoverage.fallbackRemaining.length) {
+      return this.applicationService.finalizeCampaignSelection(campaignId, identity);
+    }
+    return recorded;
   }
 
   async scan(input, identity) {
@@ -176,7 +271,7 @@ export class DiscoveryService {
       return source;
     });
     const internalErrors = [];
-    const handledKeys = handledRoleIndex(this.applicationService.store.snapshot(), identity.profileId);
+    const handledKeys = knownRoleIndex(this.applicationService.store.snapshot(), identity.profileId);
     const handledMatches = new Set();
     const isHandled = (role) => {
       if (!isHandledRole(role, handledKeys)) return false;
@@ -308,4 +403,46 @@ export class DiscoveryService {
       items: qualifying
     };
   }
+}
+
+function perSourceLimit(entries, limit) {
+  const counts = new Map();
+  return entries.filter((entry) => {
+    const source = entry.opportunity.source;
+    const count = counts.get(source) ?? 0;
+    if (count >= limit) return false;
+    counts.set(source, count + 1);
+    return true;
+  });
+}
+
+function importedCandidate(candidate, sourceId) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    throw new Error("candidate must be an object");
+  }
+  const required = ["title", "company", "applyUrl"];
+  if (required.some((key) => typeof candidate[key] !== "string" || !candidate[key].trim())) {
+    throw new Error("candidate requires title, company, and applyUrl");
+  }
+  for (const key of ["applyUrl", "listingUrl"]) {
+    if (candidate[key] === undefined) continue;
+    const url = new URL(candidate[key]);
+    if (url.protocol !== "https:") throw new Error(`${key} must use HTTPS`);
+  }
+  const capped = (value, size) => value === undefined ? undefined : String(value).slice(0, size);
+  return normalizeOpportunity({
+    source: sourceId,
+    externalId: capped(candidate.externalId, 500),
+    title: capped(candidate.title, 300), company: capped(candidate.company, 300),
+    description: capped(candidate.description, 100_000),
+    location: capped(candidate.location, 500), employmentType: capped(candidate.employmentType, 100),
+    remote: candidate.remote === true, postedAt: capped(candidate.postedAt, 100),
+    listingUrl: candidate.listingUrl ?? candidate.applyUrl, applyUrl: candidate.applyUrl,
+    tags: Array.isArray(candidate.tags) ? candidate.tags.slice(0, 100).map((item) => String(item).slice(0, 100)) : [],
+    compensation: candidate.compensation && typeof candidate.compensation === "object"
+      ? candidate.compensation : undefined,
+    provenance: { importedBy: "campaign_browser_fallback", sourceUrl: capped(candidate.sourceUrl, 2000) },
+    uncertainties: Array.isArray(candidate.uncertainties)
+      ? candidate.uncertainties.slice(0, 50).map((item) => String(item).slice(0, 200)) : []
+  }, { source: sourceId });
 }

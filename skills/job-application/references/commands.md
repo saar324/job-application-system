@@ -30,6 +30,18 @@ printf '%s' '{"target":10,"reserve":10,"idempotencyKey":"campaign-2026-09-22-01"
 $JOBCLI campaign-status CAMPAIGN_UUID
 ```
 
+For an all-source campaign, pass the catalog's server adapter IDs in `sources` and visible-browser IDs in
+`fallbackSources`, with `limitPerSource:10`. Submit each browser source only after bounded pagination is finished:
+
+```bash
+printf '%s' '{"target":10,"reserve":10,"limitPerSource":10,"sources":["ashby","lever","greenhouse"],"fallbackSources":["example_board"],"idempotencyKey":"all-source-campaign-01"}' | $JOBCLI campaign-start
+printf '%s' '{"sourceId":"example_board","items":[],"pagesVisited":3,"requestsMade":12,"exhausted":true,"completed":true,"idempotencyKey":"all-source-campaign-01-example-board"}' | $JOBCLI campaign-add-source CAMPAIGN_UUID
+```
+
+The private catalog is authoritative; the short example lists are placeholders. The server caps accepted candidates at
+10 per source, tracks coverage and paging telemetry, waits for every fallback source, then ranks the combined pool before
+preparing applications.
+
 The status response includes scan, preparation, approval-wait, submission, and worker-active timing; every ready
 review entry includes the company, role, destination, full presentation, application ID, and preview fingerprint.
 After the owner explicitly approves the exact entries shown by that campaign, submit only those entries:

@@ -69,6 +69,15 @@ export function handledRoleIndex(state, profileId) {
   return keys;
 }
 
+export function knownRoleIndex(state, profileId) {
+  const keys = new Set();
+  for (const opportunity of state.opportunities ?? []) {
+    if (opportunity.profileId !== profileId) continue;
+    for (const key of roleKeys(opportunity)) keys.add(key);
+  }
+  return keys;
+}
+
 export function isHandledRole(role, handledKeys) {
   return [...roleKeys(role)].some((key) => handledKeys.has(key));
 }

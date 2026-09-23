@@ -106,6 +106,14 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
             body: await service.approveCampaign(campaignApproval[1], body.entries, identity) }));
         return send(response, saved.status, saved.body);
       }
+      const campaignSource = url.pathname.match(/^\/v1\/campaigns\/([^/]+)\/source-results$/);
+      if (request.method === "POST" && campaignSource) {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "campaign_source_results", body,
+          async () => ({ status: 200,
+            body: await discovery.addCampaignSourceResults(campaignSource[1], body, identity) }));
+        return send(response, saved.status, saved.body);
+      }
       if (request.method === "POST" && url.pathname === "/v1/direct-applications") {
         const body = await jsonBody(request);
         const saved = await idempotentHttp(service, request, identity, "direct_application",
