@@ -172,6 +172,7 @@ test("campaign searches every fallback source, caps each pool at ten, then ranks
   assert.equal(first.status, "searching_more_sources");
   assert.equal(first.sourceCoverage.scans[0].selected, 6);
   assert.equal(first.sourceCoverage.scans[0].handledFiltered, 1);
+  assert.equal(first.sourceCoverage.scans[0].destinationPending, 1);
   assert.ok(first.sourceCoverage.scans[0].errors.some((item) =>
     item.error === "verified HTTPS employer application URL required"));
   assert.deepEqual(first.sourceCoverage.scans[0].exclusionReasons,
@@ -194,5 +195,7 @@ test("campaign searches every fallback source, caps each pool at ten, then ranks
   assert.equal(prepared.applications.length, 2);
   assert.equal(prepared.applications.every((item) => item.company.startsWith("Board two")), true);
   assert.equal(prepared.sourceCoverage.coveredCount, 3);
+  assert.equal(prepared.sourceCoverage.health.find((row) => row.sourceId === "board_one").status, "yielding");
+  assert.equal(prepared.sourceCoverage.health.find((row) => row.sourceId === "board_one").selected, 10);
   assert.deepEqual(prepared.sourceCoverage.fallbackRemaining, []);
 });

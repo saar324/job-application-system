@@ -3,8 +3,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { chromium } from "playwright";
-import { extractSourcePage, isBlockingStatus, sourceAutomationPolicy } from "../src/discovery/browser-source.js";
+import { randomUUID } from "node:crypto";
+import { extractSourcePage, isBlockingStatus, isChallengePage,
+  sourceAutomationPolicy } from "../src/discovery/browser-source.js";
 import { parsePublicFeed, publicFeedUrl } from "../src/discovery/public-feeds.js";
+import { SourceProgress } from "../src/discovery/source-progress.js";
 
 const options = argumentsOf(process.argv.slice(2));
 if (!options.campaign || !options.catalog) {
@@ -41,16 +44,19 @@ try {
     if (!current.sourceCoverage?.fallbackRemaining?.includes(source.id)) continue;
     const policy = sourceAutomationPolicy(source, options);
     if (policy.manual) {
-      const recorded = await report(source.id, [], { completed: true, exhausted: true,
+      const recorded = await report(source.id, [], { completed: true, exhausted: true, manual: true,
         errors: [{ error: "source policy requires manual browser search" }] });
       progress(source.id, 0, accepted(recorded, source.id), "manual-policy");
       continue;
     }
-    const result = await searchSource(source, policy);
-    const recorded = await report(source.id, result.items, { completed: true, exhausted: result.exhausted,
+    const progressState = new SourceProgress({ sourceId: source.id,
+      maxAcceptedResults: policy.maxAcceptedResults, maxBatch: Math.min(10, policy.maxCandidates), report });
+    const result = await searchSource(source, policy, progressState);
+    const recorded = await progressState.finish({ exhausted: result.exhausted,
       pagesVisited: result.pagesVisited, requestsMade: result.requestsMade,
-      rateLimited: result.rateLimited, errors: result.errors });
-    progress(source.id, result.items.length, accepted(recorded, source.id),
+      rateLimited: result.rateLimited, challenge: result.challenge,
+      parseDrift: result.parseDrift, errors: result.errors });
+    progress(source.id, progressState.found, accepted(recorded, source.id),
       result.rateLimited ? "rate-limited" : "complete");
   }
 } finally {
@@ -60,10 +66,11 @@ try {
   }
 }
 
-async function searchSource(source, policy) {
+async function searchSource(source, policy, progressState) {
   const page = await context.newPage();
-  const items = new Map(); const visitedListings = new Set(); const visitedDetails = new Set(); const errors = [];
-  let nextUrl = source.url; let pagesVisited = 0; let requestsMade = 0; let rateLimited = false;
+  const visitedListings = new Set(); const visitedDetails = new Set(); const errors = [];
+  let nextUrl = source.url; let pagesVisited = 0; let requestsMade = 0;
+  let rateLimited = false; let challenge = false; let parseDrift = false;
   try {
     const feedQueries = source.id === "jobgether" ? jobgetherQueries(options.query) : [options.query ?? "engineer"];
     const feedUrl = publicFeedUrl(source.id, { query: feedQueries[0],
@@ -72,20 +79,24 @@ async function searchSource(source, policy) {
       const response = await fetch(feedUrl, { headers: { "user-agent": "job-application-system/1.0 personal search" },
         signal: AbortSignal.timeout(policy.navigationTimeoutMs) });
       requestsMade += 1; pagesVisited += 1;
-      if (isBlockingStatus(response.status)) rateLimited = true;
-      else if (!response.ok) errors.push({ error: `feed returned HTTP ${response.status}: ${feedUrl}` });
+      if (isBlockingStatus(response.status)) { rateLimited = true; return result(); }
+      else if (!response.ok) {
+        errors.push({ error: `feed returned HTTP ${response.status}: ${feedUrl}` });
+        return result();
+      }
       else {
-        const feed = parsePublicFeed(source.id, await response.text());
+        const feedText = await response.text();
+        if (isChallengePage(feedText)) { challenge = true; return result(); }
+        const feed = parsePublicFeed(source.id, feedText);
         if (source.id !== "jobgether") {
-          for (const job of feed.items) add(items, job);
-          return { items: [...items.values()].slice(0, policy.maxCandidates), pagesVisited, requestsMade,
-            rateLimited, exhausted: !feed.hasMore, errors };
+          await progressState.add(feed.items);
+          return result(!feed.hasMore);
         }
         nextUrl = null;
         const seeds = new Map(feed.items.map((item) => [item.listingUrl, item]));
         let hasMore = feedQueries.length === 1 && feed.hasMore;
         while (pagesVisited < policy.maxListingPages && requestsMade < policy.maxRequests
-          && seeds.size < policy.maxCandidates) {
+          && !progressState.done) {
           const query = feedQueries[pagesVisited] ?? feedQueries[0];
           if (!hasMore && pagesVisited >= feedQueries.length) break;
           const pageNumber = pagesVisited + 1;
@@ -100,50 +111,57 @@ async function searchSource(source, policy) {
             errors.push({ error: `feed returned HTTP ${pageResponse.status}: ${pageUrl}` });
             break;
           }
-          const nextFeed = parsePublicFeed(source.id, await pageResponse.text());
+          const nextText = await pageResponse.text();
+          if (isChallengePage(nextText)) { challenge = true; break; }
+          const nextFeed = parsePublicFeed(source.id, nextText);
           for (const item of nextFeed.items) seeds.set(item.listingUrl, item);
           hasMore = feedQueries.length === 1 && nextFeed.hasMore;
         }
         const detailQueue = [...seeds.keys()].slice(0, policy.maxDetailPages);
-        while (detailQueue.length && requestsMade < policy.maxRequests && items.size < policy.maxCandidates) {
+        while (detailQueue.length && requestsMade < policy.maxRequests && !progressState.done && !challenge) {
           const link = detailQueue.shift();
           const detail = await navigate(page, link, policy); requestsMade += 1;
           if (isBlockingStatus(detail.status)) { rateLimited = true; break; }
+          if (detail.challenge) { challenge = true; break; }
           if (!detail.ok) continue;
           const extracted = extractSourcePage(await page.content(), page.url(), source.id);
           if (extracted.jobs.length) {
-            for (const job of extracted.jobs) add(items, { ...seeds.get(link), ...job,
+            await progressState.add(extracted.jobs.map((job) => ({ ...seeds.get(link), ...job,
               location: job.location || seeds.get(link)?.location,
-              listingUrl: link, externalId: seeds.get(link)?.externalId ?? job.externalId });
-          } else if (seeds.has(link)) add(items, seeds.get(link));
+              listingUrl: link, externalId: seeds.get(link)?.externalId ?? job.externalId })));
+          } else if (seeds.has(link)) await progressState.add([seeds.get(link)]);
+          await progressState.flush();
         }
-        return { items: [...items.values()].slice(0, policy.maxCandidates), pagesVisited, requestsMade,
-          rateLimited, exhausted: true, errors };
+        return result(true);
       }
     }
     while (nextUrl && pagesVisited < policy.maxListingPages && requestsMade < policy.maxRequests
-      && items.size < policy.maxCandidates) {
+      && !progressState.done) {
       if (visitedListings.has(nextUrl)) break;
       visitedListings.add(nextUrl);
       const listing = await navigate(page, nextUrl, policy); requestsMade += 1;
       if (isBlockingStatus(listing.status)) { rateLimited = true; break; }
+      if (listing.challenge) { challenge = true; break; }
       if (!listing.ok) { errors.push({ error: `listing returned HTTP ${listing.status}: ${nextUrl}` }); break; }
       if (pagesVisited === 0) await applyBroadSearch(page, options.query ?? "engineer", options.location ?? "Bulgaria");
       pagesVisited += 1;
       const extracted = extractSourcePage(await page.content(), page.url(), source.id);
-      for (const job of extracted.jobs) add(items, job);
+      await progressState.add(extracted.jobs);
+      await progressState.flush();
       const detailQueue = [...extracted.jobLinks];
       while (detailQueue.length) {
         const link = detailQueue.shift();
-        if (items.size >= policy.maxCandidates || visitedDetails.size >= policy.maxDetailPages
+        if (progressState.done || visitedDetails.size >= policy.maxDetailPages
           || requestsMade >= policy.maxRequests) break;
         if (visitedDetails.has(link)) continue;
         visitedDetails.add(link);
         const detail = await navigate(page, link, policy); requestsMade += 1;
         if (isBlockingStatus(detail.status)) { rateLimited = true; break; }
+        if (detail.challenge) { challenge = true; break; }
         if (!detail.ok) continue;
         const detailPage = extractSourcePage(await page.content(), page.url(), source.id);
-        for (const job of detailPage.jobs) add(items, job);
+        await progressState.add(detailPage.jobs);
+        await progressState.flush();
         if (!detailPage.jobs.length) {
           const nestedLinks = [];
           for (const nested of detailPage.jobLinks) {
@@ -152,15 +170,18 @@ async function searchSource(source, policy) {
           detailQueue.unshift(...nestedLinks);
         }
       }
-      if (rateLimited) break;
+      if (rateLimited || challenge) break;
       nextUrl = extracted.nextUrl;
     }
   } catch (error) {
     errors.push({ error: String(error.message ?? error).slice(0, 500) });
   } finally { await page.close(); }
-  return { items: [...items.values()].slice(0, policy.maxCandidates), pagesVisited, requestsMade,
-    rateLimited, exhausted: !nextUrl || pagesVisited >= policy.maxListingPages || requestsMade >= policy.maxRequests,
-    errors };
+  parseDrift = visitedDetails.size > 0 && progressState.found === 0 && !rateLimited && !challenge;
+  return result(!nextUrl || pagesVisited >= policy.maxListingPages || requestsMade >= policy.maxRequests);
+
+  function result(exhausted = false) {
+    return { pagesVisited, requestsMade, rateLimited, challenge, parseDrift, exhausted, errors };
+  }
 }
 
 async function navigate(page, url, policy) {
@@ -172,7 +193,8 @@ async function navigate(page, url, policy) {
   await settle(page);
   hostLastRequest.set(host, Date.now());
   const status = response?.status() ?? 0;
-  return { status, ok: status >= 200 && status < 400 };
+  const challenge = status >= 200 && status < 400 && isChallengePage(await page.content());
+  return { status, challenge, ok: status >= 200 && status < 400 && !challenge };
 }
 
 async function applyBroadSearch(page, query, location) {
@@ -229,7 +251,7 @@ async function settle(page) {
 async function report(sourceId, items, metadata) {
   return api("POST", `/v1/campaigns/${options.campaign}/source-results`, {
     sourceId, items: items.map(compactJob), ...metadata
-  }, `source-${options.campaign}-${sourceId}-${Date.now()}`);
+  }, `source-${options.campaign}-${sourceId}-${randomUUID()}`);
 }
 
 async function api(method, pathname, body, idempotencyKey) {
@@ -243,18 +265,14 @@ async function api(method, pathname, body, idempotencyKey) {
   return payload;
 }
 
-function add(items, job) {
-  if (!job?.title || !job?.company || !job?.applyUrl) return;
-  items.set(job.externalId ?? job.applyUrl, job);
-}
-
 function compactJob(job) {
   return {
     source: job.source, externalId: clipped(job.externalId, 500), title: clipped(job.title, 300),
     company: clipped(job.company, 300), description: clipped(job.description, 12_000),
     location: clipped(job.location, 500), employmentType: clipped(job.employmentType, 100),
     remote: job.remote === true, postedAt: clipped(job.postedAt, 100),
-    listingUrl: job.listingUrl, applyUrl: job.applyUrl, compensation: job.compensation,
+    listingUrl: job.listingUrl, applyUrl: job.applyUrl, sourceUrl: job.sourceUrl,
+    compensation: job.compensation,
     applicationDestinationVerified: job.applicationDestinationVerified === true,
     tags: job.tags?.slice(0, 100), uncertainties: job.uncertainties?.slice(0, 50)
   };

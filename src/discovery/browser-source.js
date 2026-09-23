@@ -40,7 +40,8 @@ export function extractSourcePage(html, pageUrl, sourceId) {
   const nextUrl = explicitNext?.href ?? textNext?.href;
   const normalizedPage = absoluteUrl(pageUrl, pageUrl);
   const applyLink = isDetailPage(pageUrl) ? anchors.find((item) => /^apply(?:\s+(?:now|for|to))?\b/i.test(item.text)
-    && item.href !== normalizedPage) : null;
+    && item.href !== normalizedPage && new URL(item.href).protocol === "https:"
+    && new URL(item.href).hostname.replace(/^www\./, "") !== pageHost) : null;
   if (applyLink) jobs = jobs.map((job) => ({ ...job, listingUrl: pageUrl,
     applyUrl: applyLink.href, applicationDestinationVerified: true }));
   jobLinks = jobLinks.filter((url) => url !== nextUrl && url !== normalizedPage);
@@ -63,6 +64,12 @@ export function sourceAutomationPolicy(source, overrides = {}) {
 }
 
 export function isBlockingStatus(status) { return status === 403 || status === 429; }
+
+export function isChallengePage(html) {
+  const title = String(html).match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "";
+  return /captcha|verify you are human|just a moment|security challenge|unusual traffic/i.test(title)
+    || /cf-chl-|g-recaptcha|h-captcha|turnstile-widget/i.test(String(html).slice(0, 20_000));
+}
 
 function fallbackJob(html, pageUrl, sourceId, currentText = visibleText(html), currentLocation) {
   const visible = currentText;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractSourcePage, isBlockingStatus, sourceAutomationPolicy } from "../src/discovery/browser-source.js";
+import { extractSourcePage, isBlockingStatus, isChallengePage,
+  sourceAutomationPolicy } from "../src/discovery/browser-source.js";
 
 test("browser source extraction returns structured jobs, likely detail links, and pagination", () => {
   const html = `<!doctype html><html><body>
@@ -83,6 +84,17 @@ test("a visible Apply link becomes the verified application destination", () => 
   assert.equal(result.jobs[0].listingUrl, "https://board.example.test/job/backend");
   assert.equal(result.jobs[0].applyUrl, "https://careers.acme.test/apply/123?utm_source=board&role=backend");
   assert.equal(result.jobs[0].applicationDestinationVerified, true);
+});
+
+test("same-board Apply links remain unverified and challenge pages stop extraction", () => {
+  const html = `<!doctype html><html><head><title>Backend Engineer at Acme</title></head><body>
+    <h1>Backend Engineer</h1><p>Remote, Europe</p>
+    <a href="https://board.example.test/apply/123">Apply now</a></body></html>`;
+  const result = extractSourcePage(html, "https://board.example.test/jobs/123", "board");
+  assert.equal(result.jobs[0].applicationDestinationVerified, undefined);
+  assert.equal(isChallengePage("<html><title>Just a moment...</title></html>"), true);
+  assert.equal(isChallengePage("<html><title>Engineering Jobs</title><div class='cf-chl-widget'></div></html>"), true);
+  assert.equal(isChallengePage(html), false);
 });
 
 test("Working Nomads uses the current role location and ignores similar-job regions", () => {

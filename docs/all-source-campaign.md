@@ -12,7 +12,8 @@ ineligible, and compensation-conflicting records.
 2. The seven server adapters search their official or public feeds with a limit of 10 per source.
 3. The browser runner visits each visible source sequentially. It uses the source's prefiltered URL, applies a broad job
    query when a visible search box exists, reads schema.org `JobPosting` data, follows likely job links, and follows explicit
-   next-page controls.
+   next-page controls. It reports small candidate batches after each page or detail. The server returns the count that passed
+   eligibility, destination, and handled-role gates; the runner continues until 10 have been accepted or the source budget ends.
 4. The server records paging and request telemetry, filters known roles before storage, scores the listing from profile and
    listing evidence, and keeps the best 10 accepted roles from that source.
 5. When every planned source has a terminal coverage record, the server globally ranks the combined pool and prepares the
@@ -22,9 +23,18 @@ ineligible, and compensation-conflicting records.
 ## Source safety budget
 
 Browser discovery runs one source at a time. Defaults per source are five result pages, 35 detail pages, 45 navigations,
-and a minimum 1.5-second interval for the same host. Images, fonts, and video are blocked to reduce traffic. HTTP 403 and
-429 stop the source immediately. The runner does not bypass login, CAPTCHA, access controls, or manual-only catalog rules.
+and a minimum 1.5-second interval for the same host. Images, fonts, and video are blocked to reduce traffic. HTTP 403,
+429, and challenge pages stop the source immediately. The runner does not bypass login, CAPTCHA, access controls, or manual-only catalog rules.
 An optional dedicated Chrome profile or CDP connection can preserve legitimate signed-in sessions.
+
+Campaign status and `workflow-report` include per-source health with pages, requests, found, selected, handled,
+excluded, missing employer destinations, parse drift, rate limits, and challenges. `zero_extractable` means the bounded
+scan produced no candidate records; it does not prove the source has no jobs. Browser-imported roles still require manual
+submission review. A visible HTTPS Apply link on a different host is a basic destination check, not independent server
+verification for standing automatic submission.
+Official adapter diagnostics split hard exclusions, below-score roles, and opportunistic-role failures; handled roles and
+unverified destinations have separate counts. Campaign reserve selection remains bounded by the requested target plus
+reserve, and verified official ATS roles are rechecked when their discovery evidence is stale before preparation.
 
 ## Commands
 

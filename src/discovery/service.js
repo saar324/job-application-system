@@ -188,6 +188,7 @@ export class DiscoveryService {
     const scorerVersion = String(modePreferences.scorerVersion ?? this.config.discovery?.scorerVersion ?? "2");
     const knownKeys = knownRoleIndex(this.applicationService.store.snapshot(), identity.profileId);
     let excluded = 0; let handledFiltered = 0; let qualifying = 0; let selected = 0;
+    let destinationPending = 0;
     const errors = [];
     const exclusionReasons = new Map();
     const eligible = [];
@@ -221,6 +222,7 @@ export class DiscoveryService {
           catch (error) { errors.push({ stage: "application_destination", error: error.message }); }
         }
         if (scored.applicationDestinationPending || !/^https:\/\//i.test(scored.applyUrl ?? "")) {
+          destinationPending += 1;
           errors.push({ stage: "application_destination", error: "verified HTTPS employer application URL required" });
           continue;
         }
@@ -238,11 +240,14 @@ export class DiscoveryService {
     }
     const recorded = await this.applicationService.recordCampaignSourceScan(campaignId, {
       sourceId, found: input.items.length, qualifying, excluded, handledFiltered, selected,
+      destinationPending,
       opportunityIds,
       exclusionReasons: [...exclusionReasons.entries()].map(([reason, count]) => ({ reason, count }))
         .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)),
       completed: input.completed !== false, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
       rateLimited: input.rateLimited === true, exhausted: input.exhausted === true,
+      challenge: input.challenge === true, parseDrift: input.parseDrift === true,
+      manual: input.manual === true,
       errors: [...errors, ...(input.errors ?? [])].slice(0, 100)
     }, identity);
     if (!recorded.sourceCoverage.fallbackRemaining.length) {
@@ -283,7 +288,8 @@ export class DiscoveryService {
     });
     const sourceYield = new Map(selected.map(({ id }) => [id, {
       sourceId: id, found: 0, qualifying: 0, excluded: 0,
-      handledFiltered: 0, destinationPending: 0, selected: 0
+      handledFiltered: 0, destinationPending: 0, selected: 0,
+      exclusionCounts: { hardExclusion: 0, belowScore: 0, opportunisticRequirements: 0 }
     }]));
     const handledBySource = new Map();
     const internalErrors = [];
@@ -381,7 +387,13 @@ export class DiscoveryService {
       if (scored.scoreDetails.hardExclusion
         || (opportunistic ? !opportunisticQualified : scored.score < modeConfig.minimumScore)) {
         excluded += 1;
-        if (sourceYield.has(raw.source)) sourceYield.get(raw.source).excluded += 1;
+        if (sourceYield.has(raw.source)) {
+          const row = sourceYield.get(raw.source);
+          row.excluded += 1;
+          const kind = scored.scoreDetails.hardExclusion ? "hardExclusion"
+            : opportunistic ? "opportunisticRequirements" : "belowScore";
+          row.exclusionCounts[kind] += 1;
+        }
         continue;
       }
       if (scored.applicationDestinationPending) {
@@ -474,6 +486,9 @@ function importedCandidate(candidate, sourceId) {
     if (url.protocol !== "https:") throw new Error(`${key} must use HTTPS`);
   }
   const capped = (value, size) => value === undefined ? undefined : String(value).slice(0, size);
+  const destinationObserved = candidate.applicationDestinationVerified === true
+    && (!candidate.listingUrl || new URL(candidate.listingUrl).hostname.replace(/^www\./, "")
+      !== new URL(candidate.applyUrl).hostname.replace(/^www\./, ""));
   return normalizeOpportunity({
     source: sourceId,
     externalId: capped(candidate.externalId, 500),
@@ -482,8 +497,8 @@ function importedCandidate(candidate, sourceId) {
     location: capped(candidate.location, 500), employmentType: capped(candidate.employmentType, 100),
     remote: candidate.remote === true, postedAt: capped(candidate.postedAt, 100),
     listingUrl: candidate.listingUrl ?? candidate.applyUrl, applyUrl: candidate.applyUrl,
-    applicationDestinationVerified: candidate.applicationDestinationVerified === true,
-    applicationDestinationPending: candidate.applicationDestinationVerified !== true,
+    applicationDestinationVerified: destinationObserved,
+    applicationDestinationPending: !destinationObserved,
     tags: Array.isArray(candidate.tags) ? candidate.tags.slice(0, 100).map((item) => String(item).slice(0, 100)) : [],
     compensation: candidate.compensation && typeof candidate.compensation === "object"
       ? candidate.compensation : undefined,

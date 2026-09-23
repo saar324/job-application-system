@@ -6,6 +6,7 @@ import { telemetry as defaultTelemetry } from "./telemetry.js";
 import { roleKeys } from "./discovery/handled-roles.js";
 import { scoreOpportunity } from "./discovery/scoring.js";
 import { officialAtsDestination, revalidateOfficialAtsRole } from "./discovery/official-ats.js";
+import { summarizeSourceHealth } from "./discovery/source-health.js";
 import { buildWorkflowReport, recordWorkflowStage } from "./workflow-report.js";
 import { policyCovers, hardPolicyHolds, LEGAL_ATTESTATION_FIELD } from "./standing-policy.js";
 
@@ -734,10 +735,13 @@ export class ApplicationService {
       audit(state, identity, "campaign.source_scanned", campaignId, {
         sourceId: input.sourceId, found: input.found, qualifying: input.qualifying,
         excluded: input.excluded, handledFiltered: input.handledFiltered,
+        destinationPending: input.destinationPending ?? 0,
         selected: input.selected, opportunityIds: input.opportunityIds ?? [],
         exclusionReasons: input.exclusionReasons ?? [],
         completed: input.completed, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
         rateLimited: input.rateLimited === true, exhausted: input.exhausted === true,
+        challenge: input.challenge === true, parseDrift: input.parseDrift === true,
+        manual: input.manual === true,
         errors: input.errors ?? []
       });
       recordWorkflowStage(state, identity, campaignId, "discovery", { campaignId,
@@ -847,7 +851,10 @@ export class ApplicationService {
         primary: started.details.sources ?? [], fallbackPlanned, fallbackCovered, fallbackRemaining,
         coveredCount: (started.details.sources ?? []).length + fallbackCovered.length,
         plannedCount: (started.details.sources ?? []).length + fallbackPlanned.length,
-        scans: sourceScans.map((item) => ({ at: item.at, ...item.details }))
+        scans: sourceScans.map((item) => ({ at: item.at, ...item.details })),
+        health: [...(started.details.sources ?? []), ...fallbackPlanned].map((sourceId) => summarizeSourceHealth(
+          sourceId, [...(scan?.details.sourceYield ?? []).map((row) => ({ ...row, completed: true })),
+            ...sourceScans.map((item) => item.details)]))
       },
       candidatePoolSize: [...new Set([
         ...(scan?.details.selectedOpportunityIds ?? []),
