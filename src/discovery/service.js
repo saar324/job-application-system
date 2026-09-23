@@ -185,6 +185,7 @@ export class DiscoveryService {
     const knownKeys = knownRoleIndex(this.applicationService.store.snapshot(), identity.profileId);
     let excluded = 0; let handledFiltered = 0; let qualifying = 0; let selected = 0;
     const errors = [];
+    const exclusionReasons = new Map();
     const eligible = [];
     const alreadySelected = campaign.sourceCoverage.scans.filter((scan) => scan.sourceId === sourceId)
       .reduce((sum, scan) => sum + Number(scan.selected ?? 0), 0);
@@ -204,7 +205,11 @@ export class DiscoveryService {
           && scored.score >= Number(opportunisticRules.minimumScore ?? 65);
         if (scored.scoreDetails.hardExclusion
           || (opportunistic ? !opportunisticQualified : scored.score < modeConfig.minimumScore)) {
-          excluded += 1; continue;
+          excluded += 1;
+          const reason = scored.scoreDetails.hardExclusion ?? (opportunistic
+            ? "opportunistic_requirements_not_met" : "score_below_minimum");
+          exclusionReasons.set(reason, (exclusionReasons.get(reason) ?? 0) + 1);
+          continue;
         }
         qualifying += 1;
         if (scored.applicationDestinationPending) {
@@ -230,6 +235,8 @@ export class DiscoveryService {
     const recorded = await this.applicationService.recordCampaignSourceScan(campaignId, {
       sourceId, found: input.items.length, qualifying, excluded, handledFiltered, selected,
       opportunityIds,
+      exclusionReasons: [...exclusionReasons.entries()].map(([reason, count]) => ({ reason, count }))
+        .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)),
       completed: input.completed !== false, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
       rateLimited: input.rateLimited === true, exhausted: input.exhausted === true,
       errors: [...errors, ...(input.errors ?? [])].slice(0, 100)
@@ -438,6 +445,7 @@ function importedCandidate(candidate, sourceId) {
     location: capped(candidate.location, 500), employmentType: capped(candidate.employmentType, 100),
     remote: candidate.remote === true, postedAt: capped(candidate.postedAt, 100),
     listingUrl: candidate.listingUrl ?? candidate.applyUrl, applyUrl: candidate.applyUrl,
+    applicationDestinationVerified: candidate.applicationDestinationVerified === true,
     tags: Array.isArray(candidate.tags) ? candidate.tags.slice(0, 100).map((item) => String(item).slice(0, 100)) : [],
     compensation: candidate.compensation && typeof candidate.compensation === "object"
       ? candidate.compensation : undefined,

@@ -4,7 +4,8 @@ import { automateApplication } from "./automation.js";
 export async function executeInFreshContext({ browser, payload, urlPolicy, artifactsDirectory,
   automate = automateApplication, adaptiveController, draftProvider, egressProxy, markFinalActionStarted }) {
   const initialHostname = new URL(payload.opportunity.applyUrl).hostname.toLowerCase();
-  const requestDomains = payload.opportunity.userRequested === true ? [initialHostname] : [];
+  const requestDomains = payload.opportunity.userRequested === true
+    || payload.opportunity.applicationDestinationVerified === true ? [initialHostname] : [];
   try {
     urlPolicy.assertAllowed(payload.opportunity.applyUrl, requestDomains);
     await urlPolicy.assertPublic(payload.opportunity.applyUrl);
