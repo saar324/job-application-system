@@ -404,6 +404,10 @@ test("known employment and compensation conflicts cannot silently auto-apply", (
     location: "Worldwide", employmentType: "full_time",
     compensation: { maximum: 100000, period: "year", currency: "USD" } }, profile, "full_time");
   assert.deepEqual(currency.conflicts, ["compensation_conflict"]);
+  const clearlyLowForeignPay = scoreOpportunity({ title: "Junior Node.js Engineer", description: "Node.js", remote: true,
+    location: "Worldwide", employmentType: "full_time",
+    compensation: { maximum: 600, period: "monthly", currency: "AUD" } }, profile, "full_time");
+  assert.match(clearlyLowForeignPay.scoreDetails.hardExclusion, /clearly below the configured minimum/);
 });
 
 test("quality gates reject verified schedule, experience, contract, and core-stack mismatches", () => {
