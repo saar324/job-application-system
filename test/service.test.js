@@ -641,6 +641,20 @@ test("rejecting one application confirmation supersedes its remaining pending qu
   assert.equal(service.list("applications", identity.profileId)[0].status, "rejected");
 });
 
+test("manual retry controls are not persisted as application answers", async () => {
+  const service = await fixture();
+  service.adapter.submit = async () => { throw new NeedsInputError("manual", [{
+    kind: "unsupported_form", action: "manual_review", message: "Inspect"
+  }]); };
+  const job = await opportunity(service);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const confirmation = service.list("confirmations", identity.profileId)[0];
+  const application = await service.resolveConfirmation(confirmation.id,
+    { approved: true, answers: { retry: true } }, identity);
+  assert.deepEqual(application.answers, {});
+});
+
 test("ordinary application answers reject credential-like fields", async () => {
   const service = await fixture();
   const job = await opportunity(service);
