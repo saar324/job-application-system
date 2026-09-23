@@ -82,6 +82,11 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "PATCH" && url.pathname === "/v1/profile") {
         return send(response, 200, await profiles.patch(identity.profileId, await jsonBody(request)));
       }
+      if (request.method === "PUT" && url.pathname === "/v1/profile/approved-answers") {
+        if (!identity.roles?.includes("owner")) return send(response, 403, { error: "owner authority required" });
+        const body = await jsonBody(request);
+        return send(response, 200, await profiles.setApprovedAnswers(identity.profileId, body.answers, identity));
+      }
       if (url.pathname === "/v1/standing-submission-policy") {
         if (request.method === "GET") {
           return send(response, 200, { policy: (await profiles.get(identity.profileId))?.standingSubmissionPolicy ?? null });
@@ -100,6 +105,12 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       }
       if (request.method === "POST" && url.pathname === "/v1/discovery/scan") {
         return send(response, 200, await discovery.scan(await jsonBody(request), identity));
+      }
+      if (request.method === "POST" && url.pathname === "/v1/discovery/reserve/refresh") {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "reserve_refresh", body,
+          async () => ({ status: 200, body: await discovery.refreshReserve(body, identity) }));
+        return send(response, saved.status, saved.body);
       }
       if (request.method === "GET" && url.pathname === "/v1/discovery/sources") {
         return send(response, 200, await discovery.describeSources(identity));

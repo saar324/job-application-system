@@ -668,7 +668,7 @@ export class ApplicationService {
       || !Number.isInteger(input.reserve) || input.reserve < 0 || input.reserve > 50) {
       throw new ClientError(400, "campaign requires an id, target from 1 to 100, and reserve from 0 to 50");
     }
-    if (input.target > 50 && (!policy || policy.mode !== "automatic" || policy.revokedAt
+    if (input.reserveOnly !== true && input.target > 50 && (!policy || policy.mode !== "automatic" || policy.revokedAt
       || policy.expiresAt && Date.parse(policy.expiresAt) <= Date.now()
       || !policy.modes.includes(mode) || policy.campaignCap < input.target
       || policy.dailyCap < input.target)) {
@@ -681,7 +681,8 @@ export class ApplicationService {
       }
       audit(state, identity, "campaign.started", input.id, {
         target: input.target, reserve: input.reserve, mode: input.mode,
-        sources: input.sources ?? [], fallbackSources: input.fallbackSources ?? [], queryPlan: input.queryPlan ?? []
+        sources: input.sources ?? [], fallbackSources: input.fallbackSources ?? [], queryPlan: input.queryPlan ?? [],
+        reserveOnly: input.reserveOnly === true
       });
       recordWorkflowStage(state, identity, input.id, "discovery", { campaignId: input.id, outcome: "started" });
       return this.campaignStatus(input.id, identity.profileId, state);
@@ -768,6 +769,7 @@ export class ApplicationService {
     const selectedIds = [];
     for (const opportunity of opportunities) {
       if (selectedIds.length >= campaign.target + campaign.reserve) break;
+      if (campaign.reserveOnly) { selectedIds.push(opportunity.id); continue; }
       try {
         await this.requestApplication(opportunity.id, { campaignId }, identity);
         selectedIds.push(opportunity.id);
@@ -777,7 +779,7 @@ export class ApplicationService {
     }
     await this.store.mutate(async (draft) => audit(draft, identity, "campaign.selection_finalized", campaignId,
       { candidateCount: opportunities.length, selectedOpportunityIds: selectedIds }));
-    await this.#replenishCampaign(campaignId, identity.profileId);
+    if (!campaign.reserveOnly) await this.#replenishCampaign(campaignId, identity.profileId);
     return this.campaignStatus(campaignId, identity.profileId);
   }
 
@@ -803,6 +805,12 @@ export class ApplicationService {
     const applicationIds = new Set(applications.map((item) => item.id));
     const opportunities = new Map(snapshot.opportunities.filter((item) => item.profileId === profileId)
       .map((item) => [item.id, item]));
+    const attemptedOpportunityIds = new Set(snapshot.applications.filter((item) =>
+      item.profileId === profileId).map((item) => item.opportunityId));
+    const unattemptedReserveWithinTtl = snapshot.opportunities.filter((item) =>
+      item.profileId === profileId && item.mode === started.details.mode
+      && item.reserveExpiresAt && Date.parse(item.reserveExpiresAt) > Date.now()
+      && !attemptedOpportunityIds.has(item.id) && officialAtsDestination(item)).length;
     const attempts = (snapshot.attempts ?? []).filter((item) => item.profileId === profileId
       && applicationIds.has(item.applicationId));
     const finalConfirmations = snapshot.confirmations.filter((item) => item.profileId === profileId
@@ -825,6 +833,7 @@ export class ApplicationService {
     const searchingMore = Boolean(scan && applications.length < target && fallbackRemaining.length);
     const active = applications.some((item) => ["queued", "claimed", "submitting"].includes(item.status));
     const status = failed ? "failed"
+      : started.details.reserveOnly ? fallbackRemaining.length ? "refreshing_reserve" : "reserve_ready"
       : submitted.length >= target ? "complete"
         : active ? "running"
           : pendingOther.length ? "blocked"
@@ -835,6 +844,7 @@ export class ApplicationService {
     const lastApplicationUpdate = applications.length
       ? applications.map((item) => item.updatedAt).sort().at(-1) : undefined;
     const endedAt = completedAt ?? failed?.at
+      ?? (status === "reserve_ready" ? selection?.at ?? scan?.at : undefined)
       ?? (["insufficient_candidates", "blocked"].includes(status)
         ? [selection?.at, scan?.at, lastApplicationUpdate].filter(Boolean).sort().at(-1) : undefined);
     const reviewReadyAt = finalConfirmations.length
@@ -844,6 +854,8 @@ export class ApplicationService {
     const activeWorkerMs = attempts.reduce((sum, item) => sum + Number(item.workerMetrics?.activeMs ?? 0), 0);
     return {
       campaignId, status, target, reserve: started.details.reserve, mode: started.details.mode,
+      reserveOnly: started.details.reserveOnly === true,
+      unattemptedReserveWithinTtl,
       sourceCoverage: {
         primary: started.details.sources ?? [], fallbackPlanned, fallbackCovered, fallbackRemaining,
         coveredCount: (started.details.sources ?? []).length + fallbackCovered.length,
@@ -1123,7 +1135,7 @@ export class ApplicationService {
     const started = campaignStart(state, campaignId, profileId);
     const selection = state.audit.find((item) => item.profileId === profileId
       && item.subjectId === campaignId && item.action === "campaign.selection_finalized");
-    if (!started || !selection) return;
+    if (!started || !selection || started.details.reserveOnly) return;
     const pool = [...new Set(state.audit.filter((item) => item.profileId === profileId
       && item.subjectId === campaignId && ["campaign.scan_completed", "campaign.source_scanned"]
         .includes(item.action)).flatMap((item) => item.details?.selectedOpportunityIds
@@ -1484,7 +1496,7 @@ function validatedCheckpoint(checkpoint, applicationId) {
 function validatedPreparedAnswers(value, previous = {}) {
   if (value === undefined) return previous;
   if (!value || typeof value !== "object" || Array.isArray(value)
-    || Object.keys(value).length > 20
+    || Object.keys(value).length > 21
     || Object.entries(value).some(([key, text]) => key.length > 160
       || typeof text !== "string" || text.length > 5000 || CREDENTIAL_INPUT_KEY.test(key))) return previous;
   return value;

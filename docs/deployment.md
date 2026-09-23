@@ -55,6 +55,27 @@ The script normalizes all runtime paths, fixes private-file ownership before mig
 
 OpenClaw installation is deliberately separate. Provision each applicant only after API authentication and worker health are verified.
 
+### Optional reserve refresh timers
+
+`deploy/systemd/job-application-reserve-refresh.{service,timer}` and
+`job-application-browser-reserve.{service,timer}` are opt-in templates. The deployment script does not install or enable
+them. The official timer uses a profile-bound agent token to refresh only configured Ashby, Greenhouse, and Lever feeds;
+the browser timer runs a no-submit campaign against the private source catalog. Both share a lock, and browser sites
+retain their per-host request, page, delay, and 403/429/challenge limits.
+
+Before installing either timer, create a private `/etc/job-application/reserve.env` containing `JOB_SERVER_URL` and a
+profile-bound `JOB_SERVER_TOKEN`. Provision the private catalog at the path used by the browser unit and confirm the
+service user can read it and launch Playwright. The checked-in units use the conventional `jobapp-api` user and
+`/opt/job-application-system`; hosts with an immutable release path or a different account must override `User`,
+`Group`, `WorkingDirectory`, `EnvironmentFile`, and `ExecStart`. On the current personal-server layout, inspect
+`systemctl cat job-application-server.service` first and adapt the units to its `myos` account and active release path.
+The sample catalog and reserve environment paths are not provisioned there yet.
+
+Run each no-submit command manually with the intended private token, verify source health and HTTP 403/429 handling,
+then install the adapted unit and timer files and enable them separately. Do not enable the browser timer before its
+browser runtime, catalog, private environment, and measured request budget pass staging validation. A timer failure
+does not authorize a submission or turn stale reserve entries into fresh candidates.
+
 ## Upgrades and recovery
 
 Back up `/var/lib/job-application`, `/etc/job-application`, private applicant documents, and external OpenClaw reference files. Run `npm run check` on the candidate revision, deploy, then verify health, profile binding, credential isolation, and worker authentication before enabling discovery or live submission.

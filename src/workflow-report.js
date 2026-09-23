@@ -62,6 +62,28 @@ export function buildWorkflowReport(state, campaign, at = new Date().toISOString
     const created = opportunities.get(id)?.createdAt;
     return !created || Date.parse(created) < Date.parse(startedAt);
   }).length;
+  const preloaded = [...selected].map((id) => opportunities.get(id)).filter((item) => item
+    && Date.parse(item.createdAt) < Date.parse(startedAt));
+  const reserveSourceIds = new Set(preloaded.map((item) => item.source));
+  const sourceMaintenance = [...reserveSourceIds].map((sourceId) => (state.audit ?? [])
+    .filter((item) => item.profileId === campaign.profileId
+      && item.action === "reserve.source_completed" && item.details?.sourceId === sourceId
+      && Date.parse(item.at) <= Date.parse(startedAt)).at(-1)).filter(Boolean);
+  const browserReserveCampaigns = [...new Set(preloaded.map((item) => item.lastCampaignId).filter(Boolean))]
+    .map((id) => {
+      const start = (state.audit ?? []).find((item) => item.profileId === campaign.profileId
+        && item.action === "campaign.started" && item.subjectId === id && item.details?.reserveOnly);
+      const end = (state.audit ?? []).findLast((item) => item.profileId === campaign.profileId
+        && item.action === "campaign.selection_finalized" && item.subjectId === id);
+      const requests = (state.audit ?? []).filter((item) => item.profileId === campaign.profileId
+        && item.action === "campaign.source_scanned" && item.subjectId === id)
+        .reduce((sum, item) => sum + Number(item.details?.requestsMade ?? 0), 0);
+      return start && end ? { durationMs: Math.max(0, Date.parse(end.at) - Date.parse(start.at)),
+        requests } : null;
+    }).filter(Boolean);
+  const maintenanceSamples = [...sourceMaintenance.map((item) => ({
+    durationMs: item.details?.durationMs, requests: item.details?.requestsMade })),
+  ...browserReserveCampaigns];
   const hasAcquisition = Boolean(scan) && sourceCoverage.coveredCount > 0;
   const measurementKind = hasAcquisition && preloadedCandidates === 0
     ? "fresh_campaign" : "preloaded_or_incomplete";
@@ -74,6 +96,8 @@ export function buildWorkflowReport(state, campaign, at = new Date().toISOString
   }));
   const draftSamples = attempts.map((item) => item.workerMetrics?.draftCalls)
     .filter((value) => Number.isInteger(value) && value >= 0);
+  const browserStepSamples = attempts.map((item) => item.workerMetrics?.steps)
+    .filter((value) => Number.isInteger(value) && value >= 0);
   return {
     schemaVersion: 1, campaignId, status: campaign.status,
     measurementKind, endToEndEligible: measurementKind === "fresh_campaign",
@@ -85,7 +109,12 @@ export function buildWorkflowReport(state, campaign, at = new Date().toISOString
     activeWorkerSamples: activeSamples.length,
     ownerWaitMs: ownerWaitSamples.length ? ownerWaitSamples.reduce((sum, value) => sum + value, 0) : null,
     openOwnerWaitMs,
-    reserve: { selectedBeforeCampaign: preloadedCandidates, attributableMaintenanceMs: null },
+    reserve: { selectedBeforeCampaign: preloadedCandidates,
+      attributableMaintenanceMs: maintenanceSamples.length && maintenanceSamples.every((item) =>
+        Number.isFinite(item.durationMs))
+        ? maintenanceSamples.reduce((sum, item) => sum + item.durationMs, 0) : null,
+      observedMaintenanceRequests: maintenanceSamples.length
+        ? maintenanceSamples.reduce((sum, item) => sum + Number(item.requests ?? 0), 0) : null },
     counts: { newVerified: verified.length, manualReceipts, simulated,
       attemptedApplications: new Set(attempts.map((item) => item.applicationId)).size,
       attempts: attempts.length, handledFiltered,
@@ -98,6 +127,10 @@ export function buildWorkflowReport(state, campaign, at = new Date().toISOString
       ? draftSamples.reduce((sum, value) => sum + value, 0) : null,
       observedModelCalls: draftSamples.length ? draftSamples.reduce((sum, value) => sum + value, 0) : null,
       modelCallSamples: draftSamples.length,
+      browserSteps: attempts.length && browserStepSamples.length === attempts.length
+        ? browserStepSamples.reduce((sum, value) => sum + value, 0) : null,
+      observedBrowserSteps: browserStepSamples.length
+        ? browserStepSamples.reduce((sum, value) => sum + value, 0) : null,
       modelInputTokens: null, modelOutputTokens: null, coordinatorTokens: null, toolCalls: null },
     verifiedReceiptRatePerHour: verified.length && wallClockMs > 0
       ? verified.length * 3_600_000 / wallClockMs : null,

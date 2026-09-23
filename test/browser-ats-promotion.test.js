@@ -93,8 +93,28 @@ test("forged browser metadata cannot promote an unsuitable official role", async
   }, identity);
   assert.equal(first.sourceCoverage.scans[0].selected, 0);
   assert.deepEqual(first.sourceCoverage.scans[0].exclusionReasons,
-    [{ reason: "official_ats_verification_failed", count: 1 }]);
+    [{ reason: "official_ats_ineligible_or_mismatched_destination", count: 1 }]);
   assert.equal(service.list("opportunities", "person").length, 0);
+});
+
+test("transient official transport failure retries once and reports a bounded failure", async () => {
+  let calls = 0;
+  const recovered = await fetchVerifiedOfficialAtsRole(applyUrl, {}, async () => {
+    calls += 1;
+    if (calls === 1) throw new Error("transient network failure");
+    return new Response(JSON.stringify({ jobs: [job] }));
+  });
+  assert.equal(recovered?.externalId, `example:${roleId}`);
+  assert.equal(calls, 2);
+  const reasons = [];
+  calls = 0;
+  const failed = await fetchVerifiedOfficialAtsRole(applyUrl, {}, async () => {
+    calls += 1;
+    throw new Error("transient network failure");
+  }, (reason) => reasons.push(reason));
+  assert.equal(failed, null);
+  assert.equal(calls, 2);
+  assert.deepEqual(reasons, ["network_or_timeout"]);
 });
 
 test("a browser listing for another ATS role cannot be promoted", async () => {
@@ -167,5 +187,25 @@ test("one browser import reuses a bounded Ashby board lookup for multiple roles"
       applyUrl: `https://jobs.ashbyhq.com/example/${secondId}/application` }]
   }, identity);
   assert.equal(result.sourceCoverage.scans[0].selected, 2);
+  assert.equal(fetches, 1);
+});
+
+test("official ATS 429 creates a durable board cooldown during browser import", async () => {
+  let fetches = 0;
+  const { discovery, campaign } = await fixture(async () => {
+    fetches += 1;
+    return new Response("limited", { status: 429 });
+  });
+  const first = await discovery.addCampaignSourceResults(campaign.campaignId, {
+    sourceId: "board_one", completed: false, items: [browserCandidate]
+  }, identity);
+  assert.deepEqual(first.sourceCoverage.scans[0].exclusionReasons,
+    [{ reason: "official_ats_http_429", count: 1 }]);
+  const second = await discovery.addCampaignSourceResults(campaign.campaignId, {
+    sourceId: "board_one", completed: false, items: [{ ...browserCandidate,
+      applyUrl: "https://jobs.ashbyhq.com/example/22222222-2222-4222-8222-222222222222/application" }]
+  }, identity);
+  assert.deepEqual(second.sourceCoverage.scans[1].exclusionReasons,
+    [{ reason: "official_ats_backoff", count: 1 }]);
   assert.equal(fetches, 1);
 });

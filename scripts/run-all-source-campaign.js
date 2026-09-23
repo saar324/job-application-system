@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const options = argumentsOf(process.argv.slice(2));
 if (!options.catalog) {
-  console.error("usage: run-all-source-campaign --catalog FILE [--target 10] [--reserve 10] [--server URL] [--token-file FILE] [--headed]");
+  console.error("usage: run-all-source-campaign --catalog FILE [--target 10] [--reserve 10] [--reserve-only] [--server URL] [--token-file FILE] [--headed]");
   process.exit(2);
 }
 const catalogPath = path.resolve(options.catalog);
@@ -17,8 +17,9 @@ const fallback = (catalog.autonomousDiscovery?.visibleBrowserSources ?? []).map(
 const server = options.server ?? process.env.JOB_SERVER_URL ?? "http://127.0.0.1:4310";
 const token = process.env.JOB_SERVER_TOKEN || (options.tokenFile
   ? (await readFile(path.resolve(options.tokenFile), "utf8")).trim() : "");
-const body = { target: number(options.target, 10, 1), reserve: number(options.reserve, 10, 0),
-  sources: primary, fallbackSources: fallback, limitPerSource: 10 };
+const body = { target: number(options.target, 10, 1, 100), reserve: number(options.reserve, 10, 0, 50),
+  sources: primary, fallbackSources: fallback, limitPerSource: 10,
+  reserveOnly: options.reserveOnly === true, maxRequestsPerSource: 20 };
 const response = await fetch(`${server}/v1/campaigns`, {
   method: "POST", headers: { "content-type": "application/json",
     ...(token ? { authorization: `Bearer ${token}` } : {}),
@@ -56,16 +57,16 @@ process.stdout.write(`${JSON.stringify({ campaignId: final.campaignId, status: f
   candidatePoolSize: final.candidatePoolSize, applications: final.applications.length,
   sourceCoverage: final.sourceCoverage, timing: final.timing })}\n`);
 
-function number(value, fallback, minimum) {
+function number(value, fallback, minimum, maximum) {
   const parsed = Number(value ?? fallback);
-  if (!Number.isInteger(parsed) || parsed < minimum || parsed > 50) throw new Error("target and reserve are outside their allowed range");
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) throw new Error("target and reserve are outside their allowed range");
   return parsed;
 }
 function argumentsOf(values) {
   const result = {};
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
-    if (value === "--headed") result.headed = true;
+    if (["--headed", "--reserve-only"].includes(value)) result[toCamel(value.slice(2))] = true;
     else if (value.startsWith("--")) result[toCamel(value.slice(2))] = values[++index];
   }
   return result;
