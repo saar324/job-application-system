@@ -400,6 +400,22 @@ export class DiscoveryService {
         || input.requestsMade < 0 || input.requestsMade > 1000))) {
       throw Object.assign(new Error("source telemetry is invalid"), { status: 400 });
     }
+    if (input.cooldownSkipped === true) {
+      const active = campaign.sourceCoverage.cooldowns?.[sourceId];
+      if (!active || input.items.length || input.completed !== true
+        || input.pagesVisited !== 0 || input.requestsMade !== 0) {
+        throw Object.assign(new Error("cooldown coverage requires an active hold and zero requests"),
+          { status: 409 });
+      }
+      const recorded = await this.applicationService.recordCampaignSourceScan(campaignId, {
+        sourceId, found: 0, qualifying: 0, excluded: 0, handledFiltered: 0, selected: 0,
+        destinationPending: 0, completed: true, pagesVisited: 0, requestsMade: 0,
+        cooldownSkipped: true, cooldownReason: active.reason, cooldownUntil: active.until,
+        errors: []
+      }, identity);
+      return recorded.sourceCoverage.fallbackRemaining.length ? recorded
+        : this.applicationService.finalizeCampaignSelection(campaignId, identity);
+    }
     const profile = await this.profiles.get(identity.profileId);
     const profileStatus = await this.profiles.status(identity.profileId, campaign.mode, this.config.defaultMode);
     if (!profileStatus.readyToApply) {

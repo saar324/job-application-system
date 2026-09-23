@@ -7,6 +7,7 @@ import { roleKeys } from "./discovery/handled-roles.js";
 import { scoreOpportunity } from "./discovery/scoring.js";
 import { officialAtsDestination, revalidateOfficialAtsRole } from "./discovery/official-ats.js";
 import { summarizeSourceHealth } from "./discovery/source-health.js";
+import { sourceCooldowns } from "./discovery/source-cooldown.js";
 import { buildWorkflowReport, recordWorkflowStage } from "./workflow-report.js";
 import { policyCovers, hardPolicyHolds, LEGAL_ATTESTATION_FIELD } from "./standing-policy.js";
 
@@ -740,12 +741,16 @@ export class ApplicationService {
         challenge: input.challenge === true, timedOut: input.timedOut === true,
         parseDrift: input.parseDrift === true,
         manual: input.manual === true,
+        cooldownSkipped: input.cooldownSkipped === true,
+        ...(input.cooldownSkipped ? { cooldownReason: input.cooldownReason,
+          cooldownUntil: input.cooldownUntil } : {}),
         errors: input.errors ?? []
       });
       recordWorkflowStage(state, identity, campaignId, "discovery", { campaignId,
         sourceId: input.sourceId, found: input.found, qualifying: input.qualifying,
         excluded: input.excluded, handledFiltered: input.handledFiltered,
-        outcome: input.rateLimited ? "rate_limited" : input.timedOut ? "timed_out" : "completed" });
+        outcome: input.cooldownSkipped ? "cooldown" : input.challenge ? "challenge"
+          : input.rateLimited ? "rate_limited" : input.timedOut ? "timed_out" : "completed" });
       return this.campaignStatus(campaignId, identity.profileId, state);
     });
   }
@@ -859,6 +864,7 @@ export class ApplicationService {
       unattemptedReserveWithinTtl,
       sourceCoverage: {
         primary: started.details.sources ?? [], fallbackPlanned, fallbackCovered, fallbackRemaining,
+        cooldowns: sourceCooldowns(snapshot.audit, profileId, fallbackPlanned),
         coveredCount: (started.details.sources ?? []).length + fallbackCovered.length,
         plannedCount: (started.details.sources ?? []).length + fallbackPlanned.length,
         scans: sourceScans.map((item) => ({ at: item.at, ...item.details })),

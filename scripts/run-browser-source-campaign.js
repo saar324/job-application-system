@@ -23,21 +23,26 @@ const server = options.server ?? process.env.JOB_SERVER_URL ?? "http://127.0.0.1
 const token = process.env.JOB_SERVER_TOKEN || (options.tokenFile
   ? (await readFile(path.resolve(options.tokenFile), "utf8")).trim() : "");
 let browser; let context; let externallyOwned = false;
-if (options.cdpEndpoint) {
-  browser = await chromium.connectOverCDP(options.cdpEndpoint);
-  externallyOwned = true;
-  context = browser.contexts()[0] ?? await browser.newContext({ locale: "en-US", timezoneId: "UTC" });
-} else if (options.userDataDir) {
-  context = await chromium.launchPersistentContext(path.resolve(options.userDataDir), {
-    headless: options.headed !== true, channel: options.channel ?? "chrome",
-    locale: "en-US", timezoneId: "UTC"
-  });
-} else {
-  browser = await chromium.launch({ headless: options.headed !== true });
-  context = await browser.newContext({ locale: "en-US", timezoneId: "UTC" });
-}
-await context.route(/\.(?:png|jpe?g|gif|webp|svg|woff2?|ttf|mp4|webm)(?:\?|$)/i, (route) => route.abort());
 const hostLastRequest = new Map();
+
+async function ensureContext() {
+  if (context) return;
+  if (options.cdpEndpoint) {
+    browser = await chromium.connectOverCDP(options.cdpEndpoint);
+    externallyOwned = true;
+    context = browser.contexts()[0] ?? await browser.newContext({ locale: "en-US", timezoneId: "UTC" });
+  } else if (options.userDataDir) {
+    context = await chromium.launchPersistentContext(path.resolve(options.userDataDir), {
+      headless: options.headed !== true, channel: options.channel ?? "chrome",
+      locale: "en-US", timezoneId: "UTC"
+    });
+  } else {
+    browser = await chromium.launch({ headless: options.headed !== true });
+    context = await browser.newContext({ locale: "en-US", timezoneId: "UTC" });
+  }
+  await context.route(/\.(?:png|jpe?g|gif|webp|svg|woff2?|ttf|mp4|webm)(?:\?|$)/i,
+    (route) => route.abort());
+}
 
 try {
   for (const source of sources) {
@@ -46,6 +51,14 @@ try {
     const current = await api("GET", `/v1/campaigns/${options.campaign}`,
       undefined, undefined, totalBudget.timeoutMs(5_000));
     if (!current.sourceCoverage?.fallbackRemaining?.includes(source.id)) continue;
+    const cooldown = current.sourceCoverage.cooldowns?.[source.id];
+    if (cooldown) {
+      const recorded = await report(source.id, [], { completed: true, cooldownSkipped: true,
+        pagesVisited: 0, requestsMade: 0, exhausted: false }, totalBudget.timeoutMs(7_000));
+      progress(source.id, 0, accepted(recorded, source.id), "cooldown", {
+        reason: cooldown.reason, until: cooldown.until });
+      continue;
+    }
     if (policy.manual) {
       const recorded = await report(source.id, [], { completed: true, exhausted: true, manual: true,
         errors: [{ error: "source policy requires manual browser search" }] },
@@ -53,6 +66,7 @@ try {
       progress(source.id, 0, accepted(recorded, source.id), "manual-policy");
       continue;
     }
+    await ensureContext();
     const budget = new SourceBudget(Math.max(1_000, totalBudget.remainingMs() - 7_000));
     const progressState = new SourceProgress({ sourceId: source.id,
       maxAcceptedResults: policy.maxAcceptedResults, maxBatch: Math.min(10, policy.maxCandidates),
@@ -74,7 +88,7 @@ try {
   }
 } finally {
   if (!externallyOwned) {
-    await context.close();
+    await context?.close();
     await browser?.close();
   }
 }
@@ -333,8 +347,8 @@ function accepted(campaign, sourceId) {
     .reduce((sum, scan) => sum + Number(scan.selected ?? 0), 0) ?? 0;
 }
 
-function progress(source, found, acceptedCount, status) {
-  process.stdout.write(`${JSON.stringify({ source, found, accepted: acceptedCount, status })}\n`);
+function progress(source, found, acceptedCount, status, extra = {}) {
+  process.stdout.write(`${JSON.stringify({ source, found, accepted: acceptedCount, status, ...extra })}\n`);
 }
 
 function argumentsOf(values) {
