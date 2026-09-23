@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { after, before } from "node:test";
 import { chromium } from "playwright";
-import { automateApplication, unavailablePostingUrl } from "../worker/automation.js";
+import { automateApplication, unavailablePostingUrl,
+  waitForSubmissionEvidence } from "../worker/automation.js";
 
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true }); });
@@ -60,6 +62,31 @@ test("standing policy requires a live permit and checks it before Submit", async
     commitFinal: async () => { throw new Error("revoked"); }
   });
   assert.equal(revoked.requirements[0].kind, "final_policy_revoked");
+});
+
+test("a form mutation during the policy decision invalidates the final action", async () => {
+  let commits = 0;
+  let marked = 0;
+  let applicationPage;
+  const result = await run(`<form onsubmit="event.preventDefault();document.body.textContent='fixture submitted'">
+    <label>Email<input name="email" type="email" required></label>
+    <button type="submit">Submit Application</button></form>`, {}, profile,
+  { standingPolicyVersion: 1, claim: { attemptId: "attempt-one" } },
+  async (page) => { applicationPage = page; }, {
+    authorizeFinal: async () => {
+      // A delayed ATS render or script may alter a field while the worker is
+      // awaiting the server policy decision.
+      await applicationPage.locator("input[name=email]").evaluate((element) => {
+        element.value = "changed@example.test";
+      });
+      return { decision: "permit", permit: "permit-one" };
+    },
+    commitFinal: async () => { commits += 1; return { committed: true }; },
+    markFinalActionStarted: async () => { marked += 1; }
+  });
+  assert.equal(result.requirements[0].kind, "final_review_changed");
+  assert.equal(commits, 0);
+  assert.equal(marked, 0);
 });
 
 test("worker pauses for an unknown required answer", async () => {
@@ -150,6 +177,77 @@ test("radio answers verify by readable label or stored option value", async () =
     <button type="submit">Submit Application</button></form>`, { notice: "1" }, profile,
   { finalApprovalRequired: true });
   assert.equal(byValue.requirements[0].preview.filled[0].value, "Immediate Available");
+});
+
+test("delayed LinkedIn save loss holds before final review", async () => {
+  const result = await run(`<form>
+    <label>LinkedIn URL <input name="linkedin_url"
+      onblur="setTimeout(() => { this.value = ''; }, 180)"></label>
+    <button type="submit">Submit Application</button></form>`, {},
+  { ...profile, links: { linkedin: "https://www.linkedin.com/in/example/" } },
+  { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "final_review_changed");
+  assert.deepEqual(result.requirements[0].fields, ["linkedin_url"]);
+});
+
+test("a radio choice that the form discards is held before Submit", async () => {
+  const result = await run(`<form><fieldset><legend>Availability</legend>
+    <label><input type="radio" name="availability" value="now"
+      onclick="setTimeout(() => { this.checked = false; }, 180)">Now</label>
+    <label><input type="radio" name="availability" value="later">Later</label>
+    </fieldset><button type="submit">Submit Application</button></form>`,
+  { availability: "Now" }, profile, { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "final_review_changed");
+});
+
+test("Next takes precedence over Submit and newly revealed required fields hold", async () => {
+  const result = await run(`<form onsubmit="event.preventDefault();document.body.textContent='fixture submitted'">
+    <section id="first"><label>First name<input name="first_name" required></label>
+      <button type="button" onclick="first.hidden=true;second.hidden=false">Next</button>
+      <button type="submit">Submit Application</button></section>
+    <section id="second" hidden><label>Years of Rust experience<input name="rust_years" required></label>
+      <button type="submit">Submit Application</button></section></form>`);
+  assert.equal(result.status, "needs_input");
+  assert.deepEqual(result.requirements[0].fields, ["rust_years"]);
+  assert.equal(result.checkpoint.steps.length, 2);
+});
+
+test("a success-shaped URL with an active application form is not a receipt", async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(dataUrl(`<form><label>Email<input name="email"></label>
+      <button type="submit">Submit Application</button></form>`));
+    const previousUrl = page.url();
+    await page.goto(dataUrl(`<form><label>Email<input name="email"></label>
+      <button type="submit">Submit Application</button></form><p>success</p>`));
+    assert.equal(await waitForSubmissionEvidence(page, previousUrl, "", 300), false);
+  } finally { await context.close(); }
+});
+
+test("403 and 429 stop before any final action", async () => {
+  for (const status of [403, 429]) {
+    const server = createServer((_request, response) => {
+      response.writeHead(status, { "content-type": "text/html" });
+      response.end("<h1>Access restricted</h1>");
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const result = await automateApplication({ page, profile,
+        opportunity: { applyUrl: `http://127.0.0.1:${server.address().port}/apply` },
+        application: { id: "blocked-application", answers: {} },
+        artifactsDirectory: await mkdtemp(path.join(os.tmpdir(), "job-worker-blocked-")) });
+      assert.equal(result.requirements[0].kind, "access_restricted");
+      assert.equal(result.phase, "before_final_action");
+    } finally {
+      await context.close();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
 });
 
 test("visual required text does not break deterministic profile aliases", async () => {
@@ -506,7 +604,7 @@ test("a verified upload remains in review after the ATS replaces its file input"
   await writeFile(resume, "resume-body");
   const result = await run(`<form>
     <label>Upload resume* Required <input id="resume" type="file" required
-      onchange="this.outerHTML='<span>Uploaded</span>'"></label>
+      onchange="this.outerHTML='<span>Uploaded resume.pdf</span>'"></label>
     <label>First name <input name="first_name" required></label>
     <button type="submit">Submit Application</button>
   </form>`, {}, { ...profile, documents: { resume } }, { finalApprovalRequired: true });
@@ -514,6 +612,18 @@ test("a verified upload remains in review after the ATS replaces its file input"
   const uploaded = result.requirements[0].preview.filled.find((field) => field.type === "file");
   assert.equal(uploaded.value, "resume.pdf");
   assert.deepEqual(uploaded.files, [{ name: "resume.pdf", size: 11 }]);
+});
+
+test("an upload that disappears without its filename cannot pass final review", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
+  const resume = path.join(directory, "resume.pdf");
+  await writeFile(resume, "resume-body");
+  const result = await run(`<form><label>Resume <input name="resume" type="file" required
+    onchange="setTimeout(() => { this.outerHTML='<span>Upload pending</span>'; }, 500)"></label>
+    <button type="submit">Submit Application</button></form>`, {},
+  { ...profile, documents: { resume } }, { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "final_review_changed");
 });
 
 test("worker recognizes composite resume labels and full-name labels", async () => {

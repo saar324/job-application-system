@@ -309,6 +309,12 @@ export class ApplicationService {
       const opportunity = state.opportunities.find((item) => item.id === current?.opportunityId);
       if (!current || current.status !== "submitting" || current.claim?.attemptId !== attemptId
         || !opportunity) throw new ClientError(409, "application is not in this submission attempt");
+      // The worker and server cannot atomically persist the permit commit and
+      // the browser phase marker. A crash in that interval must never mint a
+      // replacement permit; an owner must reconcile the employer outcome.
+      if (current.finalSubmissionDecision?.status === "consumed") {
+        return { decision: "hold", reasonCodes: ["prior_final_action_uncertain"] };
+      }
       const policy = profile?.standingSubmissionPolicy;
       const reasonCodes = [];
       if (!policyCovers(policy, opportunity, current.mode)) reasonCodes.push("policy_not_covering");

@@ -27,6 +27,8 @@ test("MCP tools are profile-bound, typed, and idempotent", async () => {
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   const tools = await client.listTools();
   assert.ok(tools.tools.some((tool) => tool.name === "request_application"));
+  const campaign = tools.tools.find((tool) => tool.name === "start_application_campaign");
+  assert.equal(campaign.inputSchema.properties.target.maximum, 100);
   const args = { url: "https://careers.example.test/apply", idempotencyKey: "same-request-key" };
   const first = await client.callTool({ name: "request_application", arguments: args });
   const second = await client.callTool({ name: "request_application", arguments: args });

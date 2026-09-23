@@ -12,7 +12,7 @@ EnvironmentFile=/etc/job-application/worker.env
 Environment=NODE_ENV=production
 Environment=HOME=/var/lib/job-application-worker
 UMask=0027
-ExecStart=/usr/bin/node worker/server.js
+ExecStart=/bin/sh worker/start-systemd.sh
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
