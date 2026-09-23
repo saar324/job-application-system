@@ -10,6 +10,12 @@ The worker sends the observed final preview and fingerprint to the server's `/v1
 
 The worker requires `JOB_SERVER_INTERNAL_URL` pointing to the local job server. The production environment splitter and updater pass `http://127.0.0.1:4310`; the worker rejects non-local callback URLs. The server uses `APPLICATION_WEBHOOK_TOKEN` for its internal callback route and the worker uses its matching `WORKER_TOKEN`. Do not put either token in a profile or application payload.
 
-The cap counts receipts plus reserved and committed final actions, rather than intake records. Unused reservations expire after 30 seconds. A committed action with uncertain outcome conservatively keeps its cap slot until reconciliation so it cannot be silently retried.
+The owner-policy cap counts receipts, exact manual approvals, and reserved or committed final actions, rather than intake records. Unused automatic reservations expire after 30 seconds. A committed action with uncertain outcome conservatively keeps its cap slot until reconciliation so it cannot be silently retried.
+
+Campaign targets above 50 and up to 100 require an active owner policy for the mode with both `dailyCap` and
+`campaignCap` at least as large as the target. The server applies the owner policy to covered final actions across
+multiple campaign waves. Uncovered and manual applications remain under the configured global and mode daily caps at
+intake and exact final approval. Agent-writable profile preferences may lower those manual caps but cannot raise or
+disable them. Manual approvals and policy reservations both occupy final-action capacity for that day.
 
 The profile write atomically stores a bounded owner policy history entry with each version. The separate application-state audit is idempotent and secondary. If that audit write fails, the owner API still reports the durable policy mutation as successful, avoiding an ambiguous retry that would create another version.

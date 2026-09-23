@@ -205,8 +205,6 @@ export class ApplicationService {
     }
     const profileStatus = this.profiles
       ? await this.profiles.status(identity.profileId, mode, this.config.defaultMode) : null;
-    const modePreferences = mode === "freelance"
-      ? profile?.preferences?.freelance : profile?.preferences?.fullTime;
     const covered = input.forceFinalApproval !== true
       && policyCovers(profile?.standingSubmissionPolicy, initialOpportunity, mode)
       && verifiedDiscoveryIsFresh(initialOpportunity, mode);
@@ -249,25 +247,14 @@ export class ApplicationService {
         });
       }
       const today = now().slice(0, 10);
-      const globalDailyCount = state.applications.filter(
-        (item) => item.profileId === identity.profileId && item.createdAt.startsWith(today) && !inactive(item)
-      ).length;
-      const dailyCount = state.applications.filter(
-        (item) => item.profileId === identity.profileId && item.mode === mode
-          && item.createdAt.startsWith(today) && !inactive(item)
-      ).length;
-      const configuredProfileCap = Number(profile?.preferences?.maxApplicationsPerDay);
-      const globalDailyCap = Number.isInteger(configuredProfileCap)
-        ? configuredProfileCap === 0 ? Number.POSITIVE_INFINITY : configuredProfileCap
-        : this.config.execution?.maxApplicationsPerDay;
+      const globalDailyCount = dailyIntakeCount(state, identity.profileId, today);
+      const dailyCount = dailyIntakeCount(state, identity.profileId, today, mode);
+      const { globalCap: globalDailyCap, modeCap: dailyApplicationCap } = manualDailyCaps(
+        this.config, profile, mode);
       if (!covered && Number.isFinite(globalDailyCap) && globalDailyCount >= globalDailyCap) {
         decision.eligible = false;
         decision.reasons.push(`global daily application cap of ${globalDailyCap} reached`);
       }
-      const configuredModeCap = Number(modePreferences?.dailyApplicationCap);
-      const dailyApplicationCap = Number.isInteger(configuredModeCap)
-        ? configuredModeCap === 0 ? Number.POSITIVE_INFINITY : configuredModeCap
-        : modeConfig.dailyApplicationCap;
       if (!covered && dailyCount >= dailyApplicationCap) {
         decision.eligible = false;
         decision.reasons.push(`daily ${mode} application cap of ${dailyApplicationCap} reached`);
@@ -374,12 +361,7 @@ export class ApplicationService {
         reasonCodes.push("policy_hard_hold");
       }
       const today = now().slice(0, 10);
-      const counted = state.applications.filter((item) => item.profileId === current.profileId
-        && item.id !== current.id && (item.receipt?.submittedAt?.startsWith(today)
-          || item.finalSubmissionDecision?.status === "consumed"
-            && item.finalSubmissionDecision.createdAt.startsWith(today)
-          || item.finalSubmissionDecision?.status === "reserved"
-            && Date.parse(item.finalSubmissionDecision.expiresAt) > Date.now()));
+      const counted = dailySubmissionSlots(state, current.profileId, today, { excludeId: current.id });
       if (counted.length >= (policy?.dailyCap ?? 0)) reasonCodes.push("daily_cap_reached");
       if (current.campaignId && counted.filter((item) => item.campaignId === current.campaignId).length
         >= (policy?.campaignCap ?? 0)) reasonCodes.push("campaign_cap_reached");
@@ -434,12 +416,7 @@ export class ApplicationService {
         throw new ClientError(409, "final submission permit is invalid or revoked");
       }
       const today = now().slice(0, 10);
-      const counted = state.applications.filter((item) => item.profileId === current.profileId
-        && item.id !== current.id && (item.receipt?.submittedAt?.startsWith(today)
-          || item.finalSubmissionDecision?.status === "consumed"
-            && item.finalSubmissionDecision.createdAt.startsWith(today)
-          || item.finalSubmissionDecision?.status === "reserved"
-            && Date.parse(item.finalSubmissionDecision.expiresAt) > Date.now()));
+      const counted = dailySubmissionSlots(state, current.profileId, today, { excludeId: current.id });
       if (counted.length >= policy.dailyCap || current.campaignId
         && counted.filter((item) => item.campaignId === current.campaignId).length >= policy.campaignCap) {
         throw new ClientError(409, "final submission cap reached");
@@ -460,6 +437,8 @@ export class ApplicationService {
       (item) => item.id === confirmationId && item.profileId === identity.profileId
     );
     if (!target) throw new ClientError(404, "confirmation not found");
+    const approvalProfile = target.kind === "final_submission_approval" && input.approved === true
+      ? await this.profiles?.get(identity.profileId) : null;
     let requireApprovalOnRetry = false;
     if (["submission_unverified", "submission_recovery"].includes(target.kind)
       && input.approved === true && input.answers?.retry === true && this.adapter.attemptStatus) {
@@ -561,6 +540,7 @@ export class ApplicationService {
         application.finalSubmissionApproval = undefined;
       }
       if (confirmation.kind === "final_submission_approval" && input.approved === true) {
+        assertManualApprovalCapacity(state, [application], approvalProfile, this.config);
         application.finalSubmissionApproval = {
           approvedAt: now(), previewFingerprint: confirmation.previewFingerprint
         };
@@ -633,6 +613,7 @@ export class ApplicationService {
       || new Set(entries.map((entry) => entry?.applicationId)).size !== entries.length) {
       throw new ClientError(400, "batch must contain 1 to 50 distinct applications");
     }
+    const approvalProfile = await this.profiles?.get(identity.profileId);
     const approved = await this.store.mutate(async (state) => {
       const matches = entries.map((entry) => {
         const application = state.applications.find((item) => item.id === entry.applicationId
@@ -649,6 +630,7 @@ export class ApplicationService {
         }
         return { application, confirmation };
       });
+      assertManualApprovalCapacity(state, matches.map((entry) => entry.application), approvalProfile, this.config);
       for (const { application, confirmation } of matches) {
         confirmation.status = "approved";
         confirmation.resolvedAt = now();
@@ -673,10 +655,18 @@ export class ApplicationService {
   }
 
   async createCampaign(input, identity) {
+    const mode = input.mode ?? this.config.defaultMode;
+    const policy = (await this.profiles?.get(identity.profileId))?.standingSubmissionPolicy;
     if (!/^[a-f0-9-]{36}$/.test(input.id ?? "")
-      || !Number.isInteger(input.target) || input.target < 1 || input.target > 50
+      || !Number.isInteger(input.target) || input.target < 1 || input.target > 100
       || !Number.isInteger(input.reserve) || input.reserve < 0 || input.reserve > 50) {
-      throw new ClientError(400, "campaign requires an id, target from 1 to 50, and reserve from 0 to 50");
+      throw new ClientError(400, "campaign requires an id, target from 1 to 100, and reserve from 0 to 50");
+    }
+    if (input.target > 50 && (!policy || policy.mode !== "automatic" || policy.revokedAt
+      || policy.expiresAt && Date.parse(policy.expiresAt) <= Date.now()
+      || !policy.modes.includes(mode) || policy.campaignCap < input.target
+      || policy.dailyCap < input.target)) {
+      throw new ClientError(409, "target above 50 requires an active owner standing policy with matching daily and campaign caps");
     }
     return this.store.mutate(async (state) => {
       if (state.audit.some((item) => item.profileId === identity.profileId
@@ -1704,6 +1694,58 @@ function verifiedDiscoveryIsFresh(opportunity, mode) {
   if (opportunity.validThrough && (!Number.isFinite(Date.parse(opportunity.validThrough))
     || Date.parse(opportunity.validThrough) <= Date.now())) return false;
   return true;
+}
+
+function dailySubmissionSlots(state, profileId, day, { mode, excludeId } = {}) {
+  return state.applications.filter((item) => item.profileId === profileId && item.id !== excludeId
+    && (!mode || item.mode === mode)
+    && (item.receipt?.submittedAt?.startsWith(day)
+      || item.finalSubmissionDecision?.status === "consumed"
+        && item.finalSubmissionDecision.consumedAt?.startsWith(day)
+      || item.finalSubmissionDecision?.status === "reserved"
+        && Date.parse(item.finalSubmissionDecision.expiresAt) > Date.now()
+      || item.finalSubmissionApproval?.approvedAt?.startsWith(day)
+        && !["skipped", "rejected"].includes(item.status)));
+}
+
+function dailyIntakeCount(state, profileId, day, mode) {
+  const slots = new Set(dailySubmissionSlots(state, profileId, day, { mode }).map((item) => item.id));
+  for (const item of state.applications) {
+    if (item.profileId === profileId && (!mode || item.mode === mode)
+      && item.createdAt.startsWith(day) && !inactive(item)) slots.add(item.id);
+  }
+  return slots.size;
+}
+
+function assertManualApprovalCapacity(state, applications, profile, config) {
+  const today = now().slice(0, 10);
+  const profileId = applications[0].profileId;
+  const occupied = new Set(state.applications.filter((item) => item.profileId === profileId
+    && item.createdAt.startsWith(today) && !inactive(item)).map((item) => item.id));
+  for (const item of dailySubmissionSlots(state, profileId, today)) occupied.add(item.id);
+  for (const application of applications) occupied.add(application.id);
+  const { globalCap } = manualDailyCaps(config, profile, applications[0].mode);
+  if (Number.isFinite(globalCap) && occupied.size > globalCap) {
+    throw new ClientError(409, `global daily application cap of ${globalCap} reached`);
+  }
+  for (const mode of new Set(applications.map((item) => item.mode))) {
+    const { modeCap } = manualDailyCaps(config, profile, mode);
+    const modeCount = state.applications.filter((item) => occupied.has(item.id) && item.mode === mode).length;
+    if (Number.isFinite(modeCap) && modeCount > modeCap) {
+      throw new ClientError(409, `daily ${mode} application cap of ${modeCap} reached`);
+    }
+  }
+}
+
+function manualDailyCaps(config, profile, mode) {
+  const preferences = mode === "freelance" ? profile?.preferences?.freelance : profile?.preferences?.fullTime;
+  const bounded = (configured, preferred) => {
+    const ceiling = Number.isInteger(configured) && configured > 0 ? configured : Infinity;
+    return Number.isInteger(preferred) && preferred > 0 ? Math.min(ceiling, preferred) : ceiling;
+  };
+  return { globalCap: bounded(config.execution?.maxApplicationsPerDay,
+    profile?.preferences?.maxApplicationsPerDay),
+  modeCap: bounded(config.modes[mode]?.dailyApplicationCap, preferences?.dailyApplicationCap) };
 }
 
 function validateDirectUrl(raw) {

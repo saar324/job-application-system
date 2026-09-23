@@ -465,7 +465,7 @@ test("concurrent admission cannot exceed the daily cap", async () => {
   await service.waitForIdle();
 });
 
-test("an authenticated profile can raise its own application cap for an approved batch", async () => {
+test("agent-writable profile preferences cannot raise the configured manual application cap", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   const profiles = {
@@ -494,11 +494,12 @@ test("an authenticated profile can raise its own application cap for an approved
     service.requestApplication(first.id, {}, identity),
     service.requestApplication(second.id, {}, identity)
   ]);
-  assert.equal(admitted.filter((item) => item.status === "queued").length, 2);
+  assert.equal(admitted.filter((item) => item.status === "queued").length, 1);
+  assert.equal(admitted.filter((item) => item.status === "skipped").length, 1);
   await service.waitForIdle();
 });
 
-test("an authenticated profile can disable daily application caps", async () => {
+test("agent-writable zero preferences cannot disable configured manual application caps", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   const profiles = {
@@ -527,7 +528,8 @@ test("an authenticated profile can disable daily application caps", async () => 
   const admitted = await Promise.all(
     jobs.map((job) => service.requestApplication(job.id, {}, identity))
   );
-  assert.equal(admitted.filter((item) => item.status === "queued").length, 3);
+  assert.equal(admitted.filter((item) => item.status === "queued").length, 1);
+  assert.equal(admitted.filter((item) => item.status === "skipped").length, 2);
   await service.waitForIdle();
 });
 

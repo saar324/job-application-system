@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,11 +33,11 @@ async function fixture() {
   return { profiles, service };
 }
 
-async function prepared(service, extra = {}) {
+async function prepared(service, extra = {}, requestInput = {}) {
   const role = await service.addOpportunity({ title: "Engineer", company: "Example",
     applyUrl: "https://example.test/apply", score: 100,
     applicationDestinationVerified: true, ...extra }, agent, { serverVerifiedDiscovery: true });
-  const application = await service.requestApplication(role.id, {}, agent);
+  const application = await service.requestApplication(role.id, requestInput, agent);
   await service.store.mutate((state) => {
     const item = state.applications.find((entry) => entry.id === application.id);
     item.status = "submitting";
@@ -113,6 +114,90 @@ test("owner cap allows one final attempt and rejects a concurrent second reserva
       destination: "https://example.test/apply/two" }
   }));
   assert.ok(secondDecision.reasonCodes.includes("daily_cap_reached"));
+});
+
+test("a target above 50 requires explicit owner daily and campaign authority", async () => {
+  const { profiles, service } = await fixture();
+  const create = (target) => service.createCampaign({ id: randomUUID(), target, reserve: 10,
+    mode: "full_time" }, agent);
+  await assert.rejects(create(51), /active owner standing policy/);
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, dailyCap: 100,
+    campaignCap: 99 }, owner);
+  await assert.rejects(create(100), /matching daily and campaign caps/);
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, dailyCap: 100,
+    campaignCap: 100 }, owner);
+  assert.equal((await create(100)).target, 100);
+  await assert.rejects(create(101), /target from 1 to 100/);
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, mode: "always",
+    dailyCap: 100, campaignCap: 100 }, owner);
+  await assert.rejects(create(51), /active owner standing policy/);
+});
+
+test("owner final-action cap spans campaign waves and counts consumed attempts", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, dailyCap: 2,
+    campaignCap: 1 }, owner);
+  const campaigns = await Promise.all(Array.from({ length: 3 }, () => service.createCampaign({
+    id: randomUUID(), target: 1, reserve: 0, mode: "full_time" }, agent)));
+  for (let index = 0; index < 3; index += 1) {
+    const url = `https://example.test/apply/${index}`;
+    const title = `Engineer ${index}`;
+    const application = await prepared(service, { title, applyUrl: url },
+      { campaignId: campaigns[index].campaignId });
+    const input = decisionInput(application, { preview: { ...decisionInput(application).preview,
+      title, destination: url } });
+    const decision = await service.prepareFinalSubmission(input);
+    if (index < 2) {
+      assert.equal(decision.decision, "permit");
+      await service.commitFinalSubmission({ applicationId: application.id, attemptId: "attempt-one",
+        previewFingerprint: input.previewFingerprint, permit: decision.permit });
+    } else assert.ok(decision.reasonCodes.includes("daily_cap_reached"));
+  }
+});
+
+test("a covered reservation cannot raise the ordinary manual approval ceiling", async () => {
+  const { profiles, service } = await fixture();
+  service.config.execution.maxApplicationsPerDay = 1;
+  service.config.modes.full_time.dailyApplicationCap = 1;
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, dailyCap: 100,
+    campaignCap: 100 }, owner);
+  const manualRole = await service.addOpportunity({ title: "Manual Engineer", company: "Example",
+    applyUrl: "https://other.test/manual", score: 100 }, agent);
+  const manual = await service.requestApplication(manualRole.id, {}, agent);
+  const fingerprint = "b".repeat(64);
+  await service.store.mutate((state) => {
+    const item = state.applications.find((entry) => entry.id === manual.id);
+    item.createdAt = new Date(Date.now() - 86_400_000).toISOString();
+    for (const confirmation of state.confirmations.filter((entry) => entry.applicationId === manual.id)) {
+      confirmation.status = "superseded";
+    }
+    state.confirmations.push({ id: randomUUID(), profileId: "person", applicationId: manual.id,
+      kind: "final_submission_approval", status: "pending", previewFingerprint: fingerprint,
+      createdAt: new Date().toISOString() });
+  });
+  const covered = await prepared(service);
+  assert.equal((await service.prepareFinalSubmission(decisionInput(covered))).decision, "permit");
+  await assert.rejects(service.approvePreparedBatch([{ applicationId: manual.id,
+    previewFingerprint: fingerprint }], agent), /global daily application cap/);
+  assert.equal(service.list("applications", "person").find((item) => item.id === manual.id).status,
+    "waiting_confirmation");
+});
+
+test("an exact manual approval consumes the owner final-action daily cap", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", policy, owner);
+  const manualRole = await service.addOpportunity({ title: "Manual Engineer", company: "Example",
+    applyUrl: "https://other.test/manual", score: 100 }, agent);
+  const manual = await service.requestApplication(manualRole.id, {}, agent);
+  await service.store.mutate((state) => {
+    const item = state.applications.find((entry) => entry.id === manual.id);
+    item.finalSubmissionApproval = { approvedAt: new Date().toISOString(),
+      previewFingerprint: "b".repeat(64) };
+    item.status = "queued";
+  });
+  const covered = await prepared(service);
+  const decision = await service.prepareFinalSubmission(decisionInput(covered));
+  assert.ok(decision.reasonCodes.includes("daily_cap_reached"));
 });
 
 test("HTTP policy mutation requires owner token bound to its profile", async () => {
