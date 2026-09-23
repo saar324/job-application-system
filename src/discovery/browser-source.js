@@ -1,4 +1,5 @@
 import { parseJobPostingsJsonLd } from "./normalization.js";
+import { extractGisJob, gisJobLinkScore } from "./gisjobs.js";
 
 const JOB_PATH = /\/(?:jobs?|careers?|positions?|vacanc(?:y|ies)|openings?|opportunities?|offers?|remote-jobs|job-search)(?:\/|\?|$)/i;
 const EXCLUDED_PATH = /\/(?:login|sign-?in|register|about|privacy|terms|blog)(?:\/|\?|$)/i;
@@ -19,7 +20,8 @@ export function extractSourcePage(html, pageUrl, sourceId) {
       job.uncertainties = [...new Set([...(job.uncertainties ?? []), "remote_scope_from_visible_page"])];
     }
   }
-  const fallback = structured.length ? null : fallbackJob(html, pageUrl, sourceId, currentText, currentLocation);
+  const fallback = structured.length ? null : sourceId === "gisjobs"
+    ? extractGisJob(html, pageUrl) : fallbackJob(html, pageUrl, sourceId, currentText, currentLocation);
   let jobs = fallback ? [...structured, fallback] : structured;
   const anchors = [...String(html).matchAll(/<a\b([^>]*?)href\s*=\s*["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/gi)]
     .map((match) => ({ attributes: `${match[1]} ${match[3]}`, href: absoluteUrl(match[2], pageUrl),
@@ -29,7 +31,8 @@ export function extractSourcePage(html, pageUrl, sourceId) {
     const url = new URL(item.href);
     const sameHost = url.hostname.replace(/^www\./, "") === pageHost;
     const score = !EXCLUDED_PATH.test(url.pathname) && (sameHost || ATS_HOST.test(url.hostname))
-      ? jobLinkScore(url, item.text) : 0;
+      ? Math.max(jobLinkScore(url, item.text), sourceId === "gisjobs"
+        ? gisJobLinkScore(url, item.text) : 0) : 0;
     return [item.href, score];
   }).filter(([, score]) => score > 0));
   let jobLinks = [...linkScores.entries()]
