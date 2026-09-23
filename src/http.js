@@ -46,6 +46,15 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
           telemetry: telemetry.health()
         });
       }
+      if (url.pathname === "/v1/internal/final-decision" || url.pathname === "/v1/internal/final-commit") {
+        if (request.method !== "POST" || !config.execution?.workerCallbackToken
+          || request.headers.authorization !== `Bearer ${config.execution.workerCallbackToken}`) {
+          return send(response, 403, { error: "worker authority required" });
+        }
+        const input = await jsonBody(request);
+        return send(response, 200, url.pathname.endsWith("final-decision")
+          ? await service.prepareFinalSubmission(input) : await service.commitFinalSubmission(input));
+      }
       const identity = authenticate(request);
       if (!identity) return send(response, 401, { error: "invalid or missing bearer token" });
 
@@ -72,6 +81,18 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       }
       if (request.method === "PATCH" && url.pathname === "/v1/profile") {
         return send(response, 200, await profiles.patch(identity.profileId, await jsonBody(request)));
+      }
+      if (url.pathname === "/v1/standing-submission-policy") {
+        if (request.method === "GET") {
+          return send(response, 200, { policy: (await profiles.get(identity.profileId))?.standingSubmissionPolicy ?? null });
+        }
+        if (request.method === "PUT") {
+          if (!identity.roles?.includes("owner")) return send(response, 403, { error: "owner authority required" });
+          const policy = await profiles.setStandingSubmissionPolicy(
+            identity.profileId, await jsonBody(request), identity);
+          await service.recordStandingPolicyChange(policy, identity);
+          return send(response, 200, { policy });
+        }
       }
       if (request.method === "POST" && url.pathname === "/v1/discovery/scan") {
         return send(response, 200, await discovery.scan(await jsonBody(request), identity));

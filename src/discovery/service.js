@@ -134,7 +134,7 @@ export class DiscoveryService {
       for (const entry of fallbackSources.length ? [] : selected) {
         try {
           const application = await this.applicationService.requestApplication(entry.opportunity.id, {
-            campaignId, forceFinalApproval: true
+            campaignId
           }, identity);
           applicationIds.push(application.id);
         } catch (error) {

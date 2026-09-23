@@ -27,7 +27,8 @@ const updates = {
   PLAYWRIGHT_BROWSERS_PATH: "/var/lib/job-application-worker/browsers",
   JOB_SERVER_CREDENTIAL_VAULTS: "/var/lib/job-application/vaults",
   WORKER_HOST: "127.0.0.1",
-  WORKER_PORT: "4320"
+  WORKER_PORT: "4320",
+  JOB_SERVER_INTERNAL_URL: "http://127.0.0.1:4310"
 };
 for (const [key, value] of Object.entries(updates)) values.set(key, value);
 if (!values.get("WORKER_TOKEN") || !values.get("APPLICATION_WEBHOOK_TOKEN")) {

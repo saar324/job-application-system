@@ -722,7 +722,7 @@ export function unavailablePostingUrl(value) {
 }
 
 export async function automateApplication({ page, profile, opportunity, application, artifactsDirectory,
-  evidencePacket, draftProvider, markFinalActionStarted }) {
+  evidencePacket, draftProvider, markFinalActionStarted, authorizeFinal, commitFinal }) {
   const attemptStarted = performance.now();
   const timings = { loadMs: 0, planFillMs: 0, draftMs: 0, transitionMs: 0, receiptMs: 0, steps: 0,
     fields: 0, draftCalls: 0 };
@@ -1022,7 +1022,8 @@ export async function automateApplication({ page, profile, opportunity, applicat
           field.step, field.key, field.secretFingerprint, field.stagedPathFingerprint
         ])
       })).digest("hex");
-      if ((application.finalApprovalRequired || [...observedFields.values()].some((field) => field.source === "drafted prose"))
+      if ((application.finalApprovalRequired || application.standingPolicyVersion === undefined
+        && [...observedFields.values()].some((field) => field.source === "drafted prose"))
         && application.finalSubmissionApproval?.previewFingerprint !== previewFingerprint) {
         return pause({
           status: "needs_input", message: "Review all fields before the final submission",
@@ -1031,6 +1032,24 @@ export async function automateApplication({ page, profile, opportunity, applicat
             fields: [], preview, previewFingerprint, recommendation: "approve"
           }]
         }, step);
+      }
+      if (application.standingPolicyVersion !== undefined) {
+        if (!authorizeFinal || !commitFinal) return pause({ status: "needs_human",
+          message: "The server final-decision gate is unavailable",
+          requirements: [{ kind: "final_policy_unavailable", action: "manual_review",
+            message: "Review this application before submitting" }] }, step);
+        let decision;
+        try { decision = await authorizeFinal({ applicationId: application.id,
+          attemptId: application.claim?.attemptId, previewFingerprint, preview }); }
+        catch { return pause({ status: "needs_human", message: "The final-decision gate failed",
+          requirements: [{ kind: "final_policy_unavailable", action: "manual_review",
+            message: "Review this application before submitting" }] }, step); }
+        if (decision.decision !== "permit") return pause({ status: "needs_input",
+          message: "The standing submission policy requires review",
+          requirements: [{ kind: "final_policy_hold", action: "manual_review",
+            message: (decision.reasonCodes ?? []).join(", ") || "Policy hold", preview,
+            previewFingerprint }] }, step);
+        application.finalPermit = { permit: decision.permit, previewFingerprint };
       }
     }
     const pagesBeforeClick = new Set(page.context().pages());
@@ -1063,6 +1082,13 @@ export async function automateApplication({ page, profile, opportunity, applicat
       page.on("console", (message) => {
         if (message.type() === "error") consoleErrors.push(message.text().slice(0, 300));
       });
+    }
+    if (action.final && application.finalPermit) {
+      try { await commitFinal({ applicationId: application.id,
+        attemptId: application.claim?.attemptId, ...application.finalPermit }); }
+      catch { return pause({ status: "needs_human", message: "The final submission permit expired or was revoked",
+        requirements: [{ kind: "final_policy_revoked", action: "manual_review",
+          message: "Review the current policy and form before submitting" }] }, step); }
     }
     if (action.final) await markFinalActionStarted?.();
     await action.locator.click({ noWaitAfter: true });

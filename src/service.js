@@ -4,6 +4,7 @@ import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailab
   RetryableExecutionError } from "./adapters/errors.js";
 import { telemetry as defaultTelemetry } from "./telemetry.js";
 import { roleKeys } from "./discovery/handled-roles.js";
+import { policyCovers, hardPolicyHolds } from "./standing-policy.js";
 
 function now() { return new Date().toISOString(); }
 const inactive = (item) => ["skipped", "rejected", "failed"].includes(item.status);
@@ -25,6 +26,16 @@ export class ApplicationService {
 
   list(collection, profileId) {
     return this.store.snapshot()[collection].filter((item) => item.profileId === profileId);
+  }
+
+  async recordStandingPolicyChange(policy, identity) {
+    return this.store.mutate((state) => {
+      audit(state, identity, "standing_policy.changed", policy.id, {
+        version: policy.version, mode: policy.mode, dailyCap: policy.dailyCap,
+        campaignCap: policy.campaignCap
+      });
+      return { version: policy.version };
+    });
   }
 
   applicationLog(profileId) {
@@ -170,9 +181,9 @@ export class ApplicationService {
       ? await this.profiles.status(identity.profileId, mode, this.config.defaultMode) : null;
     const modePreferences = mode === "freelance"
       ? profile?.preferences?.freelance : profile?.preferences?.fullTime;
-    const submissionApproval = input.forceFinalApproval === true
-      ? "always"
-      : modePreferences?.submissionApproval ?? modeConfig.submissionApproval ?? "automatic";
+    const covered = input.forceFinalApproval !== true
+      && policyCovers(profile?.standingSubmissionPolicy, initialOpportunity, mode);
+    const submissionApproval = covered ? "automatic" : "always";
     if (!["automatic", "always"].includes(submissionApproval)) {
       throw new ClientError(400, `invalid submissionApproval for ${mode}`);
     }
@@ -191,6 +202,12 @@ export class ApplicationService {
       if (duplicate) throw new ClientError(409, "an application already exists for this opportunity");
 
       const decision = evaluatePolicy({ opportunity, mode, modeConfig, answers: input.answers });
+      if (covered) {
+        decision.autoApply = true;
+        decision.confirmations.push(...hardPolicyHolds({ opportunity, mode, answers: input.answers, profile })
+          .filter((hold) => !decision.confirmations.some((existing) => existing.kind === hold.kind
+            && JSON.stringify(existing.fields ?? []) === JSON.stringify(hold.fields ?? []))));
+      }
       if (profileStatus && !profileStatus.readyToApply) {
         decision.confirmations.push({
           kind: "missing_answer",
@@ -210,7 +227,7 @@ export class ApplicationService {
       const globalDailyCap = Number.isInteger(configuredProfileCap)
         ? configuredProfileCap === 0 ? Number.POSITIVE_INFINITY : configuredProfileCap
         : this.config.execution?.maxApplicationsPerDay;
-      if (Number.isFinite(globalDailyCap) && globalDailyCount >= globalDailyCap) {
+      if (!covered && Number.isFinite(globalDailyCap) && globalDailyCount >= globalDailyCap) {
         decision.eligible = false;
         decision.reasons.push(`global daily application cap of ${globalDailyCap} reached`);
       }
@@ -218,7 +235,7 @@ export class ApplicationService {
       const dailyApplicationCap = Number.isInteger(configuredModeCap)
         ? configuredModeCap === 0 ? Number.POSITIVE_INFINITY : configuredModeCap
         : modeConfig.dailyApplicationCap;
-      if (dailyCount >= dailyApplicationCap) {
+      if (!covered && dailyCount >= dailyApplicationCap) {
         decision.eligible = false;
         decision.reasons.push(`daily ${mode} application cap of ${dailyApplicationCap} reached`);
       }
@@ -227,6 +244,7 @@ export class ApplicationService {
         requestedBy: identity.actorId, answers: input.answers ?? {},
         ...(input.campaignId ? { campaignId: String(input.campaignId) } : {}),
         submissionApproval,
+        ...(covered ? { standingPolicyVersion: profile.standingSubmissionPolicy.version } : {}),
         finalApprovalRequired: submissionApproval === "always",
         status: !decision.eligible ? "skipped"
           : decision.confirmations.length || !decision.autoApply ? "waiting_confirmation" : "queued",
@@ -246,6 +264,123 @@ export class ApplicationService {
     this.telemetry.count("applications.admitted", 1, { mode, status: saved.status });
     if (saved.status === "queued") this.enqueue(saved.id);
     return saved;
+  }
+
+  async prepareFinalSubmission(input) {
+    const { applicationId, attemptId, previewFingerprint, preview } = input;
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(applicationId ?? "")
+      || !/^[a-zA-Z0-9_-]{1,80}$/.test(attemptId ?? "")
+      || !/^[a-f0-9]{64}$/.test(previewFingerprint ?? "") || !preview || typeof preview !== "object") {
+      throw new ClientError(400, "invalid final decision request");
+    }
+    const application = this.store.snapshot().applications.find((item) => item.id === applicationId);
+    if (!application) throw new ClientError(404, "application not found");
+    const profile = await this.profiles?.get(application.profileId);
+    return this.store.mutate(async (state) => {
+      const current = state.applications.find((item) => item.id === applicationId);
+      const opportunity = state.opportunities.find((item) => item.id === current?.opportunityId);
+      if (!current || current.status !== "submitting" || current.claim?.attemptId !== attemptId
+        || !opportunity) throw new ClientError(409, "application is not in this submission attempt");
+      const policy = profile?.standingSubmissionPolicy;
+      const reasonCodes = [];
+      if (!policyCovers(policy, opportunity, current.mode)) reasonCodes.push("policy_not_covering");
+      if (current.standingPolicyVersion !== policy?.version) reasonCodes.push("policy_version_changed");
+      let destinationMatches = false;
+      try {
+        const previewHost = new URL(preview.destination).hostname.toLowerCase();
+        const roleIdentity = roleKeys(opportunity);
+        destinationMatches = policy?.destinationHosts?.some((host) => host === previewHost || host === "*")
+          && [...roleKeys({ applyUrl: preview.destination })]
+            .some((key) => !key.startsWith("role:") && roleIdentity.has(key));
+      } catch { /* invalid destination is a hold */ }
+      if (!destinationMatches) {
+        reasonCodes.push("destination_changed");
+      }
+      if (preview.company !== opportunity.company || preview.title !== opportunity.title) {
+        reasonCodes.push("role_changed");
+      }
+      const fields = [...(preview.filled ?? []), ...(preview.unfilled ?? [])];
+      if (!Array.isArray(preview.filled) || !Array.isArray(preview.unfilled) || fields.length > 300) {
+        reasonCodes.push("invalid_preview");
+      } else {
+        if (preview.unfilled.some((field) => field.required === true)) reasonCodes.push("required_field_unfilled");
+        if (fields.some((field) => ["application answer", "unverified site prefill"].includes(field.source))) {
+          reasonCodes.push("answer_provenance_unverified");
+        }
+        if (preview.filled.some((field) => {
+          const answerClass = field.source === "drafted prose" ? "grounded_prose"
+            : field.type === "file" ? "resume"
+              : /(?:url|link|website|portfolio|github|linkedin)/i.test(field.label ?? "") ? "link"
+                : "profile_fact";
+          return !policy?.answerClasses?.includes(answerClass);
+        })) reasonCodes.push("answer_class_not_authorized");
+        if (fields.some((field) => field.source === "drafted prose")
+          && !policy?.answerClasses?.includes("grounded_prose")) reasonCodes.push("prose_not_authorized");
+        if (fields.some((field) => /(?:legal|authorize|consent|certify|agree|privacy policy)/i.test(field.label ?? ""))) {
+          reasonCodes.push("legal_answer_unconfirmed");
+        }
+      }
+      if (hardPolicyHolds({ opportunity, mode: current.mode, answers: current.answers, profile }).length) {
+        reasonCodes.push("policy_hard_hold");
+      }
+      const today = now().slice(0, 10);
+      const counted = state.applications.filter((item) => item.profileId === current.profileId
+        && item.id !== current.id && (item.receipt?.submittedAt?.startsWith(today)
+          || item.finalSubmissionDecision?.status === "consumed"
+            && item.finalSubmissionDecision.createdAt.startsWith(today)
+          || item.finalSubmissionDecision?.status === "reserved"
+            && Date.parse(item.finalSubmissionDecision.expiresAt) > Date.now()));
+      if (counted.length >= (policy?.dailyCap ?? 0)) reasonCodes.push("daily_cap_reached");
+      if (current.campaignId && counted.filter((item) => item.campaignId === current.campaignId).length
+        >= (policy?.campaignCap ?? 0)) reasonCodes.push("campaign_cap_reached");
+      const decision = { id: randomUUID(), schemaVersion: 1, applicationId, attemptId,
+        policyId: policy?.id ?? null, policyVersion: policy?.version ?? null,
+        roleKey: [...roleKeys(opportunity)].sort()[0] ?? opportunity.id,
+        previewFingerprint, decision: reasonCodes.length ? "hold" : "permit", reasonCodes,
+        createdAt: now(), expiresAt: new Date(Date.now() + 30_000).toISOString(),
+        status: reasonCodes.length ? "held" : "reserved" };
+      current.finalSubmissionDecision = decision;
+      audit(state, { actorId: "worker", profileId: current.profileId }, "application.final_decision", current.id,
+        { decision: decision.decision, reasonCodes, policyVersion: decision.policyVersion });
+      return { decision: decision.decision, reasonCodes,
+        ...(decision.decision === "permit" ? { permit: decision.id } : {}) };
+    });
+  }
+
+  async commitFinalSubmission(input) {
+    const application = this.store.snapshot().applications.find((item) => item.id === input.applicationId);
+    if (!application) throw new ClientError(404, "application not found");
+    const profile = await this.profiles?.get(application.profileId);
+    return this.store.mutate(async (state) => {
+      const current = state.applications.find((item) => item.id === input.applicationId);
+      const opportunity = state.opportunities.find((item) => item.id === current?.opportunityId);
+      const decision = current?.finalSubmissionDecision;
+      const policy = profile?.standingSubmissionPolicy;
+      if (!current || current.status !== "submitting" || current.claim?.attemptId !== input.attemptId
+        || decision?.id !== input.permit || decision.status !== "reserved"
+        || Date.parse(decision.expiresAt) <= Date.now()
+        || !policyCovers(policy, opportunity, current.mode)
+        || policy.id !== decision.policyId || policy.version !== decision.policyVersion
+        || decision.previewFingerprint !== input.previewFingerprint) {
+        throw new ClientError(409, "final submission permit is invalid or revoked");
+      }
+      const today = now().slice(0, 10);
+      const counted = state.applications.filter((item) => item.profileId === current.profileId
+        && item.id !== current.id && (item.receipt?.submittedAt?.startsWith(today)
+          || item.finalSubmissionDecision?.status === "consumed"
+            && item.finalSubmissionDecision.createdAt.startsWith(today)
+          || item.finalSubmissionDecision?.status === "reserved"
+            && Date.parse(item.finalSubmissionDecision.expiresAt) > Date.now()));
+      if (counted.length >= policy.dailyCap || current.campaignId
+        && counted.filter((item) => item.campaignId === current.campaignId).length >= policy.campaignCap) {
+        throw new ClientError(409, "final submission cap reached");
+      }
+      decision.status = "consumed";
+      decision.consumedAt = now();
+      audit(state, { actorId: "worker", profileId: current.profileId }, "application.final_permit_consumed", current.id,
+        { policyVersion: policy.version });
+      return { committed: true };
+    });
   }
 
   async resolveConfirmation(confirmationId, input, identity) {
@@ -537,7 +672,7 @@ export class ApplicationService {
     for (const opportunity of opportunities) {
       if (selectedIds.length >= campaign.target + campaign.reserve) break;
       try {
-        await this.requestApplication(opportunity.id, { campaignId, forceFinalApproval: true }, identity);
+        await this.requestApplication(opportunity.id, { campaignId }, identity);
         selectedIds.push(opportunity.id);
       } catch (error) {
         if (error.status !== 409) throw error;
