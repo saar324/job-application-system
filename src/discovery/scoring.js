@@ -172,6 +172,19 @@ function compensationEvidence(opportunity, profile, mode, modePreferences) {
     ?? profile.preferences?.compensationCurrency ?? "").toUpperCase();
   const offeredCurrency = String(compensation.currency ?? "").toUpperCase();
   if (profileCurrency && offeredCurrency && profileCurrency !== offeredCurrency) {
+    const majorCurrencies = new Set(["EUR", "USD", "GBP", "CHF", "AUD", "CAD", "NZD"]);
+    const offeredFactor = PERIOD_FACTORS[String(compensation.period ?? "year").toLowerCase()];
+    const minimumPeriod = mode === "freelance" ? "hour" : modePreferences.compensationPeriod ?? "year";
+    const minimumFactor = PERIOD_FACTORS[String(minimumPeriod).toLowerCase()];
+    // These currencies are close enough in magnitude that an offer below
+    // half the configured floor is unambiguously too low without pretending
+    // to provide live FX conversion. Borderline cross-currency offers remain
+    // conflicts for review.
+    if (majorCurrencies.has(profileCurrency) && majorCurrencies.has(offeredCurrency)
+      && offeredFactor && minimumFactor
+      && maximum * offeredFactor < Number(minimum) * minimumFactor * 0.5) {
+      return { exclusion: `maximum ${offeredCurrency} compensation is clearly below the configured minimum` };
+    }
     return { conflict: "compensation_conflict" };
   }
   if (!profileCurrency || !offeredCurrency) return {};

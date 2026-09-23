@@ -247,17 +247,17 @@ async function fillControl(locator, field, value, surface) {
     const file = { name: path.basename(String(value)), size: (await stat(String(value))).size };
     const isAshby = new URL(surface.url()).hostname === "jobs.ashbyhq.com";
     const rootPage = typeof surface.page === "function" ? surface.page() : surface;
-    const fileAcknowledged = isAshby ? rootPage.waitForResponse((response) =>
-      response.url().includes("/api/non-user-graphql")
-        && response.request().method() === "POST"
-        && response.request().postData()?.includes("setFormValueToFile"), { timeout: 20_000 }) : null;
     await locator.setInputFiles(String(value));
-    if (fileAcknowledged) {
-      const response = await fileAcknowledged;
-      const render = (await response.json()).data?.setFormValueToFile;
-      if (!render || render.errorMessages?.length || render.formErrors?.length) {
-        throw new Error(`file upload was not acknowledged for ${field.label}`);
-      }
+    if (isAshby) {
+      // Ashby's GraphQL operation name has changed over time, so binding the
+      // upload to one request payload creates a slow false failure. Trust the
+      // stable user-visible evidence instead: the selected file remains on a
+      // live input, or Ashby replaces the input with the uploaded filename.
+      await rootPage.waitForFunction((expected) =>
+        document.body?.innerText?.includes(expected)
+          || [...document.querySelectorAll('input[type="file"]')]
+            .some((input) => [...(input.files ?? [])].some((item) => item.name === expected)),
+      file.name, { timeout: 8_000 });
     }
     return { uploadAcknowledged: true, files: [file] };
   } else if (field.tag === "select") {
