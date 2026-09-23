@@ -18,7 +18,8 @@ ineligible, and compensation-conflicting records.
    listing evidence, and keeps the best 10 accepted roles from that source.
 5. When every planned source has a terminal coverage record, the server globally ranks the combined pool and prepares the
    best campaign target plus reserve with one sequential worker.
-6. Complete previews are reviewed as one exact batch. Submission remains sequential and each success requires a receipt.
+6. Covered verified official ATS forms pass the owner standing-policy gate. Uncovered forms wait for exact preview review.
+   Submission remains sequential and each success requires a receipt.
 
 ## Source safety budget
 

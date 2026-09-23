@@ -155,6 +155,24 @@ test("owner final-action cap spans campaign waves and counts consumed attempts",
   }
 });
 
+test("a crash after server commit but before browser phase marker cannot mint another permit", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, dailyCap: 2,
+    campaignCap: 2 }, owner);
+  const application = await prepared(service);
+  const input = decisionInput(application);
+  const decision = await service.prepareFinalSubmission(input);
+  assert.equal(decision.decision, "permit");
+  await service.commitFinalSubmission({ applicationId: application.id,
+    attemptId: "attempt-one", previewFingerprint: input.previewFingerprint,
+    permit: decision.permit });
+  const replay = await service.prepareFinalSubmission(input);
+  assert.deepEqual(replay, { decision: "hold", reasonCodes: ["prior_final_action_uncertain"] });
+  await assert.rejects(service.commitFinalSubmission({ applicationId: application.id,
+    attemptId: "attempt-one", previewFingerprint: input.previewFingerprint,
+    permit: decision.permit }), /invalid or revoked/);
+});
+
 test("a covered reservation cannot raise the ordinary manual approval ceiling", async () => {
   const { profiles, service } = await fixture();
   service.config.execution.maxApplicationsPerDay = 1;

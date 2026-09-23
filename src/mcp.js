@@ -90,10 +90,10 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
   }, async (input) => result(await discovery.query(input, identity)));
 
   server.registerTool("start_application_campaign", {
-    description: "Start one timed campaign that scans, ranks, and sequentially prepares a target plus reserve roles for exact batch review.",
+    description: "Start one timed campaign that scans, ranks, and sequentially prepares a target plus reserve. Targets above 50 require matching owner standing caps; uncovered forms need exact review.",
     inputSchema: {
       mode: z.enum(["full_time", "freelance"]).optional(),
-      target: z.number().int().min(1).max(50).default(10),
+      target: z.number().int().min(1).max(100).default(10),
       reserve: z.number().int().min(0).max(50).optional(),
       sources: z.array(z.string()).max(20).optional(),
       fallbackSources: z.array(z.string()).max(100).optional(),

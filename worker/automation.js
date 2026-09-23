@@ -26,7 +26,7 @@ export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSub
     const activeForm = await page.locator("form:visible").count().catch(() => 0);
     const newSuccessText = !successAlreadyPresent && SUCCESS_TEXT.test(body)
       && activeForm === 0 && body.length < 2000;
-    if ((confirmationUrl || newSuccessText) && invalidControls === 0) return true;
+    if ((confirmationUrl || newSuccessText) && activeForm === 0 && invalidControls === 0) return true;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return false;
@@ -726,7 +726,14 @@ export async function automateApplication({ page, profile, opportunity, applicat
   const attemptStarted = performance.now();
   const timings = { loadMs: 0, planFillMs: 0, draftMs: 0, transitionMs: 0, receiptMs: 0, steps: 0,
     fields: 0, draftCalls: 0 };
-  await page.goto(opportunity.applyUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  const initialResponse = await page.goto(opportunity.applyUrl,
+    { waitUntil: "domcontentloaded", timeout: 45_000 });
+  if ([403, 429].includes(initialResponse?.status())) {
+    return { status: "needs_human", phase: "before_final_action",
+      message: `The employer returned HTTP ${initialResponse.status()} before the application opened`,
+      requirements: [{ kind: "access_restricted", action: "manual_review",
+        message: "Stop this source and inspect its access restriction before any retry" }] };
+  }
   // React-based ATS pages can finish DOMContentLoaded before the application
   // controls are mounted. Wait for a real control so the first inspection does
   // not incorrectly classify a supported form as empty.
@@ -943,6 +950,10 @@ export async function automateApplication({ page, profile, opportunity, applicat
     }
     if (!action) {
       const body = await surface.locator("body").innerText().catch(() => "");
+      if (await detectChallenge(page)) return pause({ status: "needs_human",
+        message: "The application site presented a human verification challenge",
+        requirements: [{ kind: "human_challenge", action: "manual_review",
+          message: "Complete or inspect the browser challenge" }] }, step);
       if (!inventory.length && /\bJob not found\b\s*The job you requested was not found\./i.test(body)) {
         return pause({ status: "posting_unavailable", reasonCode: "posting_not_found",
           message: "The employer application page says the job was not found" }, step);
@@ -953,11 +964,16 @@ export async function automateApplication({ page, profile, opportunity, applicat
       }, step);
     }
     const previousUrl = surface.url();
-    if (action.final && new URL(surface.url()).hostname === "jobs.ashbyhq.com") {
-      // Ashby saves text/select answers on blur. Clicking Submit while the
-      // focused field's save is still in flight can silently do nothing.
+    let reviewedLiveState;
+    if (action.final) {
+      // Controlled ATS fixtures reproduce values that appear filled until a
+      // delayed blur/change handler discards them. Trigger that handler, then
+      // inspect the form again after its debounce window before any permit.
       await surface.locator("body").evaluate((body) => body.ownerDocument.activeElement?.blur());
-      await page.waitForLoadState("networkidle", { timeout: 10_000 });
+      await surface.waitForTimeout(650);
+      if (new URL(surface.url()).hostname === "jobs.ashbyhq.com") {
+        await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
+      }
     }
     const bodyBeforeSubmit = action.final
       ? (await surface.locator("body").innerText().catch(() => "")).slice(0, 50_000)
@@ -983,7 +999,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
         if (field.type === "ashby_custom") continue;
         if (field.detached) {
           const body = await surface.locator("body").innerText().catch(() => "");
-          if (field.type === "file" && (body.includes(field.value) || field.uploadAcknowledged)) continue;
+          if (field.type === "file" && body.includes(field.value)) continue;
           return pause({ status: "needs_input", message: "A field changed before final submission",
             requirements: [{ kind: "final_review_changed", fields: [field.key],
               message: `Review ${field.label} again before submission` }] }, step);
@@ -1007,6 +1023,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
               message: `Review ${field.label} again before submission` }] }, step);
         }
       }
+      reviewedLiveState = await finalLiveState(surface);
       const preview = previewOf(observedFields, surface.url(), opportunity);
       // A fresh ATS render can assign different DOM IDs or reorder hidden
       // backing controls. Approval binds to the reviewed answers and files,
@@ -1083,6 +1100,12 @@ export async function automateApplication({ page, profile, opportunity, applicat
         if (message.type() === "error") consoleErrors.push(message.text().slice(0, 300));
       });
     }
+    if (action.final && (!await verifyAshbyRequiredControls(surface, custom.fields)
+      || await finalLiveState(surface) !== reviewedLiveState)) {
+      return pause({ status: "needs_input", message: "The form changed after final review",
+        requirements: [{ kind: "final_review_changed", fields: [],
+          message: "Review the changed form before submitting" }] }, step);
+    }
     if (action.final && application.finalPermit) {
       try { await commitFinal({ applicationId: application.id,
         attemptId: application.claim?.attemptId, ...application.finalPermit }); }
@@ -1143,6 +1166,22 @@ export async function automateApplication({ page, profile, opportunity, applicat
     status: "needs_human", message: "The application exceeded the supported number of form steps",
     requirements: [{ kind: "unsupported_form", action: "manual_review", message: "Complete this multi-step application manually" }]
   }, 16);
+}
+
+async function finalLiveState(surface) {
+  const inventory = await inventoryFormStep(surface);
+  const controls = surface.locator(CONTROL_SELECTOR);
+  const values = [];
+  const validity = [];
+  for (const field of inventory) {
+    try { values.push(await readControl(controls.nth(field.index), field)); }
+    catch { values.push("[control disappeared]"); }
+    validity.push(await controls.nth(field.index).evaluate((element) => [
+      element.validity?.valid ?? true, element.getAttribute("aria-invalid")
+    ]).catch(() => [false, "detached"]));
+  }
+  const errors = (await inlineValidationQuestions(surface, inventory)).map((item) => [item.kind, item.fields]);
+  return JSON.stringify([surface.url(), inventoryStamp(inventory), values, validity, errors]);
 }
 
 async function waitForStepChange(page, priorBody) {
