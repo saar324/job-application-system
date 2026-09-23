@@ -1,0 +1,11 @@
+[Unit]
+Description=Opt-in daily bounded browser reserve scan (personal-server)
+
+[Timer]
+OnCalendar=*-*-* 03:00
+RandomizedDelaySec=20min
+Persistent=true
+Unit=job-application-browser-reserve.service
+
+[Install]
+WantedBy=timers.target

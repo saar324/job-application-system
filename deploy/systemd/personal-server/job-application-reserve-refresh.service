@@ -1,0 +1,18 @@
+[Unit]
+Description=Opt-in official ATS candidate reserve refresh (personal-server)
+After=network-online.target job-application-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=myos
+WorkingDirectory=/opt/job-application-system/releases/REPLACE_WITH_TESTED_RELEASE
+EnvironmentFile=/etc/job-application/reserve.env
+Environment=NODE_ENV=production
+StateDirectory=job-application-reserve
+ExecStart=/usr/bin/flock -n /var/lib/job-application-reserve/refresh.lock /usr/bin/node scripts/refresh-candidate-reserve.js
+TimeoutStartSec=16min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only

@@ -71,6 +71,26 @@ service user can read it and launch Playwright. The checked-in units use the con
 `systemctl cat job-application-server.service` first and adapt the units to its `myos` account and active release path.
 The sample catalog and reserve environment paths are not provisioned there yet.
 
+For `personal-server`, use the opt-in files in `deploy/systemd/personal-server/` instead of the conventional-user
+templates. They specify `User=myos` and share a persistent lock through `StateDirectory`. Before copying them into
+`/etc/systemd/system`, replace `REPLACE_WITH_TESTED_RELEASE` in both services with the absolute immutable release
+directory shown by the active server unit's `WorkingDirectory`. Repeat that check at each release switch; a timer
+pointing at an older release will keep running older code. Never enable a unit with the placeholder still present.
+Copy `reserve.env.example` to the private `/etc/job-application/reserve.env`, replace its token placeholder with a
+profile-bound agent token, and set mode `0600` with owner `myos`. Provision a private source catalog at
+`JOB_SOURCE_CATALOG` and give `myos` read access before considering the browser timer. These files do not currently
+exist on `personal-server`; the templates are deliberately not installed or enabled.
+
+For rollout, first run the two `--reserve-only` commands manually against staging with that profile and catalog. Check
+their source health, 403/429/challenge stops, request totals, reserve counts, and zero application records. Then run
+`systemd-analyze verify` on the substituted service and timer files, test each service once with
+`systemctl start`, and inspect its journal without printing credentials. Enable only the official timer initially.
+The official timer covers configured Ashby, Greenhouse, and Lever server adapters, not all 50 catalog sources. Enable
+the browser timer only after its no-submit scan succeeds within the site budgets; its daily schedule cannot keep a
+45-minute reserve continuously fresh. To roll back a timer, disable and stop its timer and service, then restore the
+prior immutable release path or remove the copied unit. Existing reserved roles still require independent freshness
+verification before any final action.
+
 Run each no-submit command manually with the intended private token, verify source health and HTTP 403/429 handling,
 then install the adapted unit and timer files and enable them separately. Do not enable the browser timer before its
 browser runtime, catalog, private environment, and measured request budget pass staging validation. A timer failure

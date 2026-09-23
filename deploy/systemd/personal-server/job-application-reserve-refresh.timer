@@ -1,0 +1,12 @@
+[Unit]
+Description=Opt-in bounded official ATS reserve refresh (personal-server)
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=30min
+RandomizedDelaySec=2min
+Persistent=true
+Unit=job-application-reserve-refresh.service
+
+[Install]
+WantedBy=timers.target
