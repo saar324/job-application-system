@@ -118,7 +118,16 @@ function flattenProfile(profile, currentUrl) {
 }
 
 function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, approvedAnswers = [], opportunity = {}, skills = []) {
-  const candidates = [field.name, field.id, field.label].filter(Boolean);
+  const candidates = [field.name, field.id, field.label, field.groupQuestion].filter(Boolean);
+  if (field.type === "checkbox" && field.groupQuestion) {
+    for (const candidate of [field.name, field.groupQuestion]) {
+      const direct = Object.hasOwn(answers, candidate) ? answers[candidate] : answers[normalize(candidate)];
+      if (direct === undefined) continue;
+      const selected = Array.isArray(direct) ? direct : [direct];
+      return { value: selected.some((item) => normalize(item) === normalize(field.label)),
+        source: "application answer" };
+    }
+  }
   for (const candidate of candidates) {
     if (Object.hasOwn(answers, candidate)) return { value: answers[candidate], source: "application answer" };
     const key = normalize(candidate);
@@ -284,22 +293,31 @@ export async function inventoryFormStep(page) {
     const labels = [...(element.labels ?? [])].map((label) => label.innerText.trim()).filter(Boolean);
     const ariaLabelledBy = (element.getAttribute("aria-labelledby") ?? "").split(/\s+/)
       .map((id) => document.getElementById(id)?.innerText?.trim()).filter(Boolean).join(" ");
-    const label = element.getAttribute("aria-label") || ariaLabelledBy || labels.join(" ")
+    const rawLabel = element.getAttribute("aria-label") || ariaLabelledBy || labels.join(" ")
       || element.getAttribute("placeholder") || element.getAttribute("name") || element.id || "Unlabelled field";
+    const section = element.closest("fieldset")?.querySelector("legend")?.innerText?.trim()
+      .replace(/\s+/g, " ") ?? "";
     const tag = element.tagName.toLowerCase();
     const type = (element.getAttribute("type") ?? "text").toLowerCase();
+    const groupQuestion = ["radio", "checkbox"].includes(type) ? section : "";
+    const label = type === "radio" && groupQuestion ? groupQuestion : rawLabel;
+    const visuallyRequired = (value) => /\brequired\b/i.test(value)
+      || /(?:^|\s)\*(?:\s|$)/.test(value);
+    const groupRequired = Boolean(groupQuestion && visuallyRequired(groupQuestion));
+    const required = element.required || element.getAttribute("aria-required") === "true"
+      || visuallyRequired(rawLabel) || type === "radio" && groupRequired;
     const options = tag === "select"
       ? [...element.options].filter((option) => option.value).map((option) => ({ value: option.value, label: option.text.trim() }))
       : [];
     return {
       index, id: element.id, name: element.getAttribute("name") ?? "",
-      label: label.replace(/\s+/g, " ").trim(), tag, type,
-      required: element.required || element.getAttribute("aria-required") === "true",
+      label: label.replace(/\s+/g, " ").trim(), tag, type, required,
+      groupQuestion, groupRequired,
       disabled: element.disabled, readOnly: element.readOnly,
       options, maxLength: element.maxLength >= 0 ? element.maxLength : null,
       pattern: element.getAttribute("pattern"), autocomplete: element.getAttribute("autocomplete"),
       placeholder: element.getAttribute("placeholder"),
-      section: element.closest("fieldset")?.querySelector("legend")?.innerText?.trim() ?? "",
+      section,
       formIndex: form ? [...document.forms].indexOf(form) : -1
     };
   }).filter(Boolean));
@@ -408,6 +426,20 @@ async function fillVisibleFields(page, profile, opportunity, answers, preparedAn
       });
       fields.push(fieldSummary(field, undefined, await readControl(locator, field)));
     }
+  }
+  const checkboxGroups = new Map(inventory.filter((field) => field.type === "checkbox"
+    && field.groupQuestion && field.groupRequired).map((field) => [field.name, field]));
+  for (const [name, representative] of checkboxGroups) {
+    const group = inventory.filter((field) => field.type === "checkbox" && field.name === name);
+    const selected = [];
+    for (const field of group) {
+      if (await readControl(controls.nth(field.index), field)) selected.push(field.label);
+    }
+    if (!selected.length) unresolved.push({
+      key: name || normalize(representative.groupQuestion), label: representative.groupQuestion,
+      required: true, type: "checkbox", tag: "input", section: representative.section,
+      maxLength: null, options: group.map((field) => ({ value: field.label, label: field.label }))
+    });
   }
   const signature = createHash("sha256").update(JSON.stringify({
     origin: new URL(page.url()).origin,
