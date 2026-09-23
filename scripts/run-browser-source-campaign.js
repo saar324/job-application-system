@@ -9,6 +9,7 @@ import { extractSourcePage, isBlockingStatus, isChallengePage,
 import { parsePublicFeed, publicFeedUrl } from "../src/discovery/public-feeds.js";
 import { SourceProgress } from "../src/discovery/source-progress.js";
 import { SourceBudget, SourceTimeoutError } from "../src/discovery/source-budget.js";
+import { settleSourcePage } from "../src/discovery/browser-settle.js";
 
 const options = argumentsOf(process.argv.slice(2));
 if (!options.campaign || !options.catalog) {
@@ -244,7 +245,7 @@ async function navigate(page, url, policy, budget) {
   if (wait > 0) await budget.sleep(wait);
   const response = await budget.run(() => page.goto(url, { waitUntil: "domcontentloaded",
     timeout: budget.timeoutMs(policy.navigationTimeoutMs) }));
-  await settle(page, budget);
+  await settleSourcePage(page, budget);
   hostLastRequest.set(host, Date.now());
   const status = response?.status() ?? 0;
   const challenge = status >= 200 && status < 400
@@ -276,12 +277,12 @@ async function applyBroadSearch(page, query, location, budget) {
       if (await submit.isVisible().catch(() => false)) {
         await submit.click({ timeout: 3_000, noWaitAfter: true }).catch(() => undefined);
       } else await input.press("Enter");
-      await settle(page, budget);
+      await settleSourcePage(page, budget);
       if (page.url() === before) {
         const button = page.getByRole("button", { name: /^search$/i }).filter({ visible: true }).first();
         if (await button.isVisible().catch(() => false)) {
           await button.click({ timeout: 3_000, noWaitAfter: true }).catch(() => undefined);
-          await settle(page, budget);
+          await settleSourcePage(page, budget);
         }
       }
       return true;
@@ -295,18 +296,6 @@ function escapePattern(value) { return String(value).replace(/[.*+?^${}()|[\]\\]
 function jobgetherQueries(query) {
   if (query && String(query).trim().toLowerCase() !== "engineer") return [String(query).trim()];
   return ["engineer"];
-}
-
-async function settle(page, budget) {
-  await budget.run(() => page.waitForLoadState("networkidle",
-    { timeout: budget.timeoutMs(1_500) }), 1_500).catch((error) => {
-    if (error instanceof SourceTimeoutError) throw error;
-  });
-  await budget.run(() => page.evaluate(() => window.scrollTo(0,
-    Math.min(document.body.scrollHeight, 4000)))).catch((error) => {
-    if (error instanceof SourceTimeoutError) throw error;
-  });
-  await budget.sleep(250);
 }
 
 async function report(sourceId, items, metadata, timeoutMs = 120_000) {
