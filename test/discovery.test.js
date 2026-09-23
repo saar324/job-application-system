@@ -406,6 +406,41 @@ test("known employment and compensation conflicts cannot silently auto-apply", (
   assert.deepEqual(currency.conflicts, ["compensation_conflict"]);
 });
 
+test("quality gates reject verified schedule, experience, contract, and core-stack mismatches", () => {
+  const applicant = {
+    skills: ["TypeScript", "Node.js", "React"],
+    applicationAnswers: {
+      "Can you work U.S. business hours?": "No",
+      "Years of professional software engineering experience": "5"
+    },
+    preferences: { locations: ["Bulgaria", "Europe"], fullTime: {
+      jobTitles: ["Backend Engineer"], allowedLocations: ["Bulgaria", "Europe"],
+      employmentTypes: ["full_time"]
+    } }
+  };
+  const base = { title: "Senior Backend Engineer", description: "TypeScript services", remote: true,
+    location: "Europe", employmentType: "full_time" };
+  assert.match(scoreOpportunity({ ...base, description: "Work U.S. business hours." }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /U\.S\./);
+  assert.match(scoreOpportunity({ ...base,
+    description: "6+ years of professional software engineering experience." }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /verified profile has 5/);
+  assert.match(scoreOpportunity({ ...base, description: "The offer is a contractor role." }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /contract role/);
+  assert.match(scoreOpportunity({ ...base, title: "Senior C# .NET Engineer" }, applicant, "full_time")
+    .scoreDetails.hardExclusion, /C#\/\.NET/);
+});
+
+test("description-level hiring countries cannot override an ineligible generic Europe label", () => {
+  const applicant = { skills: ["TypeScript"], preferences: { locations: ["Bulgaria", "Europe"], fullTime: {
+    jobTitles: ["AI Engineer"], allowedLocations: ["Bulgaria", "Europe"], employmentTypes: ["full_time"]
+  } } };
+  const scored = scoreOpportunity({ title: "Staff AI Engineer", description:
+    "For this role, we can hire candidates based in the UK, Ireland, Germany, Portugal, Spain, or the Netherlands.",
+  remote: true, location: "Europe", employmentType: "full_time" }, applicant, "full_time");
+  assert.match(scored.scoreDetails.hardExclusion, /description location restriction/);
+});
+
 test("compensation floors can distinguish gross, net, and unspecified pay", () => {
   const profile = {
     skills: ["Node.js"],

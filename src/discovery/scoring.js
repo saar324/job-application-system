@@ -103,6 +103,53 @@ function excludedLocationReason(opportunity, excludedLocations) {
   return excluded ? `location ${opportunity.location} matches excluded location ${excluded}` : null;
 }
 
+function qualityExclusions(opportunity, profile, acceptedTypes, allowedLocations) {
+  const title = String(opportunity.title ?? "");
+  const description = String(opportunity.description ?? "");
+  const answers = profile.applicationAnswers ?? {};
+  const exclusions = [];
+  const normalizedSkills = new Set((profile.skills ?? []).map((skill) =>
+    String(skill).toLowerCase().replace(/[^a-z0-9+#.]+/g, "")));
+  const coreTitleRequirements = [
+    { pattern: /(?:^|\s)(?:c#|\.net)(?=\s|$)/i, skills: ["c#", ".net"], label: "C#/.NET" },
+    { pattern: /\b(?:golang|go (?:developer|engineer))\b/i, skills: ["go", "golang"], label: "Go" },
+    { pattern: /\bkotlin\b/i, skills: ["kotlin"], label: "Kotlin" },
+    { pattern: /\bjava\b/i, skills: ["java"], label: "Java" },
+    { pattern: /\bsvelte(?:kit)?\b/i, skills: ["svelte", "sveltekit"], label: "Svelte" }
+  ];
+  for (const requirement of coreTitleRequirements) {
+    if (requirement.pattern.test(title)
+      && !requirement.skills.some((skill) => normalizedSkills.has(skill))) {
+      exclusions.push(`title requires ${requirement.label}, which is absent from the verified skill profile`);
+      break;
+    }
+  }
+  if (acceptedTypes.length && !acceptedTypes.includes("contract")
+    && /\b(?:contractor|contract)\s+(?:role|position|engagement)\b/i.test(description)) {
+    exclusions.push("description identifies the opportunity as a contract role");
+  }
+  const cannotWorkUsHours = [answers["Can you work U.S. business hours?"],
+    answers["Can you regularly overlap with Eastern Time?"], answers["Are you able to overlap with Eastern Time?"]]
+    .some((value) => /^(?:no|false)$/i.test(String(value ?? "").trim()));
+  if (cannotWorkUsHours
+    && /\b(?:u\.?s\.?|united states|eastern|est|edt)\s+(?:business\s+)?(?:time|hours|timezone|time zone)\b/i.test(description)) {
+    exclusions.push("role requires U.S. or Eastern Time hours that conflict with the verified schedule");
+  }
+  const verifiedYears = Number(answers["Years of professional software engineering experience"]
+    ?? answers["Years of commercial software development experience"]);
+  const requiredYears = [...description.matchAll(/\b(\d{1,2})\s*\+?\s*(?:or more )?years? of (?:professional )?(?:software engineering|software development|backend|back-end|frontend|front-end|full[- ]stack) experience\b/gi)]
+    .map((match) => Number(match[1])).filter(Number.isFinite);
+  if (Number.isFinite(verifiedYears) && requiredYears.length && Math.min(...requiredYears) > verifiedYears) {
+    exclusions.push(`role requires ${Math.min(...requiredYears)} years of software experience; verified profile has ${verifiedYears}`);
+  }
+  const describedLocation = description.match(/\b(?:we can hire candidates|candidates? must be based|role is open to candidates)\s+(?:who are )?(?:based|located)?\s*(?:in|within)\s+([^.;\n]{2,240})/i)?.[1];
+  if (describedLocation) {
+    const reason = locationExclusion({ ...opportunity, location: describedLocation, remote: true }, allowedLocations);
+    if (reason) exclusions.push(`description ${reason}`);
+  }
+  return exclusions;
+}
+
 function compensationEvidence(opportunity, profile, mode, modePreferences) {
   const compensation = opportunity.compensation;
   const defaultMinimum = mode === "freelance"
@@ -166,6 +213,7 @@ export function scoreOpportunity(opportunity, profile, mode, { version = "2" } =
   if (offeredType && acceptedTypes.length && !acceptedTypes.includes(offeredType)) {
     exclusions.push(`employment type ${opportunity.employmentType} is not accepted`);
   }
+  exclusions.push(...qualityExclusions(opportunity, profile, acceptedTypes, allowedLocations));
 
   const pay = compensationEvidence(opportunity, profile, mode, modePreferences);
   if (pay.exclusion) exclusions.push(pay.exclusion);
