@@ -374,7 +374,9 @@ export class ApplicationService {
     return result;
   }
 
-  async refreshFinalPreview(applicationId, identity) {
+  async refreshFinalPreview(applicationId, identity, input = {}) {
+    const answers = structuredClone(input.answers ?? {});
+    assertNoSensitiveAnswerFields(answers, "preview revision answers");
     const application = await this.store.mutate(async (state) => {
       const item = state.applications.find((entry) => entry.id === applicationId
         && entry.profileId === identity.profileId && entry.status === "waiting_confirmation"
@@ -388,12 +390,13 @@ export class ApplicationService {
       pending[0].status = "superseded";
       pending[0].resolvedAt = now();
       pending[0].resolvedBy = identity.actorId;
+      Object.assign(item.answers, answers);
       item.finalSubmissionApproval = undefined;
       item.status = "queued";
       item.queuedAt = now();
       item.updatedAt = item.queuedAt;
       audit(state, identity, "application.final_preview_refreshed", item.id,
-        { oldConfirmationId: pending[0].id });
+        { oldConfirmationId: pending[0].id, revisedAnswerCount: Object.keys(answers).length });
       return item;
     });
     this.enqueue(application.id);

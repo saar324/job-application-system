@@ -273,18 +273,20 @@ test("worker-discovered questions create resumable confirmations", async () => {
   assert.equal(attempts, 2);
 });
 
-test("an incomplete final preview can be superseded without approval or submission", async () => {
+test("an incomplete final preview can be revised and superseded without approval or submission", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-server-test-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   let attempts = 0;
-  const adapter = { name: "test-worker", async submit() {
+  const adapter = { name: "test-worker", async submit({ application }) {
     attempts += 1;
     if (attempts === 1) throw new NeedsInputError("Review", [{
       kind: "final_submission_approval", previewFingerprint: "a".repeat(64),
       preview: { destination: "https://example.test/apply", filled: [], unfilled: [] }
     }]);
-    throw new NeedsInputError("Custom question", [{
-      kind: "missing_answer", message: "Required custom question", fields: ["custom"]
+    assert.equal(application.answers.custom, "verified answer");
+    throw new NeedsInputError("Review", [{
+      kind: "final_submission_approval", previewFingerprint: "b".repeat(64),
+      preview: { destination: "https://example.test/apply", filled: [], unfilled: [] }
     }]);
   } };
   const service = new ApplicationService({ store, config, adapter });
@@ -295,17 +297,21 @@ test("an incomplete final preview can be superseded without approval or submissi
   assert.equal(oldApproval.kind, "final_submission_approval");
   await assert.rejects(service.refreshFinalPreview(application.id,
     { actorId: "other", profileId: "other" }), /not waiting/);
-  const queued = await service.refreshFinalPreview(application.id, identity);
+  const queued = await service.refreshFinalPreview(application.id, identity,
+    { answers: { custom: "verified answer" } });
   assert.equal(queued.status, "queued");
   await service.waitForIdle();
   const confirmations = service.list("confirmations", identity.profileId);
   assert.equal(confirmations.find((item) => item.id === oldApproval.id).status, "superseded");
-  assert.equal(confirmations.find((item) => item.status === "pending").kind, "missing_answer");
+  assert.equal(confirmations.find((item) => item.status === "pending").kind, "final_submission_approval");
+  assert.equal(service.list("applications", identity.profileId)[0].answers.custom, "verified answer");
   assert.equal(service.list("applications", identity.profileId)[0].receipt, undefined);
   assert.equal(attempts, 2);
   await assert.rejects(service.approvePreparedBatch([
     { applicationId: application.id, previewFingerprint: "a".repeat(64) }
   ], identity), /not ready/);
+  await assert.rejects(service.refreshFinalPreview(application.id, identity,
+    { answers: { site_password: "secret" } }), /must not contain credential field/);
 });
 
 test("unverified submission review cannot accidentally retry", async () => {
