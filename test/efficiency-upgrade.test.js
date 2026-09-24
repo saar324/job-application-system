@@ -226,6 +226,25 @@ test("scoped approved answers apply only to their employer", async () => {
   } finally { await browser.close(); }
 });
 
+test("an approved answer cannot bypass a human-written-only application prompt", async () => {
+  const browser = await chromium.launch();
+  const question = "Why this company? Do not use AI.";
+  const answer = { id: "motivation-human", question,
+    value: "An exact answer that still needs human authorship verification.",
+    approvedAt: new Date().toISOString(), reviewAfter: new Date(Date.now() + 86_400_000).toISOString(),
+    scope: { employer: "Example", role: "Engineer" }, evidenceFingerprint: answerEvidenceFingerprint(profile),
+    ownerActorId: "owner" };
+  const approved = { ...profile, approvedAnswers: [{ ...answer,
+    contentFingerprint: approvedAnswerFingerprint(answer) }] };
+  try {
+    const result = await browserRun(browser, `<form><label>${question}
+      <textarea name="motivation" required></textarea></label>
+      <button type="submit">Submit Application</button></form>`, {}, undefined, undefined, approved);
+    assert.equal(result.status, "needs_human");
+    assert.equal(result.requirements[0].kind, "human_authorship");
+  } finally { await browser.close(); }
+});
+
 test("draft provider timeout holds the form and leaves the sequential lane free", async () => {
   const browser = await chromium.launch();
   const provider = new HttpDraftProvider({ endpoint: "https://draft.example.test", timeoutMs: 20,
@@ -274,6 +293,12 @@ test("new prose cannot proceed without an independent supported-claim review", a
         text: "I built a platform", supported: false, evidenceIds: ["applicant:skills"] }] }; } });
     assert.equal(rejected.status, "needs_input");
     assert.equal(rejected.preparedAnswers.project, undefined);
+    const unrelatedClaim = await browserRun(browser, html, {}, provider, packet, profile,
+      { async review() { return { supported: true, responsive: true,
+        claims: [{ text: "A different supported statement.", supported: true,
+          evidenceIds: ["applicant:skills"] }] }; } });
+    assert.equal(unrelatedClaim.status, "needs_input");
+    assert.equal(unrelatedClaim.preparedAnswers.project, undefined);
   } finally { await browser.close(); }
 });
 

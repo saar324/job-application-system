@@ -209,6 +209,16 @@ const EXPLICIT_SPECIALIST_REQUIREMENTS = [
 function advisoryFitReview(opportunity, profile) {
   const title = String(opportunity.title ?? "");
   const description = String(opportunity.description ?? "");
+  // Some recruiter-hosted ATS boards use the recruiter as the board company
+  // while the posting explicitly introduces a different hiring employer.
+  // The ATS confirms the posting ID, not which organization will receive it.
+  const namedEmployer = description.slice(0, 300).match(
+    /^\s*(?:Job Description\s+)?([A-Z][A-Za-z0-9&.'-]*(?:\s+[A-Z][A-Za-z0-9&.'-]*){0,4})\s+is\s+(?:an?\s+)?(?:software|technology|tech|SaaS)\s+company\b/i
+  )?.[1];
+  if (namedEmployer && namedEmployer.toLowerCase().replace(/[^a-z0-9]/g, "")
+    !== String(opportunity.company ?? "").toLowerCase().replace(/[^a-z0-9]/g, "")) {
+    return { reason: "unverified_employer_identity", requirement: "confirm the hiring employer" };
+  }
   const verifiedSkills = (profile.skills ?? []).map((skill) => String(skill));
   if (SECURITY_TITLE.test(title)
     && !verifiedSkills.some((skill) => SECURITY_EXPERIENCE.test(skill))) {

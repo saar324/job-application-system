@@ -161,6 +161,27 @@ test("incidental stack overlap cannot automatically qualify an unverified specia
   assert.equal(verified.scoreDetails.fitReview, null);
 });
 
+test("a recruiter board naming another hiring company requires identity review", () => {
+  const profile = { skills: ["TypeScript", "React", "Node.js"],
+    preferences: { locations: ["Worldwide"], fullTime: {
+      jobTitles: ["Software Developer Alpha"], allowedLocations: ["Worldwide"] } } };
+  const role = { title: "Software Developer Alpha", company: "Board Company",
+    description: "Role Company is a software company building B2B products. Build with TypeScript React Node.js.",
+    remote: true, location: "Worldwide", postedAt: new Date().toISOString() };
+  const scored = scoreOpportunity(role, profile, "full_time");
+  assert.equal(scored.scoreDetails.hardExclusion, undefined);
+  assert.deepEqual(scored.scoreDetails.fitReview,
+    { reason: "unverified_employer_identity", requirement: "confirm the hiring employer" });
+  assert.equal(scoreOpportunity({ ...role,
+    description: `Job Description ${role.description}` }, profile, "full_time")
+    .scoreDetails.fitReview?.reason, "unverified_employer_identity");
+  assert.equal(scoreOpportunity({ ...role, company: "Role Company" }, profile, "full_time")
+    .scoreDetails.fitReview, null);
+  assert.equal(scoreOpportunity({ ...role,
+    description: "Build B2B products with TypeScript React Node.js for a software company." },
+  profile, "full_time").scoreDetails.fitReview, null);
+});
+
 test("explicit specialist must-have stays reviewable until matching experience is verified", () => {
   const role = { title: "Senior Software Engineer",
     description: "TypeScript Node.js PostgreSQL AWS Docker Python. Must have incident response experience.",
