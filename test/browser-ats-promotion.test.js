@@ -97,6 +97,20 @@ test("forged browser metadata cannot promote an unsuitable official role", async
   assert.equal(service.list("opportunities", "person").length, 0);
 });
 
+test("browser source retains an official specialist role for fit review without selecting it", async () => {
+  const { service, discovery, campaign } = await fixture(async () =>
+    new Response(JSON.stringify({ jobs: [{ ...job, title: "Senior Security Engineer",
+      descriptionPlain: "TypeScript Node.js platform" }] })));
+  const first = await discovery.addCampaignSourceResults(campaign.campaignId, {
+    sourceId: "board_one", items: [browserCandidate], completed: false
+  }, identity);
+  assert.equal(first.sourceCoverage.scans[0].selected, 0);
+  assert.equal(first.sourceCoverage.scans[0].fitReviewCandidates.length, 1);
+  assert.equal(first.sourceCoverage.scans[0].fitReviewCandidates[0].reason,
+    "unverified_specialization");
+  assert.equal(service.list("opportunities", "person").length, 0);
+});
+
 test("transient official transport failure retries once and reports a bounded failure", async () => {
   let calls = 0;
   const recovered = await fetchVerifiedOfficialAtsRole(applyUrl, {}, async () => {

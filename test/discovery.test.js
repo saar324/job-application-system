@@ -138,6 +138,45 @@ test("profile hard exclusions override keyword matches", () => {
   assert.match(scored.scoreDetails.hardExclusion, /Example Program Supervisor/);
 });
 
+test("incidental stack overlap cannot automatically qualify an unverified specialist role", () => {
+  const profile = { skills: ["TypeScript", "Node.js", "PostgreSQL", "AWS", "Docker", "Python"],
+    preferences: { locations: ["Worldwide"], fullTime: {
+      jobTitles: ["Senior Software Engineer"], allowedLocations: ["Worldwide"] } } };
+  const role = { title: "Senior Security Engineer",
+    description: "Build TypeScript Node.js PostgreSQL AWS Docker Python systems",
+    remote: true, location: "Worldwide", postedAt: new Date().toISOString() };
+  const specialist = scoreOpportunity(role, profile, "full_time");
+  assert.ok(specialist.score >= 75);
+  assert.equal(specialist.scoreDetails.hardExclusion, undefined);
+  assert.deepEqual(specialist.scoreDetails.fitReview,
+    { reason: "unverified_specialization", requirement: "security engineering" });
+
+  const exactFit = scoreOpportunity({ ...role, title: "Senior Software Engineer",
+    description: `${role.description}. We collaborate with the security team.` }, profile, "full_time");
+  assert.ok(exactFit.score >= 75);
+  assert.equal(exactFit.scoreDetails.fitReview, null);
+
+  const verified = scoreOpportunity(role, { ...profile,
+    skills: [...profile.skills, "Application Security"] }, "full_time");
+  assert.equal(verified.scoreDetails.fitReview, null);
+});
+
+test("explicit specialist must-have stays reviewable until matching experience is verified", () => {
+  const role = { title: "Senior Software Engineer",
+    description: "TypeScript Node.js PostgreSQL AWS Docker Python. Must have incident response experience.",
+    remote: true, location: "Worldwide", postedAt: new Date().toISOString() };
+  const profile = { skills: ["TypeScript", "Node.js", "PostgreSQL", "AWS", "Docker", "Python"],
+    preferences: { locations: ["Worldwide"], fullTime: {
+      jobTitles: ["Senior Software Engineer"], allowedLocations: ["Worldwide"] } } };
+  assert.deepEqual(scoreOpportunity(role, profile, "full_time").scoreDetails.fitReview,
+    { reason: "unverified_specialization", requirement: "incident response" });
+  assert.equal(scoreOpportunity(role, { ...profile,
+    skills: [...profile.skills, "Incident Response"] }, "full_time").scoreDetails.fitReview, null);
+  assert.equal(scoreOpportunity({ ...role,
+    description: "TypeScript Node.js PostgreSQL AWS Docker Python. Incident response is managed by another team." },
+  profile, "full_time").scoreDetails.fitReview, null);
+});
+
 test("secondary job titles are eligible but receive a lower title priority score", () => {
   const profile = {
     skills: ["SkillAlpha", "SkillBeta", "SkillGamma"],

@@ -145,6 +145,52 @@ test("recent receipts at one employer require review without discarding a distin
   assert.equal((await service.requestApplication(later.id, {}, agent)).status, "queued");
 });
 
+test("standing policy holds a specialist role when verified experience is missing", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.patch("person", { skills: ["TypeScript", "Node.js", "AWS"] });
+  await profiles.setStandingSubmissionPolicy("person", policy, owner);
+  const specialist = await service.addOpportunity({ title: "Senior Security Engineer",
+    description: "TypeScript Node.js AWS services", company: "Example", source: "agent",
+    applyUrl: "https://example.test/jobs/security", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  const held = await service.requestApplication(specialist.id, {}, agent);
+  assert.equal(held.status, "waiting_confirmation");
+  assert.equal(held.finalApprovalRequired, true);
+  assert.equal(held.submissionApproval, "always");
+  assert.ok(held.decision.confirmations.some((item) => item.kind === "specialist_fit_review"));
+
+  const ordinary = await service.addOpportunity({ title: "Senior Software Engineer",
+    description: "TypeScript Node.js AWS services", company: "Another Employer", source: "agent",
+    applyUrl: "https://example.test/jobs/software", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  const accepted = await service.requestApplication(ordinary.id, {}, agent);
+  assert.equal(accepted.status, "queued");
+  assert.equal(accepted.finalApprovalRequired, false);
+});
+
+test("specialist evidence lost after intake blocks the automatic final permit", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.patch("person", { skills: ["Application Security", "TypeScript"] });
+  await profiles.setStandingSubmissionPolicy("person", policy, owner);
+  const role = await service.addOpportunity({ title: "Senior Security Engineer",
+    description: "TypeScript platform", company: "Example", source: "agent",
+    applyUrl: "https://example.test/jobs/security", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  const application = await service.requestApplication(role.id, {}, agent);
+  assert.equal(application.status, "queued");
+  await service.store.mutate((state) => {
+    const current = state.applications.find((item) => item.id === application.id);
+    current.status = "submitting";
+    current.claim = { attemptId: "attempt-one" };
+  });
+  await profiles.patch("person", { skills: ["TypeScript"] });
+  const preview = { destination: role.applyUrl, company: role.company, title: role.title,
+    filled: [{ label: "Email", value: "ada@example.test", source: "profile" }], unfilled: [] };
+  const result = await service.prepareFinalSubmission(decisionInput(application, { preview }));
+  assert.equal(result.decision, "hold");
+  assert.ok(result.reasonCodes.includes("specialist_fit_review_required"));
+});
+
 test("a new employer receipt between permit and commit stops automatic submission", async () => {
   const { profiles, service } = await fixture();
   await profiles.setStandingSubmissionPolicy("person", { ...policy, dailyCap: 10,

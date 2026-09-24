@@ -35,6 +35,10 @@ The system SHALL generate a bounded, versioned query plan from configured role p
 - **WHEN** the listing names a required technology that is missing from the saved skill list, but the system has no verified evidence that the applicant lacks it
 - **THEN** the role is held for fit review rather than reported as a known ineligibility, while automatic submission stays blocked until the fact is verified
 
+#### Scenario: Specialist role overlaps incidental software skills
+- **WHEN** a specialist engineering title or explicit must-have specialty is not supported by verified specialty evidence in the applicant profile, even though common software tools produce a high score
+- **THEN** the role retains its score and remains in a bounded fit-review lane, while automatic application and final permit require a fresh fit review; a role with verified matching specialty evidence proceeds through the normal gates
+
 ### Requirement: Per-source accepted limits follow screening
 The system SHALL seek up to ten distinct new actionable candidates per source after stable-ID deduplication, handled-role filtering, score/fit screening, and employer destination verification. Adapter raw-row or first-page slicing SHALL NOT masquerade as the accepted limit. Each provider SHALL stop at its documented request, page, time, and access-policy limits and report the stop reason.
 

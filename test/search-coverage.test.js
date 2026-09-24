@@ -275,6 +275,44 @@ test("an unverified title skill is held for fit review instead of disappearing",
   assert.equal(campaign.scan.fitReviewCandidates[0].reason, "unverified_required_skill");
 });
 
+test("a high-scoring specialist role stays in review instead of entering the application queue", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "fit-review-specialist-"));
+  const identity = { actorId: "owner", profileId: "owner" };
+  const profiles = await new ProfileStore(path.join(directory, "profiles.json"), { allowMissing: true }).init();
+  await profiles.patch(identity.profileId, {
+    contact: { firstName: "Applicant", lastName: "Example", email: "owner@example.test",
+      phone: "+10000000000", location: "Canada" },
+    documents: { resume: "/secure/resume.pdf" },
+    skills: ["TypeScript", "Node.js", "PostgreSQL", "AWS", "Docker", "Python"],
+    preferences: { locations: ["Canada", "Worldwide"], fullTime: {
+      jobTitles: ["Senior Software Engineer"], allowedLocations: ["Canada", "Worldwide"],
+      remoteOnly: true, automatedDiscoverySources: ["remoteok"]
+    } }
+  });
+  const config = { defaultMode: "full_time", discovery: { limitPerSource: 10 },
+    modes: { full_time: { minimumScore: 75, autoApplyDiscovered: true,
+      sources: ["remoteok"], requireConfirmationFor: [] } } };
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  const applicationService = new ApplicationService({ store, config,
+    adapter: { name: "unused", async submit() {} }, profiles });
+  const discovery = new DiscoveryService({ applicationService, profiles, config,
+    fetchImpl: async () => new Response(JSON.stringify([{ legal: "metadata" }, {
+      id: "specialist", position: "Senior Security Engineer", company: "Example",
+      description: "Build TypeScript Node.js PostgreSQL AWS Docker Python systems",
+      location: "Worldwide", date: new Date().toISOString(),
+      url: "https://remoteok.com/jobs/specialist",
+      apply_url: "https://employer.example.test/apply/specialist"
+    }])) });
+  const campaign = await discovery.startCampaign({ target: 1, reserve: 0 }, identity);
+  assert.equal(campaign.scan.qualifying, 0);
+  assert.equal(campaign.applications.length, 0);
+  assert.equal(campaign.scan.fitReviewCandidates.length, 1);
+  assert.ok(campaign.scan.fitReviewCandidates[0].score >= 75);
+  assert.equal(campaign.scan.fitReviewCandidates[0].reason, "unverified_specialization");
+  assert.equal(campaign.scan.fitReviewCandidates[0].reviewRequirement, "security engineering");
+  assert.equal(campaign.scan.sourceYield[0].exclusionCounts.fitReview, 1);
+});
+
 test("low-score software role reaches fit review while unrelated title stays excluded", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "fit-review-low-"));
   const identity = { actorId: "owner", profileId: "owner" };

@@ -259,7 +259,8 @@ export class DiscoveryService {
         reserveExpiresAt: stored.reserveExpiresAt,
         provenance: { ...stored.provenance, officialAtsVerified: true } }, { source: verified.source });
       const score = scoreOpportunity(fresh, profile, mode, { version });
-      if (score.scoreDetails.hardExclusion || score.score < this.config.modes[mode].minimumScore) {
+      if (score.scoreDetails.hardExclusion || score.scoreDetails.fitReview
+        || score.score < this.config.modes[mode].minimumScore) {
         await this.applicationService.store.mutate((draft) => {
           const item = draft.opportunities.find((entry) => entry.id === stored.id);
           if (item) item.reserveExpiresAt = new Date().toISOString();
@@ -395,7 +396,8 @@ export class DiscoveryService {
         provenance: { ...stored.provenance, officialAtsVerified: true } }, { source: verified.source });
       const score = scoreOpportunity(fresh, profile, mode,
         { version: String(this.config.discovery?.scorerVersion ?? "2") });
-      if (score.scoreDetails.hardExclusion || score.score < this.config.modes[mode].minimumScore) {
+      if (score.scoreDetails.hardExclusion || score.scoreDetails.fitReview
+        || score.score < this.config.modes[mode].minimumScore) {
         failed += 1;
         await this.applicationService.store.mutate((draft) => {
           const item = draft.opportunities.find((entry) => entry.id === stored.id);
@@ -493,6 +495,7 @@ export class DiscoveryService {
     let excluded = 0; let handledFiltered = 0; let qualifying = 0; let selected = 0;
     let destinationPending = 0;
     const pendingCandidates = [];
+    const fitReviewCandidates = [];
     const errors = [];
     const exclusionReasons = new Map();
     const eligible = [];
@@ -578,9 +581,17 @@ export class DiscoveryService {
           && scored.scoreDetails.matchedSkills.length >= Number(opportunisticRules.minimumMatchedSkills ?? 5)
           && scored.score >= Number(opportunisticRules.minimumScore ?? 65);
         if (scored.scoreDetails.hardExclusion
+          || scored.scoreDetails.fitReview
           || (opportunistic ? !opportunisticQualified : scored.score < modeConfig.minimumScore)) {
           excluded += 1;
-          const reason = scored.scoreDetails.hardExclusion ?? (opportunistic
+          if (!scored.scoreDetails.hardExclusion && scored.scoreDetails.fitReview) {
+            fitReviewCandidates.push({ source: sourceId, company: scored.company,
+              title: scored.title, listingUrl: scored.listingUrl, applyUrl: scored.applyUrl,
+              score: scored.score, reason: scored.scoreDetails.fitReview.reason,
+              reviewRequirement: scored.scoreDetails.fitReview.requirement });
+          }
+          const reason = scored.scoreDetails.hardExclusion
+            ?? scored.scoreDetails.fitReview?.reason ?? (opportunistic
             ? "opportunistic_requirements_not_met" : "score_below_minimum");
           exclusionReasons.set(reason, (exclusionReasons.get(reason) ?? 0) + 1);
           continue;
@@ -634,6 +645,7 @@ export class DiscoveryService {
       destinationPending,
       opportunityIds,
       pendingOpportunityIds,
+      fitReviewCandidates: fitReviewCandidates.sort((left, right) => right.score - left.score).slice(0, 10),
       exclusionReasons: [...exclusionReasons.entries()].map(([reason, count]) => ({ reason, count }))
         .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)),
       completed: input.completed !== false, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
@@ -688,7 +700,8 @@ export class DiscoveryService {
     const sourceYield = new Map(selected.map(({ id }) => [id, {
       sourceId: id, found: 0, qualifying: 0, excluded: 0,
       handledFiltered: 0, destinationPending: 0, selected: 0, scored: 0,
-      exclusionCounts: { hardExclusion: 0, belowScore: 0, opportunisticRequirements: 0 }
+      exclusionCounts: { hardExclusion: 0, belowScore: 0,
+        opportunisticRequirements: 0, fitReview: 0 }
     }]));
     const handledBySource = new Map();
     const internalErrors = [];
@@ -1030,19 +1043,21 @@ export class DiscoveryService {
         && scored.scoreDetails.compensationComparable === true
         && scored.scoreDetails.matchedSkills.length >= Number(opportunisticRules.minimumMatchedSkills ?? 5)
         && scored.score >= Number(opportunisticRules.minimumScore ?? 65);
-      if (scored.scoreDetails.hardExclusion
+      const needsFitReview = scored.scoreDetails.fitReview;
+      if (scored.scoreDetails.hardExclusion || needsFitReview
         || (opportunistic ? !opportunisticQualified : scored.score < modeConfig.minimumScore)) {
         excluded += 1;
         if (sourceYield.has(discoverySourceOf(raw))) {
           const row = sourceYield.get(discoverySourceOf(raw));
           row.excluded += 1;
           const kind = scored.scoreDetails.hardExclusion ? "hardExclusion"
-            : opportunistic ? "opportunisticRequirements" : "belowScore";
+            : needsFitReview ? "fitReview"
+              : opportunistic ? "opportunisticRequirements" : "belowScore";
           row.exclusionCounts[kind] += 1;
         }
         const unverifiedSkill = /absent from the verified skill profile/i
           .test(scored.scoreDetails.hardExclusion ?? "");
-        if (unverifiedSkill || (!scored.scoreDetails.hardExclusion
+        if (unverifiedSkill || needsFitReview || (!scored.scoreDetails.hardExclusion
           && scored.score >= 30
           && (scored.scoreDetails.matchedSkills.length >= 2
             || (scored.scoreDetails.matchedSkills.length >= 1
@@ -1055,11 +1070,13 @@ export class DiscoveryService {
             score: scored.score,
             titlePriority: scored.scoreDetails.titlePriority,
             reason: unverifiedSkill ? "unverified_required_skill"
+              : needsFitReview ? needsFitReview.reason
               : opportunistic ? "opportunistic_requirements" : "below_automatic_score",
+            ...(needsFitReview ? { reviewRequirement: needsFitReview.requirement } : {}),
             matchedSkillCount: scored.scoreDetails.matchedSkills.length,
             compensationComparable: scored.scoreDetails.compensationComparable === true
           };
-          (unverifiedSkill ? unverifiedSkillCandidates : fitReviewCandidates).push(review);
+          (unverifiedSkill || needsFitReview ? unverifiedSkillCandidates : fitReviewCandidates).push(review);
         }
         continue;
       }
