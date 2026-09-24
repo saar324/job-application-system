@@ -155,7 +155,15 @@ export const adzuna = {
     if (query.country && !configured.includes(query.country)) throw rejected("country");
     const countries = query.country ? [query.country] : configured;
     const filters = { ...DEFAULT_FILTERS, ...(sourceConfig.defaults ?? {}), ...query };
-    const terms = filters.what || filters.what_or ? [filters.what] : profileSearchTerms(profile);
+    // `what` is the keyword slot each per-term request fills, and `what_or` is sent
+    // alongside it, so only `what` decides the terms. A standing default narrows the
+    // profile's titles rather than replacing them: replacing loses role targeting
+    // entirely, while an explicit query asks for those keywords and is honoured.
+    const standingWhat = sourceConfig.defaults?.what;
+    const titles = profileSearchTerms(profile);
+    const terms = query.what ? [query.what]
+      : titles.length ? titles.map((title) => standingWhat ? `${title} ${standingWhat}` : title)
+        : standingWhat ? [standingWhat] : [];
     if (!terms.length || !countries.length) return [];
     const capped = Math.max(1, Math.min(Number(limit) || 50, 200));
     const perTerm = Math.max(1, Math.ceil(capped / terms.length));
