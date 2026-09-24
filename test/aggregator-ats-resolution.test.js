@@ -118,6 +118,45 @@ test("two aggregator sources resolve one Ashby role, re-score official evidence,
     .reduce((sum, row) => sum + row.selected, 0), 1);
 });
 
+test("handled public-board redirects do not use the new-role ATS verification cap", async () => {
+  const newId = "22222222-2222-4222-8222-222222222222";
+  const newUrl = `https://jobs.ashbyhq.com/example/${newId}/application`;
+  const rows = Array.from({ length: 10 }, (_, index) => ({ ...jobicyRow(
+    `https://jobicy.com/jobs/handled-${index}`), id: index + 1 }));
+  rows.push({ ...jobicyRow("https://jobicy.com/jobs/new-role"), id: 11 });
+  let officialFetches = 0;
+  const { service, discovery, store } = await fixture(async (url, options = {}) => {
+    const value = String(url);
+    if (value.includes("jobicy.com/api/")) return new Response(JSON.stringify({ jobs: rows }));
+    if (value.startsWith("https://jobicy.com/jobs/") && options.method === "HEAD") {
+      return new Response(null, { status: 302, headers: {
+        location: value.endsWith("new-role") ? newUrl : ashbyUrl
+      } });
+    }
+    if (value.includes("api.ashbyhq.com/")) {
+      officialFetches += 1;
+      return new Response(JSON.stringify({ jobs: [{ ...officialAshby, id: newId,
+        applyUrl: newUrl, jobUrl: `https://jobs.ashbyhq.com/example/${newId}` }] }));
+    }
+    throw new Error(`unexpected fetch ${value}`);
+  });
+  await store.mutate((state) => {
+    state.opportunities.push({ id: "prior-official-role", profileId: identity.profileId,
+      source: "ashby", externalId: `example:${roleId}`, company: "example",
+      title: "Software Engineer", applyUrl: ashbyUrl,
+      applicationDestinationVerified: true });
+    state.applications.push({ id: "prior-submission", profileId: identity.profileId,
+      opportunityId: "prior-official-role", status: "submitted",
+      receipt: { submittedAt: new Date().toISOString() } });
+  });
+  const result = await discovery.scan({ sources: ["jobicy"], prepareApplications: false }, identity);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].opportunity.externalId, `example:${newId}`);
+  assert.equal(result.sourceYield[0].handledFiltered, 1);
+  assert.equal(officialFetches, 1);
+  assert.equal(service.list("applications", identity.profileId).length, 1);
+});
+
 test("a broadened public source keeps a verified exact-title ATS role advisory", async () => {
   const { service, discovery, config } = await fixture(async (url) => {
     const value = String(url);
@@ -430,4 +469,24 @@ test("invalid candidate-cap configuration cannot make verification unbounded", a
   const result = await discovery.scan({ sources: ["jobicy"], prepareApplications: false }, identity);
   assert.equal(result.items.filter((item) => item.opportunity.applicationDestinationPending).length, 1);
   assert.ok(result.sourceYield[0].partialReasons.includes("partial_official_verification_budget"));
+});
+
+test("public-board redirect work remains capped when no official identity resolves", async () => {
+  const rows = Array.from({ length: 21 }, (_, index) => ({
+    ...jobicyRow(`https://jobicy.com/jobs/unresolved-${index}`), id: index + 1
+  }));
+  let redirectRequests = 0;
+  const { discovery } = await fixture(async (url, options = {}) => {
+    const value = String(url);
+    if (value.includes("jobicy.com/api/")) return new Response(JSON.stringify({ jobs: rows }));
+    if (value.startsWith("https://jobicy.com/jobs/") && options.method === "HEAD") {
+      redirectRequests += 1;
+      return new Response(null, { status: 200 });
+    }
+    throw new Error(`unexpected fetch ${value}`);
+  });
+  const result = await discovery.scan({ sources: ["jobicy"], prepareApplications: false }, identity);
+  assert.equal(redirectRequests, 20);
+  assert.ok(result.sourceYield[0].partialReasons.includes("partial_official_verification_budget"));
+  assert.equal(result.items.every((item) => item.opportunity.applicationDestinationPending), true);
 });

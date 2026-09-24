@@ -88,6 +88,10 @@ The system SHALL distinguish an actual handled application from an observed list
 - **WHEN** a later board or direct link resolves to the same ATS role or receipt URL
 - **THEN** it remains handled even if the source, URL tracking parameters, or title wording differs
 
+#### Scenario: Public listings resolve handled roles before a new-role verification cap
+- **WHEN** several public-board URLs redirect to an already handled official ATS ID and a distinct opening follows within the bounded resolution budget
+- **THEN** handled redirects consume no fresh official-role verification slots, the distinct opening reaches normal employer verification, and no duplicate application request is created
+
 #### Scenario: Same employer and title, separate official openings
 - **WHEN** two listings share company and title but have different verified ATS role IDs
 - **THEN** both remain visible and independently eligible for screening; the title match alone cannot mark either handled
