@@ -489,14 +489,15 @@ test("service, webhook, and browser worker replay an exact approved preview", as
     for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     const context = await browser.newContext();
+    let result;
     try {
-      const result = await automateApplication({ page: await context.newPage(),
+      result = await automateApplication({ page: await context.newPage(),
         profile: payload.profile, opportunity: payload.opportunity, application: payload.application,
         evidencePacket: payload.evidencePacket, artifactsDirectory: directory });
-      response.writeHead(result.status === "submitted" ? 200 : 409,
-        { "content-type": "application/json" });
-      response.end(JSON.stringify(result));
     } finally { await context.close(); }
+    response.writeHead(result.status === "submitted" ? 200 : 409,
+      { "content-type": "application/json" });
+    response.end(JSON.stringify(result));
   });
   await new Promise((resolve) => worker.listen(0, "127.0.0.1", resolve));
   try {
