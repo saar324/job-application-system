@@ -83,7 +83,8 @@ JobsPipe's Jobs API aggregates postings from ATSs and job boards into one schema
         "perSecond": 2,
         "maxPages": 2,
         "excludeSources": ["linkedin"],
-        "defaultCountries": ["REPLACE_WITH_COUNTRY_CODES"]
+        "defaultCountries": ["REPLACE_WITH_COUNTRY_CODES"],
+        "defaults": { "remote": "true", "work_arrangement_or": ["remote"] }
       }
     }
   }
@@ -94,6 +95,7 @@ JobsPipe's Jobs API aggregates postings from ATSs and job boards into one schema
 - `maxPages` is the number of cursor pages per query, from 1 to 10. It defaults to 2.
 - `excludeSources` defaults to `["linkedin"]`, so postings JobsPipe found on LinkedIn are excluded. Removing `linkedin` is an explicit owner decision. Agents can add exclusions with `source_not` but cannot remove these.
 - `defaultCountries` is sent as `job_country_code_or` when a query has none.
+- `defaults` holds standing filters for every request, taken from the same list an agent may use. A `scan` carries no filters of its own, so without these a scheduled scan searches worldwide and on-site; `{ "remote": "true", "work_arrangement_or": ["remote"] }` keeps it to remote roles. An agent's query filter overrides the matching default, `source_not` adds to `excludeSources` rather than replacing it, and `job_country_code_or` and `job_title_or` are rejected here because `defaultCountries` and the profile's preferred titles already set them.
 - Any other key, including a credential, is rejected at startup.
 
 **Credits.** JobsPipe bills one credit per distinct job returned in a UTC calendar month. Repeats and empty results are free, a 400 response costs one credit, and 502 and 504 responses are refunded. Before each request, the ledger reserves at most the remaining monthly credits, and `limit` is lowered to the amount granted. When no credits remain, the source reports `quota_exhausted` without a request. After the response, the ledger records `metadata.credits_charged`. If the outcome of a request is unknown, for example after a network error, the whole reservation is kept. The descriptor's `quota.windows.credits_month` shows the credits used and remaining.
