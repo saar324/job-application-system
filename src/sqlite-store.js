@@ -240,9 +240,12 @@ export class SqliteStore {
       const read = this.#db.prepare(
         "SELECT used FROM source_quota_usage WHERE source_id = ? AND quota_window = ? AND window_start = ?");
       for (const window of windows) prune.run(sourceId, window.window, window.start);
+      const charged = {};
       for (const window of windows) {
         const used = Number(read.get(sourceId, window.window, window.start)?.used ?? 0);
-        if (used + cost > window.limit) {
+        const wanted = window.cost ?? cost;
+        charged[window.window] = window.clamp ? Math.min(wanted, window.limit - used) : wanted;
+        if (window.clamp ? charged[window.window] < 1 : used + wanted > window.limit) {
           this.#db.exec("COMMIT");
           return { reserved: false, window: window.window, used };
         }
@@ -253,13 +256,36 @@ export class SqliteStore {
         ON CONFLICT(source_id, quota_window, window_start)
         DO UPDATE SET used = used + excluded.used, updated_at = excluded.updated_at
       `);
-      for (const window of windows) increment.run(sourceId, window.window, window.start, cost, at);
+      for (const window of windows) increment.run(sourceId, window.window, window.start, charged[window.window], at);
       this.#db.exec("COMMIT");
-      return { reserved: true };
+      return { reserved: true, charged };
     } catch (error) {
       try { this.#db.exec("ROLLBACK"); } catch {}
       throw error;
     }
+  }
+
+  // Applies the difference between a credit reservation and the provider's
+  // reported charge. Usage never drops below zero.
+  settleSourceQuota({ sourceId, windows, delta, at = new Date().toISOString() }) {
+    const settle = this.#db.prepare(`
+      INSERT INTO source_quota_usage(source_id, quota_window, window_start, used, updated_at)
+      VALUES (?, ?, ?, MAX(0, ?), ?)
+      ON CONFLICT(source_id, quota_window, window_start)
+      DO UPDATE SET used = MAX(0, used + ?), updated_at = excluded.updated_at
+    `);
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const window of windows) settle.run(sourceId, window.window, window.start, delta, at, delta);
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      try { this.#db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
+  releaseSourceQuotaHold({ sourceId, reason }) {
+    this.#db.prepare("DELETE FROM source_quota_holds WHERE source_id = ? AND reason = ?").run(sourceId, reason);
   }
 
   holdSourceQuota({ sourceId, reason, until }) {

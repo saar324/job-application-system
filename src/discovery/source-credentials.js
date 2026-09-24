@@ -1,8 +1,11 @@
+import { createHash } from "node:crypto";
+
 // Keyed discovery sources take deployment-wide secrets from the server process
 // environment only. The discovery service resolves them and passes the frozen
 // result to adapters, which never read process.env themselves.
 export const SOURCE_CREDENTIAL_ENV = Object.freeze({
-  adzuna: Object.freeze({ appId: "ADZUNA_APP_ID", appKey: "ADZUNA_APP_KEY" })
+  adzuna: Object.freeze({ appId: "ADZUNA_APP_ID", appKey: "ADZUNA_APP_KEY" }),
+  jobspipe: Object.freeze({ apiKey: "JOBSPIPE_API_KEY" })
 });
 
 export const SOURCE_CREDENTIAL_ENV_NAMES = Object.freeze(Object.values(SOURCE_CREDENTIAL_ENV)
@@ -24,7 +27,14 @@ export function missingCredentialMessage(sourceId) {
     + " in the server environment";
 }
 
+// A short, non-reversible label that tells two configured keys apart, for
+// example to lift a key-rejected pause once the key is replaced.
+export function credentialFingerprint(credentials) {
+  return createHash("sha256").update(JSON.stringify(Object.values(credentials ?? {}))).digest("hex").slice(0, 12);
+}
+
 const SECRET_PARAMETER = /\b(app_id|app_key|api_key|apikey|access_token|token|key)=([^&\s"'<>]+)/gi;
+const BEARER = /\bBearer\s+([^\s"'<>,]+)/gi;
 
 // Replaces every raw or URL-encoded credential value, then any value of a
 // well-known secret query parameter, so echoed request URLs cannot leak.
@@ -36,5 +46,6 @@ export function redactSecrets(text, ...credentialSets) {
   let result = String(text ?? "");
   for (const secret of new Set(secrets)) result = result.split(secret).join(REDACTED);
   return result.replace(SECRET_PARAMETER, (match, name, value) =>
-    value === REDACTED || value === encodeURIComponent(REDACTED) ? match : `${name}=${REDACTED}`);
+    value === REDACTED || value === encodeURIComponent(REDACTED) ? match : `${name}=${REDACTED}`)
+    .replace(BEARER, (match, value) => value === REDACTED ? match : `Bearer ${REDACTED}`);
 }

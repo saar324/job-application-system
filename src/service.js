@@ -226,6 +226,12 @@ export class ApplicationService {
         (item) => item.profileId === identity.profileId && item.opportunityId === opportunityId && !inactive(item)
       );
       if (duplicate) throw new ClientError(409, "an application already exists for this opportunity");
+      const closed = closedPostingReason(opportunity);
+      if (closed) {
+        audit(state, identity, "application.blocked", opportunity.id, { reason: closed,
+          validThrough: opportunity.validThrough, postingStatus: opportunity.postingStatus });
+        return { blocked: closed };
+      }
 
       const decision = evaluatePolicy({ opportunity, mode, modeConfig, answers: input.answers });
       if (covered) {
@@ -285,6 +291,9 @@ export class ApplicationService {
       });
       return application;
     });
+    if (saved.blocked) {
+      throw Object.assign(new ClientError(409, `the posting is no longer open: ${saved.blocked}`), { code: saved.blocked });
+    }
     this.telemetry.count("applications.admitted", 1, { mode, status: saved.status });
     if (saved.status === "queued") this.enqueue(saved.id);
     return saved;
@@ -1758,6 +1767,15 @@ function normalizedApplicationUrl(raw) {
     url.pathname = url.pathname.replace(/\/$/, "");
     return url.toString();
   } catch { return String(raw ?? "").replace(/\/$/, ""); }
+}
+
+// A provider-reported expiry or non-active status stops preparation. Roles the
+// applicant requested directly are their own decision.
+function closedPostingReason(opportunity) {
+  if (opportunity.userRequested === true) return null;
+  if (opportunity.validThrough && Date.parse(opportunity.validThrough) <= Date.now()) return "posting_expired";
+  if (typeof opportunity.postingStatus === "string" && opportunity.postingStatus !== "active") return "posting_closed";
+  return null;
 }
 
 function verifiedDiscoveryIsFresh(opportunity, mode) {

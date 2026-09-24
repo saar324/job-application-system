@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateAdzunaOptions } from "./discovery/sources/adzuna.js";
+import { validateJobspipeOptions } from "./discovery/sources/jobspipe.js";
 import { validateQuotaOverrides } from "./discovery/source-quota.js";
 
 function deepMerge(base, override) {
@@ -55,6 +56,7 @@ export async function loadConfig(env = process.env) {
   }
   const sourceOptions = config.discovery?.sourceOptions ?? {};
   if (sourceOptions.adzuna !== undefined) validateAdzunaOptions(sourceOptions.adzuna);
+  if (sourceOptions.jobspipe !== undefined) validateJobspipeOptions(sourceOptions.jobspipe);
   for (const [sourceId, options] of Object.entries(sourceOptions)) {
     if (options?.quota !== undefined) validateQuotaOverrides(sourceId, options.quota);
   }
