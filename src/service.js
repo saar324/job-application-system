@@ -3,13 +3,16 @@ import { evaluatePolicy } from "./policy.js";
 import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailableError,
   RetryableExecutionError } from "./adapters/errors.js";
 import { telemetry as defaultTelemetry } from "./telemetry.js";
-import { roleKeys } from "./discovery/handled-roles.js";
+import { relatedApplicationRole, roleKeys } from "./discovery/handled-roles.js";
 import { scoreOpportunity } from "./discovery/scoring.js";
 import { officialAtsDestination, revalidateOfficialAtsRole } from "./discovery/official-ats.js";
 import { summarizeSourceHealth } from "./discovery/source-health.js";
 import { sourceCooldowns } from "./discovery/source-cooldown.js";
 import { buildWorkflowReport, recordWorkflowStage } from "./workflow-report.js";
 import { policyCovers, hardPolicyHolds, LEGAL_ATTESTATION_FIELD } from "./standing-policy.js";
+import { selectVerifiedExamples } from "./verified-examples.js";
+import { CLOSED_RETRY_MS, PENDING_RETRY_MS, PENDING_TTL_MS,
+  retryDelay } from "./discovery/candidate-state.js";
 
 function now() { return new Date().toISOString(); }
 const inactive = (item) => ["skipped", "rejected", "failed"].includes(item.status);
@@ -118,7 +121,12 @@ export class ApplicationService {
     }
     // Client-supplied score/source/provenance is useful for review but cannot
     // establish authorization for an automatic final action.
-    const { discoveryVerification: _untrustedVerification, ...candidate } = input;
+    const candidate = { ...input };
+    for (const field of ["discoveryVerification", "discoveryState", "destinationFirstObservedAt",
+      "destinationRetryAfter", "destinationExpiresAt", "destinationRetryCount",
+      "closedObservedAt", "closedRetryAfter", "closedRetryCount", "closedOrigin"]) {
+      delete candidate[field];
+    }
     const dedupKey = candidate.dedupKey ?? buildDedupKey(candidate);
     const applicationUrl = normalizedApplicationUrl(input.applyUrl);
     return this.store.mutate(async (state) => {
@@ -136,6 +144,61 @@ export class ApplicationService {
             || sameRole(entry))
       );
       if (existing) {
+        const sameOfficialRole = [...roleKeys(existing)].some((key) =>
+          /^(?:ashby|greenhouse|lever):/.test(key) && incomingKeys.has(key));
+        const priorApplications = state.applications.filter((application) =>
+          application.profileId === identity.profileId && application.opportunityId === existing.id);
+        const safeClosedRetry = existing.discoveryState === "closed"
+          && existing.closedOrigin === "posting_unavailable"
+          && priorApplications.every((application) => application.status === "skipped"
+            && !application.receipt?.submittedAt
+            && application.finalSubmissionDecision?.status !== "consumed");
+        const safeExpiredRetry = existing.discoveryState === "expired"
+          && priorApplications.every((application) => application.status === "skipped"
+            && !application.receipt?.submittedAt
+            && application.finalSubmissionDecision?.status !== "consumed");
+        const canPromote = (existing.applicationDestinationPending === true
+          && priorApplications.length === 0)
+          || ((safeClosedRetry || safeExpiredRetry) && sameOfficialRole);
+        if (serverVerifiedDiscovery && canPromote
+          && candidate.applicationDestinationPending !== true
+          && candidate.applicationDestinationVerified === true
+          && (sameOfficialRole || (candidate.source === existing.source
+            && candidate.externalId === existing.externalId))
+          && /^https:\/\//i.test(candidate.applyUrl)) {
+          Object.assign(existing, candidate, {
+            discoveryState: "ready", applicationDestinationPending: false,
+            destinationFirstObservedAt: undefined, destinationRetryAfter: undefined,
+            destinationExpiresAt: undefined, destinationRetryCount: undefined,
+            closedObservedAt: undefined, closedRetryAfter: undefined,
+            closedRetryCount: undefined, closedOrigin: undefined,
+            updatedAt: now(), discoveryVerification: candidate.applicationDestinationVerified === true
+              ? { sourceId: candidate.source ?? "agent", verifiedAt: now(),
+                score: Number(candidate.score ?? 0) } : undefined
+          });
+          audit(state, identity, "opportunity.destination_resolved", existing.id, {
+            source: candidate.source ?? "agent"
+          });
+        } else if (candidate.applicationDestinationPending === true
+          && existing.applicationDestinationPending === true
+          && !priorApplications.length && existing.discoveryState !== "expired") {
+          const at = Date.now();
+          const first = Date.parse(existing.destinationFirstObservedAt ?? existing.createdAt ?? "");
+          existing.destinationFirstObservedAt = new Date(Number.isFinite(first) ? first : at).toISOString();
+          existing.destinationExpiresAt = new Date(Date.parse(existing.destinationFirstObservedAt)
+            + PENDING_TTL_MS).toISOString();
+          existing.destinationRetryCount = Number(existing.destinationRetryCount ?? 1) + 1;
+          existing.destinationRetryAfter = new Date(at + retryDelay(PENDING_RETRY_MS,
+            existing.destinationRetryCount, CLOSED_RETRY_MS)).toISOString();
+          existing.discoveryState = "pending_destination";
+          existing.updatedAt = new Date(at).toISOString();
+        } else if (candidate.applicationDestinationPending === true && safeClosedRetry) {
+          const attempt = Number(existing.closedRetryCount ?? 1) + 1;
+          existing.closedRetryCount = attempt;
+          existing.closedRetryAfter = new Date(Date.now()
+            + retryDelay(CLOSED_RETRY_MS, attempt, 7 * CLOSED_RETRY_MS)).toISOString();
+          existing.updatedAt = now();
+        }
         if (input.userRequested === true) {
           existing.userRequested = true;
           existing.direct = true;
@@ -154,6 +217,12 @@ export class ApplicationService {
         ...candidate, id: randomUUID(), profileId: identity.profileId, dedupKey,
         mode: candidate.mode ?? this.config.defaultMode, source: candidate.source ?? "agent",
         score: Number(candidate.score ?? 0), status: "discovered", createdAt: now(),
+        ...(candidate.applicationDestinationPending === true ? {
+          discoveryState: "pending_destination", destinationFirstObservedAt: now(),
+          destinationRetryAfter: new Date(Date.now() + PENDING_RETRY_MS).toISOString(),
+          destinationExpiresAt: new Date(Date.now() + PENDING_TTL_MS).toISOString(),
+          destinationRetryCount: 1 } : serverVerifiedDiscovery
+          && candidate.applicationDestinationVerified === true ? { discoveryState: "ready" } : {}),
         ...(serverVerifiedDiscovery && candidate.applicationDestinationVerified === true
           && candidate.applicationDestinationPending !== true && candidate.userRequested !== true
           ? { discoveryVerification: { sourceId: candidate.source ?? "agent", verifiedAt: now(),
@@ -162,6 +231,20 @@ export class ApplicationService {
       if (!this.config.modes[item.mode]) throw new ClientError(400, `unknown mode: ${item.mode}`);
       state.opportunities.push(item);
       audit(state, identity, "opportunity.created", item.id, { mode: item.mode });
+      return item;
+    });
+  }
+
+  async markDiscoveryLeadExpired(opportunityId, identity) {
+    return this.store.mutate((state) => {
+      const item = state.opportunities.find((entry) => entry.id === opportunityId
+        && entry.profileId === identity.profileId);
+      if (!item || item.discoveryState !== "pending_destination") return item ?? null;
+      if (state.applications.some((application) => application.profileId === identity.profileId
+        && application.opportunityId === item.id)) return item;
+      item.discoveryState = "expired";
+      item.updatedAt = now();
+      audit(state, identity, "opportunity.pending_expired", item.id, {});
       return item;
     });
   }
@@ -227,6 +310,11 @@ export class ApplicationService {
       );
       if (duplicate) throw new ClientError(409, "an application already exists for this opportunity");
 
+      const relatedRole = relatedApplicationRole(state, identity.profileId, opportunity);
+      if (relatedRole === "same_role") {
+        throw new ClientError(409, "an application already exists for this role");
+      }
+
       const decision = evaluatePolicy({ opportunity, mode, modeConfig, answers: input.answers });
       if (covered) {
         const freshScore = scoreOpportunity(opportunity, profile, mode,
@@ -247,6 +335,11 @@ export class ApplicationService {
           fields: profileStatus.missingForApplications
         });
       }
+      if (relatedRole === "possible_duplicate") {
+        decision.autoApply = false;
+        decision.confirmations.push({ kind: "possible_duplicate",
+          message: "An earlier application has the same employer and title. Verify that this is a separate opening before submission." });
+      }
       const today = now().slice(0, 10);
       const globalDailyCount = dailyIntakeCount(state, identity.profileId, today);
       const dailyCount = dailyIntakeCount(state, identity.profileId, today, mode);
@@ -264,9 +357,9 @@ export class ApplicationService {
         id: randomUUID(), opportunityId, profileId: identity.profileId, mode,
         requestedBy: identity.actorId, answers: input.answers ?? {},
         ...(input.campaignId ? { campaignId: String(input.campaignId) } : {}),
-        submissionApproval,
+        submissionApproval: relatedRole === "possible_duplicate" ? "always" : submissionApproval,
         ...(covered ? { standingPolicyVersion: profile.standingSubmissionPolicy.version } : {}),
-        finalApprovalRequired: submissionApproval === "always",
+        finalApprovalRequired: relatedRole === "possible_duplicate" || submissionApproval === "always",
         status: !decision.eligible ? "skipped"
           : decision.confirmations.length || !decision.autoApply ? "waiting_confirmation" : "queued",
         decision, createdAt: now(), updatedAt: now()
@@ -318,6 +411,9 @@ export class ApplicationService {
       }
       const policy = profile?.standingSubmissionPolicy;
       const reasonCodes = [];
+      const relatedRole = relatedApplicationRole(state, current.profileId, opportunity, current.id);
+      if (relatedRole) reasonCodes.push(relatedRole === "same_role"
+        ? "prior_role_application" : "possible_duplicate_identity_unresolved");
       if (!policyCovers(policy, opportunity, current.mode)) reasonCodes.push("policy_not_covering");
       if (!verifiedDiscoveryIsFresh(opportunity, current.mode)) reasonCodes.push("discovery_unverified_or_stale");
       if (profile && opportunity) {
@@ -683,6 +779,7 @@ export class ApplicationService {
       audit(state, identity, "campaign.started", input.id, {
         target: input.target, reserve: input.reserve, mode: input.mode,
         sources: input.sources ?? [], fallbackSources: input.fallbackSources ?? [], queryPlan: input.queryPlan ?? [],
+        sourceCycles: input.sourceCycles ?? {},
         reserveOnly: input.reserveOnly === true
       });
       recordWorkflowStage(state, identity, input.id, "discovery", { campaignId: input.id, outcome: "started" });
@@ -697,6 +794,7 @@ export class ApplicationService {
       audit(state, identity, "campaign.scan_completed", campaignId, {
         found: input.found, qualifying: input.qualifying, excluded: input.excluded,
         handledFiltered: input.handledFiltered, selectedOpportunityIds: input.selectedOpportunityIds ?? [],
+        fitReviewCandidates: (input.fitReviewCandidates ?? []).slice(0, 20),
         destinationPending: input.destinationPending ?? 0,
         applicationIds: input.applicationIds ?? [], errors: input.errors ?? [],
         sourceYield: input.sourceYield ?? [], durations: input.durations ?? {}
@@ -735,11 +833,19 @@ export class ApplicationService {
         excluded: input.excluded, handledFiltered: input.handledFiltered,
         destinationPending: input.destinationPending ?? 0,
         selected: input.selected, opportunityIds: input.opportunityIds ?? [],
+        pendingOpportunityIds: input.pendingOpportunityIds ?? [],
         exclusionReasons: input.exclusionReasons ?? [],
         completed: input.completed, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
+        elapsedMs: input.elapsedMs,
         rateLimited: input.rateLimited === true, exhausted: input.exhausted === true,
         challenge: input.challenge === true, timedOut: input.timedOut === true,
         parseDrift: input.parseDrift === true,
+        sourceFailure: input.sourceFailure === true,
+        stopReason: input.stopReason,
+        partialReasons: input.partialReasons ?? [],
+        queryStats: input.queryStats ?? [],
+        discardedObservedCandidates: input.discardedObservedCandidates ?? 0,
+        discardReason: input.discardReason,
         manual: input.manual === true,
         cooldownSkipped: input.cooldownSkipped === true,
         ...(input.cooldownSkipped ? { cooldownReason: input.cooldownReason,
@@ -860,6 +966,7 @@ export class ApplicationService {
     const activeWorkerMs = attempts.reduce((sum, item) => sum + Number(item.workerMetrics?.activeMs ?? 0), 0);
     return {
       campaignId, status, target, reserve: started.details.reserve, mode: started.details.mode,
+      sourceCycles: started.details.sourceCycles ?? {},
       reserveOnly: started.details.reserveOnly === true,
       unattemptedReserveWithinTtl,
       sourceCoverage: {
@@ -1397,6 +1504,19 @@ export class ApplicationService {
       item.claim = undefined;
       item.updatedAt = now();
       item.decision.reasons.push("employer posting unavailable");
+      const opportunity = state.opportunities.find((entry) => entry.id === item.opportunityId
+        && entry.profileId === item.profileId);
+      if (opportunity && !item.receipt?.submittedAt
+        && item.finalSubmissionDecision?.status !== "consumed") {
+        const count = Number(opportunity.closedRetryCount ?? 0) + 1;
+        opportunity.discoveryState = "closed";
+        opportunity.closedOrigin = "posting_unavailable";
+        opportunity.closedObservedAt = item.updatedAt;
+        opportunity.closedRetryCount = count;
+        opportunity.closedRetryAfter = new Date(Date.now()
+          + retryDelay(CLOSED_RETRY_MS, count, 7 * CLOSED_RETRY_MS)).toISOString();
+        opportunity.reserveExpiresAt = item.updatedAt;
+      }
       const attempt = state.attempts?.find((entry) => entry.id === attemptId);
       if (attempt) Object.assign(attempt, { status: "posting_unavailable", completedAt: item.updatedAt,
         errorCode: error.reasonCode ?? "posting_unavailable", workerMetrics: safeWorkerMetrics(error.metrics) });
@@ -1509,7 +1629,7 @@ function validatedPreparedAnswers(value, previous = {}) {
   return value;
 }
 
-function buildEvidencePacket(application, opportunity, profile) {
+export function buildEvidencePacket(application, opportunity, profile) {
   const packet = {
     version: 1,
     company: String(opportunity.company ?? "").slice(0, 200),
@@ -1521,6 +1641,7 @@ function buildEvidencePacket(application, opportunity, profile) {
     })),
     applicant: {
       skills: (profile?.skills ?? []).slice(0, 30),
+      examples: selectVerifiedExamples(profile, opportunity),
       links: Object.fromEntries(["linkedin", "github", "portfolio"]
         .filter((key) => /^https:\/\//i.test(profile?.links?.[key] ?? ""))
         .map((key) => [key, String(profile.links[key]).slice(0, 500)]))

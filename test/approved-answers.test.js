@@ -15,7 +15,7 @@ test("only the profile owner can approve a current employer-scoped answer", asyn
   const profiles = await new ProfileStore(path.join(directory, "profiles.json"), { allowMissing: true }).init();
   await profiles.patch("person", { contact: { firstName: "Ada", email: "ada@example.test" } });
   const input = [{ id: "why-example", question: "Why this company?", value: "Its work matches my experience.",
-    scope: { employer: "Example" } }];
+    scope: { employer: "Example", role: "Senior Engineer" } }];
   await assert.rejects(profiles.patch("person", { approvedAnswers: input }), /not allowed/);
   await assert.rejects(profiles.setApprovedAnswers("person", input,
     { actorId: "agent", profileId: "person", roles: ["agent"] }), /owner authority/);
@@ -26,9 +26,16 @@ test("only the profile owner can approve a current employer-scoped answer", asyn
   const answer = profile.approvedAnswers[0];
   const opportunity = { company: "Example", title: "Senior Engineer" };
   assert.equal(reusableApprovedAnswer(answer, profile, opportunity, input[0].question), true);
+  assert.equal(reusableApprovedAnswer(answer, profile, { ...opportunity, title: "Product Engineer" },
+    input[0].question), false);
+  assert.equal(reusableApprovedAnswer({ ...answer, scope: { employer: "Example" },
+    contentFingerprint: undefined }, profile, opportunity, input[0].question), false);
   assert.equal(reusableApprovedAnswer(answer, profile, { ...opportunity, company: "Other" }, input[0].question), false);
   assert.equal(reusableApprovedAnswer(answer, { ...profile,
     contact: { ...profile.contact, email: "changed@example.test" } }, opportunity, input[0].question), false);
+  assert.equal(reusableApprovedAnswer(answer, { ...profile,
+    verifiedExamples: [{ id: "new-example", facts: ["New verified fact"] }] },
+  opportunity, input[0].question), false);
   assert.equal(reusableApprovedAnswer({ ...answer, value: "Changed" }, profile, opportunity, input[0].question), false);
   assert.equal(reusableApprovedAnswer(answer, profile, opportunity, input[0].question,
     Date.parse(answer.reviewAfter) + 1), false);

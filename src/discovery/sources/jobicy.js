@@ -1,38 +1,54 @@
 import { plainText } from "../text.js";
-import { preferredTitleGroups } from "../title-preferences.js";
+import { searchTitleQueryPlan } from "../search-title-queries.js";
 import { needsEmployerApplyUrl } from "../application-destination.js";
 
 export const jobicy = {
   id: "jobicy",
-  async search({ limit = 50, fetchImpl = fetch, profile }) {
-    const groups = preferredTitleGroups(profile);
-    const preferred = groups.primary.length
-      ? groups.primary
-      : profile?.preferences?.jobTitles ?? [];
-    const primary = [...new Map(preferred
-      .filter((value) => typeof value === "string" && value.trim())
-      .map((value) => [value.trim().toLowerCase(), value.trim()])).values()].slice(0, 8);
-    const secondary = groups.secondary
-      .filter((value) => typeof value === "string" && value.trim())
-      .map((value) => value.trim()).slice(0, 4);
-    const tags = [...new Map([...primary, ...secondary]
-      .map((value) => [value.toLowerCase(), value])).values()];
+  async search({ limit = 50, fetchImpl = fetch, profile, searchTitles = [], isHandled = () => false,
+    onError = () => {}, onStats = () => {}, searchCycle = 0 }) {
+    const plan = searchTitleQueryPlan(profile, searchTitles, { maximum: 16, cycle: searchCycle });
+    const tags = plan.queries.map((item) => item.term);
     if (!tags.length) return [];
-    const count = Math.max(1, Math.ceil(Math.min(limit, 200) / tags.length));
+    // This feed has no page parameter. Fetch a bounded raw pool for each term;
+    // dividing the output cap by the number of terms hides late handled rows.
+    const count = 200;
     const rows = [];
+    const queryStats = [];
     for (const tag of tags) {
       const url = new URL("https://jobicy.com/api/v2/remote-jobs");
-      url.searchParams.set("count", String(Math.min(count, 200)));
+      url.searchParams.set("count", String(count));
       url.searchParams.set("tag", tag);
-      const response = await fetchImpl(url, {
-        headers: { "user-agent": "job-application-server/0.2 (+self-hosted)" },
-        signal: AbortSignal.timeout(20_000)
-      });
-      if (!response.ok) throw new Error(`Jobicy returned HTTP ${response.status}`);
-      const body = await response.json();
-      rows.push(...(body.jobs ?? []));
+      let body;
+      try {
+        const response = await fetchImpl(url, {
+          headers: { "user-agent": "job-application-server/0.2 (+self-hosted)" },
+          signal: AbortSignal.timeout(20_000)
+        });
+        if (!response.ok) throw new Error(`Jobicy returned HTTP ${response.status}`);
+        body = await response.json();
+      } catch (error) {
+        if (!rows.length) throw error;
+        onError({ stage: "query", term: tag, reason: "partial_fetch_failure",
+          error: error.message });
+        break;
+      }
+      const batch = body.jobs ?? [];
+      rows.push(...batch);
+      queryStats.push({ term: tag, pages: 1, rawRows: batch.length,
+        uniqueRows: new Set(batch.map((item) => String(item.id ?? "")).filter(Boolean)).size });
+      if (batch.length >= count) onError({ stage: "pagination", term: tag,
+        reason: "partial_response_cap", rawRows: batch.length });
     }
-    const unique = [...new Map(rows.filter((row) => row?.id).map((row) => [String(row.id), row])).values()];
+    const unique = [...new Map(rows.filter((row) => row?.id)
+      .filter((row) => !isHandled({ source: "jobicy", externalId: String(row.id),
+        applyUrl: row.url, listingUrl: row.url }))
+      .map((row) => [String(row.id), row])).values()];
+    if (unique.length > limit) onError({ stage: "selection", reason: "partial_raw_pool_cap",
+      rawRows: unique.length, omittedRows: unique.length - limit });
+    onStats({ rawRows: rows.length, pagesVisited: queryStats.length,
+      adapterPrescreenRejected: rows.filter((row) => !row?.id).length,
+      queryStats, skippedTerms: plan.skippedTerms,
+      coverageBlocked: plan.coverageBlocked });
     return unique.slice(0, limit).map((row) => ({
       source: "jobicy",
       externalId: String(row.id),

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { resolveEmployerApplicationUrl } from "./application-destination.js";
+import { officialAtsUrlFromAggregator, resolveEmployerApplicationUrl } from "./application-destination.js";
 import { remoteok } from "./sources/remoteok.js";
 import { arbeitnow } from "./sources/arbeitnow.js";
 import { jobicy } from "./sources/jobicy.js";
@@ -12,18 +12,27 @@ import { telemetry } from "../telemetry.js";
 import { normalizeOpportunity } from "./normalization.js";
 import { runIdempotent } from "../idempotency.js";
 import { isHandledRole, knownRoleIndex, roleKeys } from "./handled-roles.js";
+import { leadRetryDecision, matchingStoredLead } from "./candidate-state.js";
+import { selectSemanticCandidateIndexes } from "./semantic-candidate-selection.js";
+import { selectFitReviewCandidates } from "./fit-review-selection.js";
 import { fetchVerifiedOfficialAtsRole, officialAtsDestination, officialAtsIdentityFromUrl } from "./official-ats.js";
+import { sourceConfigWithLearnedBoards } from "./learned-boards.js";
 
 const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever].map((source) => [source.id, source]));
 const atsBoardKey = (parsed) => parsed ? `${parsed.source}:${parsed.board}` : null;
+const AGGREGATOR_SOURCES = new Set(["himalayas", "jobicy"]);
+const discoverySourceOf = (role) => role.discoverySource ?? role.source;
 
 export class DiscoveryService {
-  constructor({ applicationService, profiles, config, fetchImpl = fetch, enricher = null }) {
+  constructor({ applicationService, profiles, config, fetchImpl = fetch, enricher = null,
+    officialRequestPaceMs = 1500 }) {
     this.applicationService = applicationService;
     this.profiles = profiles;
     this.config = config;
     this.fetchImpl = fetchImpl;
     this.enricher = enricher;
+    this.officialRequestPaceMs = Number.isFinite(officialRequestPaceMs)
+      ? Math.max(0, officialRequestPaceMs) : 1500;
   }
 
   #atsBackoffActive(profileId, key) {
@@ -41,6 +50,21 @@ export class DiscoveryService {
       details: { reason, nextAt: new Date(Date.now() + 6 * 60 * 60_000).toISOString() } }));
   }
 
+  #aggregatorBackoffActive(profileId, sourceId) {
+    const event = this.applicationService.store.snapshot().audit.filter((item) =>
+      item.profileId === profileId && item.action === "discovery.aggregator_backoff"
+      && item.subjectId === sourceId).at(-1);
+    return Boolean(event && Date.parse(event.details?.nextAt) > Date.now());
+  }
+
+  async #recordAggregatorBackoff(identity, sourceId, reason) {
+    if (this.#aggregatorBackoffActive(identity.profileId, sourceId)) return;
+    await this.applicationService.store.mutate((state) => state.audit.push({ id: randomUUID(),
+      at: new Date().toISOString(), actorId: identity.actorId, profileId: identity.profileId,
+      action: "discovery.aggregator_backoff", subjectId: sourceId,
+      details: { reason, nextAt: new Date(Date.now() + 6 * 60 * 60_000).toISOString() } }));
+  }
+
   async describeSources(identity, mode) {
     const profile = await this.profiles.get(identity.profileId);
     const selectedMode = mode ?? profile?.defaultMode ?? this.config.defaultMode;
@@ -48,7 +72,10 @@ export class DiscoveryService {
     if (!settings) throw Object.assign(new Error(`unknown mode: ${selectedMode}`), { status: 400 });
     const preference = selectedMode === "freelance"
       ? profile?.preferences?.freelance : profile?.preferences?.fullTime;
+    const snapshot = this.applicationService.store.snapshot();
+    const backedOff = activeAtsBoardBackoffs(snapshot, identity.profileId);
     const enabled = preference?.automatedDiscoverySources ?? settings.sources ?? [];
+    const sourceCycles = completedSourceCycles(snapshot.audit, identity.profileId, enabled);
     const capabilities = {
       lever: { kind: "official_feed", filters: { board: "configured", location: "provider", team: "provider",
         department: "provider", commitment: "provider", level: "provider" } },
@@ -65,8 +92,12 @@ export class DiscoveryService {
         seniority: ["Entry-level", "Mid-level", "Senior", "Manager", "Director", "Executive"],
         employment_type: ["Full Time", "Part Time", "Contractor", "Temporary", "Intern", "Volunteer", "Other"]
       } : this.config.discovery?.sourceOptions?.[id]?.filterValues ?? {},
-      configuredBoards: (this.config.discovery?.sourceOptions?.[id]?.boards
-        ?? this.config.discovery?.sourceOptions?.[id]?.sites ?? []).map((item) => item.slug ?? item.token),
+      configuredBoards: (() => {
+        const options = sourceConfigWithLearnedBoards(snapshot, identity.profileId, id,
+          this.config.discovery?.sourceOptions?.[id] ?? {},
+          { cycle: sourceCycles[id] ?? 0, isBackedOff: (key) => backedOff.has(key) });
+        return (options.boards ?? options.sites ?? []).map((item) => item.slug ?? item.token);
+      })(),
       ...(["himalayas", "jobicy", "remoteok", "arbeitnow"].includes(id)
         ? { applicationFlow: "resolve_employer_url_before_prepare" } : {}),
       maxQueries: 8, maxResultsPerQuery: 200
@@ -127,16 +158,21 @@ export class DiscoveryService {
       || !/^[a-z0-9][a-z0-9_-]{0,79}$/i.test(source))) {
       throw Object.assign(new Error("fallbackSources must contain at most 100 source IDs"), { status: 400 });
     }
+    const sourceCycles = completedSourceCycles(this.applicationService.store.snapshot().audit,
+      identity.profileId, [...primarySources, ...fallbackSources]);
     await this.applicationService.createCampaign({
       id: campaignId, target, reserve, mode, sources: primarySources,
-      fallbackSources, queryPlan: input.queryPlan, reserveOnly: input.reserveOnly === true
+      fallbackSources, queryPlan: input.queryPlan, reserveOnly: input.reserveOnly === true,
+      sourceCycles
     }, identity);
     try {
       const scan = await this.scan({
         mode, sources: primarySources, queryPlan: input.queryPlan,
-        limitPerSource: input.limitPerSource ?? (fallbackSources.length ? 10 : undefined),
+        // The scan fetches a wider bounded raw pool internally, then caps
+        // accepted roles per source after scoring.
+        limitPerSource: input.limitPerSource,
         prepareApplications: false, campaignId, reserveOnly: input.reserveOnly === true,
-        maxRequestsPerSource: input.maxRequestsPerSource
+        maxRequestsPerSource: input.maxRequestsPerSource, sourceCycles
       }, identity);
       if (!input.reserveOnly && !scan.readyToApply) {
         throw Object.assign(new Error(`profile is missing application fields: ${scan.missingForApplications.join(", ")}`),
@@ -165,17 +201,19 @@ export class DiscoveryService {
       const recorded = await this.applicationService.recordCampaignScan(campaignId, {
         found: scan.found, qualifying: scan.qualifying, excluded: scan.excluded,
         handledFiltered: scan.handledFiltered,
+        fitReviewCandidates: scan.fitReviewCandidates,
         sourceYield: scan.sourceYield.map((row) => ({ ...row,
-          selected: selected.filter((entry) => entry.opportunity.source === row.sourceId).length })),
+          selected: selected.filter((entry) => discoverySourceOf(entry.opportunity) === row.sourceId).length })),
         durations: scan.durations,
         destinationPending: scan.items.length - ready.length,
         selectedOpportunityIds: selected.map((entry) => entry.opportunity.id),
         applicationIds, errors: scan.errors
       }, identity);
+      const result = (value) => ({ ...value, searchPlanSeed: scan.searchPlanSeed });
       if (input.reserveOnly && !fallbackSources.length) {
-        return this.applicationService.finalizeCampaignSelection(campaignId, identity);
+        return result(await this.applicationService.finalizeCampaignSelection(campaignId, identity));
       }
-      return recorded;
+      return result(recorded);
     } catch (error) {
       await this.applicationService.recordCampaignFailure(campaignId, error, identity);
       throw error;
@@ -397,7 +435,24 @@ export class DiscoveryService {
       || (input.pagesVisited !== undefined && (!Number.isInteger(input.pagesVisited)
         || input.pagesVisited < 0 || input.pagesVisited > 100))
       || (input.requestsMade !== undefined && (!Number.isInteger(input.requestsMade)
-        || input.requestsMade < 0 || input.requestsMade > 1000))) {
+        || input.requestsMade < 0 || input.requestsMade > 1000))
+      || (input.elapsedMs !== undefined && (!Number.isInteger(input.elapsedMs)
+        || input.elapsedMs < 0 || input.elapsedMs > 600_000))
+      || (input.stopReason !== undefined && (typeof input.stopReason !== "string"
+        || !/^[a-z_]{1,50}$/.test(input.stopReason)))
+      || (input.partialReasons !== undefined && (!Array.isArray(input.partialReasons)
+        || input.partialReasons.length > 10 || input.partialReasons.some((reason) =>
+          typeof reason !== "string" || !/^[a-z_]{1,50}$/.test(reason))))
+      || (input.queryStats !== undefined && (!Array.isArray(input.queryStats)
+        || input.queryStats.length > 16 || input.queryStats.some((row) => !row
+          || typeof row.term !== "string" || row.term.length > 100
+          || ["pages", "rawRows", "uniqueRows", "detailAttempts", "extractedJobs"]
+            .some((key) => !Number.isInteger(row[key]) || row[key] < 0 || row[key] > 10000))))
+      || (input.discardedObservedCandidates !== undefined
+        && (!Number.isInteger(input.discardedObservedCandidates)
+          || input.discardedObservedCandidates < 0 || input.discardedObservedCandidates > 100))
+      || (input.discardReason !== undefined && (typeof input.discardReason !== "string"
+        || !/^[a-z_]{1,50}$/.test(input.discardReason)))) {
       throw Object.assign(new Error("source telemetry is invalid"), { status: 400 });
     }
     if (input.cooldownSkipped === true) {
@@ -410,7 +465,10 @@ export class DiscoveryService {
       const recorded = await this.applicationService.recordCampaignSourceScan(campaignId, {
         sourceId, found: 0, qualifying: 0, excluded: 0, handledFiltered: 0, selected: 0,
         destinationPending: 0, completed: true, pagesVisited: 0, requestsMade: 0,
+        elapsedMs: input.elapsedMs,
         cooldownSkipped: true, cooldownReason: active.reason, cooldownUntil: active.until,
+        discardedObservedCandidates: input.discardedObservedCandidates ?? 0,
+        discardReason: input.discardReason,
         errors: []
       }, identity);
       return recorded.sourceCoverage.fallbackRemaining.length ? recorded
@@ -427,11 +485,13 @@ export class DiscoveryService {
       ? profile?.preferences?.freelance ?? {} : profile?.preferences?.fullTime ?? {};
     const scorerVersion = String(modePreferences.scorerVersion ?? this.config.discovery?.scorerVersion ?? "2");
     const knownKeys = knownRoleIndex(this.applicationService.store.snapshot(), identity.profileId);
+    const storedLeads = this.applicationService.store.snapshot();
     const atsBackoffKeys = new Set(this.applicationService.store.snapshot().audit.filter((item) =>
       item.profileId === identity.profileId && item.action === "discovery.ats_backoff"
       && Date.parse(item.details?.nextAt) > Date.now()).map((item) => item.subjectId));
     let excluded = 0; let handledFiltered = 0; let qualifying = 0; let selected = 0;
     let destinationPending = 0;
+    const pendingCandidates = [];
     const errors = [];
     const exclusionReasons = new Map();
     const eligible = [];
@@ -463,6 +523,16 @@ export class DiscoveryService {
       try {
         officialBudgetBlockedCandidate = false;
         const raw = importedCandidate(candidate, sourceId);
+        const storedLead = matchingStoredLead(storedLeads, identity.profileId, raw);
+        const retryDecision = leadRetryDecision(storedLead, raw);
+        if (retryDecision) {
+          if (retryDecision === "pending_expired") {
+            await this.applicationService.markDiscoveryLeadExpired(storedLead.id, identity);
+          }
+          excluded += 1;
+          exclusionReasons.set(retryDecision, (exclusionReasons.get(retryDecision) ?? 0) + 1);
+          continue;
+        }
         const officialIdentity = officialAtsIdentityFromUrl(raw.applyUrl);
         const listedIdentity = officialAtsIdentityFromUrl(raw.listingUrl);
         if (officialIdentity && listedIdentity && officialIdentity.key !== listedIdentity.key) {
@@ -519,9 +589,11 @@ export class DiscoveryService {
           try { scored = await resolveEmployerApplicationUrl(scored, this.fetchImpl); }
           catch (error) { errors.push({ stage: "application_destination", error: error.message }); }
         }
-        if (scored.applicationDestinationPending || !/^https:\/\//i.test(scored.applyUrl ?? "")) {
+        if (scored.applicationDestinationPending || scored.applicationDestinationVerified !== true
+          || !/^https:\/\//i.test(scored.applyUrl ?? "")) {
           destinationPending += 1;
-          errors.push({ stage: "application_destination", error: "verified HTTPS employer application URL required" });
+          pendingCandidates.push({ ...scored, applicationDestinationPending: true,
+            applicationDestinationVerified: false });
           continue;
         }
         eligible.push({ scored, serverVerifiedDiscovery: Boolean(official) });
@@ -530,6 +602,20 @@ export class DiscoveryService {
       }
     }
     const opportunityIds = [];
+    const pendingOpportunityIds = [];
+    const alreadyPending = new Set(campaign.sourceCoverage.scans
+      .filter((scan) => scan.sourceId === sourceId)
+      .flatMap((scan) => scan.pendingOpportunityIds ?? []));
+    for (const scored of pendingCandidates.sort((left, right) =>
+      Number(right.score ?? 0) - Number(left.score ?? 0))
+      .slice(0, Math.max(0, 10 - alreadyPending.size))) {
+      const opportunity = await this.applicationService.addOpportunity({ ...scored,
+        lastCampaignId: campaignId }, identity);
+      if (!alreadyPending.has(opportunity.id)) {
+        pendingOpportunityIds.push(opportunity.id);
+        alreadyPending.add(opportunity.id);
+      }
+    }
     for (const { scored, serverVerifiedDiscovery } of eligible.sort((left, right) =>
       Number(right.scored.score ?? 0) - Number(left.scored.score ?? 0)
       || Date.parse(right.scored.postedAt ?? 0) - Date.parse(left.scored.postedAt ?? 0))
@@ -546,12 +632,19 @@ export class DiscoveryService {
       sourceId, found: input.items.length, qualifying, excluded, handledFiltered, selected,
       destinationPending,
       opportunityIds,
+      pendingOpportunityIds,
       exclusionReasons: [...exclusionReasons.entries()].map(([reason, count]) => ({ reason, count }))
         .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)),
       completed: input.completed !== false, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
+      elapsedMs: input.elapsedMs,
       rateLimited: input.rateLimited === true, exhausted: input.exhausted === true,
       challenge: input.challenge === true, timedOut: input.timedOut === true,
       parseDrift: input.parseDrift === true,
+      sourceFailure: input.sourceFailure === true,
+      stopReason: input.stopReason, partialReasons: input.partialReasons ?? [],
+      queryStats: input.queryStats ?? [],
+      discardedObservedCandidates: input.discardedObservedCandidates ?? 0,
+      discardReason: input.discardReason,
       manual: input.manual === true,
       errors: [...errors, ...(input.errors ?? [])].slice(0, 100)
     }, identity);
@@ -593,12 +686,26 @@ export class DiscoveryService {
     });
     const sourceYield = new Map(selected.map(({ id }) => [id, {
       sourceId: id, found: 0, qualifying: 0, excluded: 0,
-      handledFiltered: 0, destinationPending: 0, selected: 0,
+      handledFiltered: 0, destinationPending: 0, selected: 0, scored: 0,
       exclusionCounts: { hardExclusion: 0, belowScore: 0, opportunisticRequirements: 0 }
     }]));
     const handledBySource = new Map();
     const internalErrors = [];
-    const handledKeys = knownRoleIndex(this.applicationService.store.snapshot(), identity.profileId);
+    const providerStats = new Map();
+    const sourceDurations = new Map();
+    const snapshot = this.applicationService.store.snapshot();
+    const backedOff = activeAtsBoardBackoffs(snapshot, identity.profileId);
+    const sourceCycles = input.sourceCycles ?? completedSourceCycles(snapshot.audit,
+      identity.profileId, selected.map((source) => source.id));
+    const handledKeys = knownRoleIndex(snapshot, identity.profileId);
+    const titlesByOpportunity = new Map(snapshot.opportunities
+      .filter((item) => item.profileId === identity.profileId)
+      .map((item) => [item.id, item.title]));
+    const searchTitles = snapshot.applications
+      .filter((item) => item.profileId === identity.profileId && item.status === "submitted"
+        && item.receipt?.submittedAt && item.receipt?.simulated !== true)
+      .map((item) => titlesByOpportunity.get(item.opportunityId))
+      .filter((title) => typeof title === "string" && /\b(engineer|developer|scientist|architect)\b/i.test(title));
     const handledMatches = new Set();
     const isHandled = (role) => {
       if (!isHandledRole(role, handledKeys)) return false;
@@ -621,6 +728,10 @@ export class DiscoveryService {
     }
     const requestsBySource = new Map();
     const fetchCache = new Map();
+    const requestStartedAtByOrigin = new Map();
+    const pacedOriginQueues = new Map();
+    const pacedPendingByUrl = new Map();
+    const blockedOfficialOrigins = new Map();
     const cachedFetch = async (url, options, sourceId) => {
       const key = String(url);
       if (!fetchCache.has(key)) {
@@ -630,20 +741,72 @@ export class DiscoveryService {
         }
         requestCount += 1;
         if (sourceId) requestsBySource.set(sourceId, (requestsBySource.get(sourceId) ?? 0) + 1);
+        requestStartedAtByOrigin.set(new URL(key).origin, Date.now());
         fetchCache.set(key, Promise.resolve(this.fetchImpl(url, options)));
       }
-      return (await fetchCache.get(key)).clone();
+      try { return (await fetchCache.get(key)).clone(); }
+      catch (error) { fetchCache.delete(key); throw error; }
+    };
+    const pacedOfficialFetch = (url, options, sourceId) => {
+      const key = String(url);
+      if (fetchCache.has(key)) return cachedFetch(url, options, sourceId);
+      if (pacedPendingByUrl.has(key)) return pacedPendingByUrl.get(key).then((response) => response.clone());
+      const origin = new URL(key).origin;
+      const previous = pacedOriginQueues.get(origin) ?? Promise.resolve();
+      const pending = previous.catch(() => {}).then(async () => {
+        if (blockedOfficialOrigins.has(origin)) {
+          throw new Error(`official source blocked by HTTP ${blockedOfficialOrigins.get(origin)}`);
+        }
+        const last = requestStartedAtByOrigin.get(origin);
+        const waitMs = Math.max(0, this.officialRequestPaceMs - (Date.now() - (last ?? 0)));
+        if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
+        const response = await cachedFetch(url, options, sourceId);
+        if (response.status === 403 || response.status === 429) {
+          blockedOfficialOrigins.set(origin, response.status);
+        }
+        return response;
+      });
+      pacedOriginQueues.set(origin, pending.then(() => {}, () => {}));
+      pacedPendingByUrl.set(key, pending);
+      void pending.finally(() => pacedPendingByUrl.delete(key)).catch(() => {});
+      return pending.then((response) => response.clone());
     };
     const requests = selected.flatMap((source) => (input.queryPlan ?? [null]).map((query) => ({ source, query })));
-    const settled = await Promise.allSettled(requests.map(({ source, query }) => source.search({
-      limit: query?.limit ?? requestedLimit,
+    const settled = await Promise.allSettled(requests.map(async ({ source, query }) => {
+      const started = performance.now();
+      try { return await source.search({
+      // The official feeds can be scored locally without extra provider
+      // requests, so inspect a wider bounded pool before the accepted cap.
+      limit: ["ashby", "greenhouse", "lever"].includes(source.id) ? 500 : 200,
       query: query?.filters,
-      fetchImpl: (url, options) => cachedFetch(url, options, source.id),
+      fetchImpl: (url, options) => ["ashby", "greenhouse", "lever"].includes(source.id)
+        ? pacedOfficialFetch(url, options, source.id) : cachedFetch(url, options, source.id),
       profile,
+      searchTitles,
+      searchCycle: sourceCycles[source.id] ?? 0,
       isHandled,
-      sourceConfig: this.config.discovery?.sourceOptions?.[source.id] ?? {},
-      onError: (error) => internalErrors.push({ source: source.id, ...error })
-    })));
+      sourceConfig: sourceConfigWithLearnedBoards(snapshot, identity.profileId, source.id,
+        this.config.discovery?.sourceOptions?.[source.id] ?? {},
+        { cycle: sourceCycles[source.id] ?? 0,
+          isBackedOff: (key) => backedOff.has(key) }),
+      onError: (error) => internalErrors.push({ source: source.id, ...error }),
+      onStats: (stats) => {
+        const previous = providerStats.get(source.id) ?? { rawRows: 0,
+          adapterPrescreenRejected: 0, pagesVisited: 0, queryStats: [],
+          skippedTerms: [], coverageBlocked: false };
+        previous.rawRows += Number(stats.rawRows ?? 0);
+        previous.adapterPrescreenRejected += Number(stats.adapterPrescreenRejected ?? 0);
+        previous.pagesVisited += Number(stats.pagesVisited ?? 0);
+        previous.queryStats.push(...(stats.queryStats ?? []));
+        previous.skippedTerms.push(...(stats.skippedTerms ?? []));
+        previous.coverageBlocked ||= stats.coverageBlocked === true;
+        providerStats.set(source.id, previous);
+      }
+      }); } finally {
+        sourceDurations.set(source.id, (sourceDurations.get(source.id) ?? 0)
+          + performance.now() - started);
+      }
+    }));
     telemetry.observe("discovery.fetch_ms", performance.now() - fetchStarted, { mode });
     const fetchMs = performance.now() - fetchStarted;
     telemetry.count("discovery.provider_requests", requestCount, { mode });
@@ -655,12 +818,169 @@ export class DiscoveryService {
       if (result.status === "rejected") errors.push({ source: requests[index].source.id, error: result.reason.message });
       else found.push(...result.value.map((item) => ({ ...item, source: requests[index].source.id })));
     }
+    for (const error of errors) {
+      const restricted = /returned HTTP (403|429)\b/i.exec(String(error.error ?? ""));
+      if (restricted && ["ashby", "greenhouse", "lever"].includes(error.source)
+        && typeof error.board === "string" && error.board) {
+        await this.#recordAtsBackoff(identity, `${error.source}:${error.board}`,
+          `http_${restricted[1]}`);
+      }
+    }
+    for (const row of sourceYield.values()) {
+      const sourceErrors = errors.filter((error) => error.source === row.sourceId);
+      row.requestsMade = requestsBySource.get(row.sourceId) ?? 0;
+      row.elapsedMs = Math.round(sourceDurations.get(row.sourceId) ?? 0);
+      const stats = providerStats.get(row.sourceId);
+      row.rawRowsObserved = stats?.rawRows ?? null;
+      row.adapterPrescreenRejected = stats?.adapterPrescreenRejected ?? null;
+      row.pagesVisited = stats?.pagesVisited ?? null;
+      row.queryStats = stats?.queryStats ?? [];
+      row.skippedTerms = stats?.skippedTerms ?? [];
+      row.coverageBlocked = stats?.coverageBlocked ?? false;
+      row.partialReasons = [...new Set(sourceErrors.map((error) => error.reason)
+        .filter((reason) => /^partial_|^invalid_next_page$/.test(reason)))];
+      row.errors = sourceErrors.map((error) => ({ reason: error.reason ?? "fetch_error" }));
+      row.sourceFailure = sourceErrors.length > 0;
+      row.rateLimited = sourceErrors.some((error) => /\b(?:HTTP\s*)?(?:403|429)\b|rate.?limit/i
+        .test(String(error.error ?? "")));
+      row.challenge = sourceErrors.some((error) => /\b(?:captcha|challenge)\b/i
+        .test(String(error.error ?? "")));
+      row.timedOut = sourceErrors.some((error) => /\b(?:timeout|timed out|budget exhausted)\b/i
+        .test(String(error.error ?? "")));
+      // A completed scan is not evidence that a provider's result set was
+      // exhausted. Most feeds do not expose a reliable total/page cursor.
+      row.exhausted = false;
+    }
 
-    const uniqueFound = [...new Map(found.filter((raw) => !isHandled(raw))
+    const unhandledFound = found.filter((raw) => !isHandled(raw));
+    const uniqueFound = [...new Map(unhandledFound
       .map((raw) => [`${raw.source}:${raw.externalId ?? raw.applyUrl}`, raw])).values()];
-    const normalizedFound = uniqueFound.map((raw) => normalizeOpportunity(raw));
-    for (const raw of normalizedFound) {
-      if (sourceYield.has(raw.source)) sourceYield.get(raw.source).found += 1;
+    for (const row of sourceYield.values()) {
+      row.dedupFiltered = unhandledFound.filter((item) => item.source === row.sourceId).length
+        - uniqueFound.filter((item) => item.source === row.sourceId).length;
+    }
+    const normalizedFound = [];
+    const seenOfficialKeys = new Set();
+    const officialAttempts = new Map();
+    let excluded = 0;
+    let officialResolutionMs = 0;
+    const configuredOfficialCandidateCap = Number(
+      this.config.discovery?.officialVerificationMaxCandidatesPerSource ?? 10);
+    const officialCandidateCap = Number.isInteger(configuredOfficialCandidateCap)
+      && configuredOfficialCandidateCap > 0
+      ? Math.min(10, configuredOfficialCandidateCap) : 10;
+    for (const raw of uniqueFound) {
+      const origin = raw.source;
+      const row = sourceYield.get(origin);
+      if (row) row.found += 1;
+      const storedLead = matchingStoredLead(snapshot, identity.profileId, raw);
+      const retryDecision = leadRetryDecision(storedLead, raw);
+      if (retryDecision) {
+        if (retryDecision === "pending_expired") {
+          await this.applicationService.markDiscoveryLeadExpired(storedLead.id, identity);
+        }
+        excluded += 1;
+        if (row) { row.excluded += 1; row.retryDeferred = (row.retryDeferred ?? 0) + 1; }
+        continue;
+      }
+      let candidate = raw;
+      if (AGGREGATOR_SOURCES.has(origin)) {
+        const started = performance.now();
+        try {
+          const attempt = officialAttempts.get(origin) ?? 0;
+          const mayResolve = Boolean(officialAtsIdentityFromUrl(raw.applyUrl)
+            || raw.applicationDestinationPending === true);
+          let resolution;
+          if (this.#aggregatorBackoffActive(identity.profileId, origin)) {
+            resolution = { reason: "aggregator_backoff" };
+          } else if (!mayResolve) {
+            resolution = { reason: "non_ats_destination" };
+          } else if (attempt >= officialCandidateCap) {
+            resolution = { reason: "candidate_cap" };
+          } else {
+            officialAttempts.set(origin, attempt + 1);
+            try {
+              resolution = await officialAtsUrlFromAggregator(raw,
+                (url, options) => pacedOfficialFetch(url, options, origin));
+            } catch (error) {
+              resolution = { reason: /budget exhausted/i.test(error.message)
+                ? "request_budget" : "redirect_error" };
+            }
+          }
+          const wasOfficial = Boolean(resolution?.identity);
+          if (resolution?.identity) {
+            const listed = officialAtsIdentityFromUrl(raw.listingUrl);
+            if (listed && listed.key !== resolution.identity.key) {
+              if (row) row.excluded += 1;
+              excluded += 1;
+              continue;
+            }
+            const key = atsBoardKey(resolution.identity);
+            if (!backedOff.has(key)) {
+              let failure = "verification_failed";
+              const verified = await fetchVerifiedOfficialAtsRole(resolution.url,
+                this.config.discovery?.sourceOptions ?? {},
+                (url, options) => pacedOfficialFetch(url, options, origin).catch((error) => {
+                  if (/budget exhausted/i.test(error.message)) throw new Error("official lookup budget exhausted");
+                  throw error;
+                }), (reason) => { failure = reason; });
+              if (verified) {
+                candidate = { ...verified, discoverySource: origin,
+                  provenance: { aggregatorSourceId: origin, aggregatorExternalId: raw.externalId,
+                    aggregatorListingUrl: raw.listingUrl, officialAtsVerified: true } };
+                if (isHandled({ ...candidate, source: origin })) continue;
+              } else if (failure === "closed_or_mismatched_role"
+                || failure === "ineligible_or_mismatched_destination") {
+                if (row) row.excluded += 1;
+                excluded += 1;
+                continue;
+              } else {
+                resolution = { reason: failure };
+                if (["http_403", "http_429"].includes(failure)) {
+                  await this.#recordAtsBackoff(identity, key, failure);
+                  backedOff.add(key);
+                }
+              }
+            } else resolution = { reason: "ats_backoff" };
+          }
+          if (candidate === raw) {
+            // Unverified aggregator content remains observable and retriable,
+            // but cannot enter the actionable employer-application lane.
+            candidate = { ...raw, applicationDestinationPending: true,
+              applicationDestinationVerified: false,
+              destinationResolutionReason: resolution?.reason ?? "non_ats_destination" };
+            if (["http_403", "http_429"].includes(resolution?.reason)) {
+              if (row) { row.rateLimited = true; row.sourceFailure = true;
+                row.errors.push({ reason: resolution.reason }); }
+              errors.push({ source: origin, stage: "official_destination",
+                reason: resolution.reason, error: `Official ATS returned ${resolution.reason}` });
+              if (!wasOfficial) await this.#recordAggregatorBackoff(identity, origin,
+                resolution.reason);
+            }
+            if (["request_budget", "candidate_cap", "budget"].includes(resolution?.reason) && row) {
+              row.partialReasons = [...new Set([...(row.partialReasons ?? []),
+                "partial_official_verification_budget"])];
+            }
+          }
+        } finally {
+          const elapsed = performance.now() - started;
+          sourceDurations.set(origin, (sourceDurations.get(origin) ?? 0) + elapsed);
+          officialResolutionMs += elapsed;
+        }
+      }
+      const officialKeys = [...roleKeys(candidate)].filter((key) =>
+        /^(ashby|greenhouse|lever):/.test(key));
+      if (officialKeys.some((key) => seenOfficialKeys.has(key))) {
+        if (row) row.dedupFiltered += 1;
+        continue;
+      }
+      for (const key of officialKeys) seenOfficialKeys.add(key);
+      normalizedFound.push(normalizeOpportunity(candidate, { source: candidate.source }));
+      if (row) row.scored = (row.scored ?? 0) + 1;
+    }
+    for (const row of sourceYield.values()) {
+      row.requestsMade = requestsBySource.get(row.sourceId) ?? 0;
+      row.elapsedMs = Math.round(sourceDurations.get(row.sourceId) ?? 0);
     }
     const screeningStarted = performance.now();
     let destinationMs = 0;
@@ -672,12 +992,12 @@ export class DiscoveryService {
       index, result: scoreOpportunity(raw, profile, mode, { version: scorerVersion })
     }));
     const maximumSemantic = Math.max(0, Number(this.config.discovery?.semantic?.maxCandidates ?? 20));
-    const semanticCandidates = new Set(preliminary
-      .filter((entry) => !entry.result.scoreDetails.hardExclusion)
-      .sort((left, right) => right.result.score - left.result.score)
-      .slice(0, maximumSemantic).map((entry) => entry.index));
+    const semanticCandidates = selectSemanticCandidateIndexes(preliminary,
+      maximumSemantic, modeConfig.minimumScore);
     const qualifying = [];
-    let excluded = 0;
+    const accepted = [];
+    const fitReviewCandidates = [];
+    const unverifiedSkillCandidates = [];
     for (let index = 0; index < normalizedFound.length; index += 1) {
       let raw = normalizedFound[index];
       if (this.enricher && semanticCandidates.has(index)) {
@@ -704,12 +1024,33 @@ export class DiscoveryService {
       if (scored.scoreDetails.hardExclusion
         || (opportunistic ? !opportunisticQualified : scored.score < modeConfig.minimumScore)) {
         excluded += 1;
-        if (sourceYield.has(raw.source)) {
-          const row = sourceYield.get(raw.source);
+        if (sourceYield.has(discoverySourceOf(raw))) {
+          const row = sourceYield.get(discoverySourceOf(raw));
           row.excluded += 1;
           const kind = scored.scoreDetails.hardExclusion ? "hardExclusion"
             : opportunistic ? "opportunisticRequirements" : "belowScore";
           row.exclusionCounts[kind] += 1;
+        }
+        const unverifiedSkill = /absent from the verified skill profile/i
+          .test(scored.scoreDetails.hardExclusion ?? "");
+        if (unverifiedSkill || (!scored.scoreDetails.hardExclusion
+          && scored.score >= 30
+          && (scored.scoreDetails.matchedSkills.length >= 2
+            || (scored.scoreDetails.matchedSkills.length >= 1
+              && scored.scoreDetails.titlePriority)))) {
+          const review = {
+            source: raw.source, discoverySource: discoverySourceOf(raw), externalId: raw.externalId,
+            company: raw.company, title: raw.title, location: raw.location,
+            listingUrl: raw.listingUrl, applyUrl: raw.applyUrl,
+            applicationDestinationPending: raw.applicationDestinationPending === true,
+            score: scored.score,
+            titlePriority: scored.scoreDetails.titlePriority,
+            reason: unverifiedSkill ? "unverified_required_skill"
+              : opportunistic ? "opportunistic_requirements" : "below_automatic_score",
+            matchedSkillCount: scored.scoreDetails.matchedSkills.length,
+            compensationComparable: scored.scoreDetails.compensationComparable === true
+          };
+          (unverifiedSkill ? unverifiedSkillCandidates : fitReviewCandidates).push(review);
         }
         continue;
       }
@@ -724,15 +1065,32 @@ export class DiscoveryService {
       // This flag is derived from a server-fetched official ATS row and its
       // stable role URL, never from caller-supplied source metadata.
       scored.applicationDestinationVerified = officialAtsDestination(scored);
+      if (!scored.applicationDestinationVerified) scored.applicationDestinationPending = true;
       if (isHandled(scored)) {
         excluded += 1;
-        if (sourceYield.has(raw.source)) sourceYield.get(raw.source).excluded += 1;
+        if (sourceYield.has(discoverySourceOf(raw))) sourceYield.get(discoverySourceOf(raw)).excluded += 1;
         continue;
       }
-      if (sourceYield.has(raw.source)) {
-        sourceYield.get(raw.source).qualifying += 1;
-        if (scored.applicationDestinationPending) sourceYield.get(raw.source).destinationPending += 1;
-        else sourceYield.get(raw.source).selected += 1;
+      if (sourceYield.has(discoverySourceOf(raw))) {
+        sourceYield.get(discoverySourceOf(raw)).qualifying += 1;
+        if (scored.applicationDestinationPending) sourceYield.get(discoverySourceOf(raw)).destinationPending += 1;
+      }
+      accepted.push(scored);
+    }
+    const selectedPerSource = new Map();
+    const selectedAccepted = [...accepted].sort((left, right) => Number(right.score ?? 0) - Number(left.score ?? 0)
+      || Date.parse(right.postedAt ?? 0) - Date.parse(left.postedAt ?? 0)).filter((scored) => {
+      // Unresolved destinations have a separate bounded review lane; they
+      // cannot consume the cap intended for actionable employer applications.
+      const lane = `${discoverySourceOf(scored)}:${scored.applicationDestinationPending ? "pending" : "ready"}`;
+      const count = selectedPerSource.get(lane) ?? 0;
+      if (count >= requestedLimit) return false;
+      selectedPerSource.set(lane, count + 1);
+      return true;
+    });
+    for (const scored of selectedAccepted) {
+      if (sourceYield.has(discoverySourceOf(scored)) && !scored.applicationDestinationPending) {
+        sourceYield.get(discoverySourceOf(scored)).selected += 1;
       }
       const opportunity = await this.applicationService.addOpportunity({
         ...scored, ...(input.campaignId ? { lastCampaignId: input.campaignId } : {}),
@@ -774,12 +1132,42 @@ export class DiscoveryService {
       readyToApply: profileStatus.readyToApply,
       missingForApplications: profileStatus.missingForApplications,
       errors,
+      fitReviewCandidates: selectFitReviewCandidates(fitReviewCandidates,
+        unverifiedSkillCandidates),
       sourceYield: [...sourceYield.values()],
-      durations: { fetchMs, screeningMs: Math.max(0, performance.now() - screeningStarted - destinationMs),
-        destinationMs, totalMs: performance.now() - scanStarted },
+      searchPlanSeed: { profile: { preferences: { fullTime: {
+        jobTitles: modePreferences.jobTitles ?? [],
+        secondaryJobTitles: modePreferences.secondaryJobTitles ?? []
+      } } }, verifiedSubmittedTitles: searchTitles },
+      durations: { fetchMs, officialResolutionMs,
+        screeningMs: Math.max(0, performance.now() - screeningStarted - destinationMs),
+        destinationMs: destinationMs + officialResolutionMs,
+        totalMs: performance.now() - scanStarted },
       items: qualifying
     };
   }
+}
+
+function activeAtsBoardBackoffs(snapshot, profileId, at = Date.now()) {
+  const latest = new Map((snapshot.audit ?? []).filter((item) => item.profileId === profileId
+    && item.action === "discovery.ats_backoff").map((item) => [item.subjectId, item]));
+  return new Set([...latest].filter(([, item]) => Date.parse(item.details?.nextAt) > at)
+    .map(([key]) => key));
+}
+
+function completedSourceCycles(audit, profileId, sourceIds) {
+  const starts = new Map(audit.filter((item) => item.profileId === profileId
+    && item.action === "campaign.started").map((item) => [item.subjectId, item]));
+  const completedPrimary = new Set(audit.filter((item) => item.profileId === profileId
+    && item.action === "campaign.scan_completed").map((item) => item.subjectId));
+  const completedBrowser = new Set(audit.filter((item) => item.profileId === profileId
+    && item.action === "campaign.source_scanned" && item.details?.completed !== false)
+    .map((item) => `${item.subjectId}:${item.details.sourceId}`));
+  return Object.fromEntries([...new Set(sourceIds)].map((sourceId) => [sourceId,
+    [...starts].filter(([campaignId, event]) => completedPrimary.has(campaignId)
+      && event.details?.sources?.includes(sourceId)).length
+    + [...starts].filter(([campaignId, event]) => event.details?.fallbackSources?.includes(sourceId)
+      && completedBrowser.has(`${campaignId}:${sourceId}`)).length]));
 }
 
 function perSourceLimit(entries, limit) {
@@ -818,12 +1206,15 @@ function importedCandidate(candidate, sourceId) {
     location: capped(candidate.location, 500), employmentType: capped(candidate.employmentType, 100),
     remote: candidate.remote === true, postedAt: capped(candidate.postedAt, 100),
     listingUrl: candidate.listingUrl ?? candidate.applyUrl, applyUrl: candidate.applyUrl,
-    applicationDestinationVerified: destinationObserved,
-    applicationDestinationPending: !destinationObserved,
+    // A browser-observed off-board link is a useful lead. The employer role,
+    // location, and open form remain unverified until a fresh employer check.
+    applicationDestinationVerified: false,
+    applicationDestinationPending: true,
     tags: Array.isArray(candidate.tags) ? candidate.tags.slice(0, 100).map((item) => String(item).slice(0, 100)) : [],
     compensation: candidate.compensation && typeof candidate.compensation === "object"
       ? candidate.compensation : undefined,
-    provenance: { importedBy: "campaign_browser_fallback", sourceUrl: capped(candidate.sourceUrl, 2000) },
+    provenance: { importedBy: "campaign_browser_fallback", sourceUrl: capped(candidate.sourceUrl, 2000),
+      employerLinkObserved: destinationObserved },
     uncertainties: Array.isArray(candidate.uncertainties)
       ? candidate.uncertainties.slice(0, 50).map((item) => String(item).slice(0, 200)) : []
   }, { source: sourceId });

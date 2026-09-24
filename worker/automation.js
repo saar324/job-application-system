@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { companyQuestion, eligibleProseField, needsCompanyResearch } from "./draft-provider.js";
+import { companyQuestion, eligibleProseField, highValueOptionalProseField,
+  needsCompanyResearch } from "./draft-provider.js";
 import { draftContextFingerprint, reusableApprovedAnswer } from "../src/approved-answers.js";
 import { fillAshbyRequiredControls, verifyAshbyRequiredControls } from "./ashby-adapter.js";
 
@@ -528,7 +529,7 @@ export async function fillVisibleFields(page, profile, opportunity, answers, pre
         : typeof observed === "boolean" ? observed : String(observed ?? "").trim() !== "";
       fields.push(fieldSummary(field,
         prefilled ? { value: observed, source: "unverified site prefill" } : undefined, observed));
-      if (field.required || prefilled) {
+      if (field.required || prefilled || highValueOptionalProseField(field)) {
         const options = field.type === "radio" ? await radioOptions(page, field.name) : field.options;
         unresolved.push({
           key: field.name || field.id || normalize(field.label),
@@ -773,7 +774,7 @@ export function unavailablePostingUrl(value) {
 }
 
 export async function automateApplication({ page, profile, opportunity, application, artifactsDirectory,
-  evidencePacket, draftProvider, markFinalActionStarted, authorizeFinal, commitFinal }) {
+  evidencePacket, draftProvider, claimReviewer, markFinalActionStarted, authorizeFinal, commitFinal }) {
   const attemptStarted = performance.now();
   const timings = { loadMs: 0, planFillMs: 0, draftMs: 0, transitionMs: 0, receiptMs: 0, steps: 0,
     fields: 0, draftCalls: 0 };
@@ -894,6 +895,10 @@ export async function automateApplication({ page, profile, opportunity, applicat
         status: "needs_research", message: "Official company context is needed for these questions",
         questions: research.map((field) => ({ fieldId: field.key, question: field.label }))
       }, step);
+      if (!claimReviewer) return pause({ status: "needs_human",
+        message: "New application prose requires an independent claim review",
+        requirements: [{ kind: "prose_claim_review", action: "manual_review",
+          message: "Review the answer against verified applicant and employer evidence" }] }, step);
       const questions = prose.map((field) => ({
         fieldId: field.key, question: field.label, maxLength: field.maxLength
       }));
@@ -907,7 +912,8 @@ export async function automateApplication({ page, profile, opportunity, applicat
       timings.draftMs += performance.now() - draftStarted;
       const wanted = new Map(questions.map((question) => [question.fieldId, question]));
       const allowedEvidence = new Set(["listing", "applicant:skills",
-        ...(evidencePacket?.research ?? []).map((_, index) => `research:${index}`)]);
+        ...(evidencePacket?.research ?? []).map((_, index) => `research:${index}`),
+        ...(evidencePacket?.applicant?.examples ?? []).map((item) => `applicant:example:${item.id}`)]);
       for (const draft of drafts) {
         const question = wanted.get(draft.fieldId);
         if (question && draft.insufficientEvidence === true) {
@@ -928,6 +934,28 @@ export async function automateApplication({ page, profile, opportunity, applicat
           return pause({ status: "needs_input", message: "A prose draft needs owner correction",
             requirements: [{ kind: "missing_answer", fields: [question?.fieldId ?? "prose"],
               message: question?.question ?? "Application prose", recommendation: "custom" }] }, step);
+        }
+        let review;
+        try { review = await claimReviewer.review({ question: question.question,
+          text: draft.text, evidenceIds: draft.evidenceIds, evidencePacket }); }
+        catch (error) { return pause({ status: "needs_human",
+          message: "Independent prose review could not finish",
+          requirements: [{ kind: "prose_claim_review", action: "manual_review",
+            message: String(error.message).slice(0, 300) }] }, step); }
+        if (companyQuestion(question.question) && review.companySpecific !== true) {
+          return pause({ status: "needs_research",
+            message: "A company-specific answer needs more current employer evidence",
+            questions: [{ fieldId: question.fieldId, question: question.question }] }, step);
+        }
+        if (review.supported !== true || review.responsive !== true
+          || !Array.isArray(review.claims) || !review.claims.length
+          || review.claims.some((claim) => claim.supported !== true
+            || typeof claim.text !== "string" || !claim.text.trim()
+            || !Array.isArray(claim.evidenceIds) || !claim.evidenceIds.length
+            || claim.evidenceIds.some((id) => !allowedEvidence.has(id)))) {
+          return pause({ status: "needs_input", message: "A prose claim lacks verified support",
+            requirements: [{ kind: "missing_answer", fields: [question.fieldId],
+              message: question.question, recommendation: "custom" }] }, step);
         }
         preparedAnswers[draft.fieldId] = draft.text.trim();
       }
@@ -987,7 +1015,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
       }
       return pause({
         status: "needs_input",
-        message: "Required application questions need answers",
+        message: "Application questions need answers",
         requirements: unresolved.map((field) => ({
           kind: field.type === "checkbox" ? "legal_attestation" : "missing_answer",
           message: field.problem ? `${field.label}: ${field.problem}` : field.label,

@@ -7,7 +7,8 @@ function fingerprint(value) {
 export function answerEvidenceFingerprint(profile) {
   return fingerprint({ contact: profile?.contact ?? null, links: profile?.links ?? null,
     skills: profile?.skills ?? null, preferences: profile?.preferences ?? null,
-    applicationAnswers: profile?.applicationAnswers ?? null, documents: profile?.documents ?? null });
+    applicationAnswers: profile?.applicationAnswers ?? null, documents: profile?.documents ?? null,
+    verifiedExamples: profile?.verifiedExamples ?? null });
 }
 
 export function approvedAnswerFingerprint(answer) {
@@ -30,6 +31,11 @@ export function reusableApprovedAnswer(answer, profile, opportunity, question, a
     || !answer.scope?.employer || !answer.reviewAfter || Date.parse(answer.reviewAfter) <= at
     || Date.parse(answer.approvedAt) > at) return false;
   const normalize = (value) => String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  // Employer-wide prose is often tied to a particular opening even when the
+  // employer name and question text stay the same. Reuse requires role scope.
+  const roleSpecificProse = /why (?:this|our|the) (?:company|role|team|position)|why (?:do you want to )?(?:work|join)|motivatio|interested|relevant experience|project|proud of/i
+    .test(String(question ?? ""));
+  if (roleSpecificProse && !answer.scope.role) return false;
   return normalize(answer.question) === normalize(question)
     && normalize(answer.scope.employer) === normalize(opportunity?.company)
     && (!answer.scope.role || normalize(answer.scope.role) === normalize(opportunity?.title));

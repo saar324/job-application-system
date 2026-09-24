@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -33,20 +34,34 @@ process.stdout.write(`${JSON.stringify({ campaignId: campaign.campaignId, status
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), "run-browser-source-campaign.js");
 const childArgs = [script, "--campaign", campaign.campaignId, "--catalog", catalogPath, "--server", server];
+let privatePlanDirectory;
+if (options.queryPlanFile) childArgs.push("--query-plan-file", path.resolve(options.queryPlanFile));
+else if (campaign.searchPlanSeed) {
+  privatePlanDirectory = await mkdtemp(path.join(os.tmpdir(), "job-search-plan-"));
+  const privatePlanFile = path.join(privatePlanDirectory, "plan.json");
+  await writeFile(privatePlanFile, JSON.stringify(campaign.searchPlanSeed), { mode: 0o600 });
+  childArgs.push("--query-plan-file", privatePlanFile);
+}
 if (options.tokenFile) childArgs.push("--token-file", path.resolve(options.tokenFile));
 if (options.headed) childArgs.push("--headed");
 if (options.query) childArgs.push("--query", options.query);
+if (options.searchCycle !== undefined) childArgs.push("--search-cycle", options.searchCycle);
 if (options.userDataDir) childArgs.push("--user-data-dir", path.resolve(options.userDataDir));
 if (options.cdpEndpoint) childArgs.push("--cdp-endpoint", options.cdpEndpoint);
 if (options.channel) childArgs.push("--channel", options.channel);
 for (const key of ["maxCandidates", "maxListingPages", "maxDetailPages", "maxRequests", "minDelayMs", "navigationTimeoutMs", "sourceTimeoutMs"]) {
   if (options[key] !== undefined) childArgs.push(`--${toKebab(key)}`, options[key]);
 }
-const exitCode = await new Promise((resolve, reject) => {
-  const child = spawn(process.execPath, childArgs, { stdio: "inherit",
-    env: { ...process.env, ...(token ? { JOB_SERVER_TOKEN: token } : {}) } });
-  child.once("error", reject); child.once("exit", (code) => resolve(code ?? 1));
-});
+let exitCode;
+try {
+  exitCode = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, childArgs, { stdio: "inherit",
+      env: { ...process.env, ...(token ? { JOB_SERVER_TOKEN: token } : {}) } });
+    child.once("error", reject); child.once("exit", (code) => resolve(code ?? 1));
+  });
+} finally {
+  if (privatePlanDirectory) await rm(privatePlanDirectory, { recursive: true, force: true });
+}
 if (exitCode !== 0) process.exit(exitCode);
 const finalResponse = await fetch(`${server}/v1/campaigns/${campaign.campaignId}`, {
   headers: { ...(token ? { authorization: `Bearer ${token}` } : {}) }, signal: AbortSignal.timeout(30_000)

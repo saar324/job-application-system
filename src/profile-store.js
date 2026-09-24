@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { nextStandingPolicy } from "./standing-policy.js";
 import { answerEvidenceFingerprint, approvedAnswerFingerprint } from "./approved-answers.js";
+import { verifiedExamplesForStorage } from "./verified-examples.js";
 
 const ALLOWED_SECTIONS = new Set([
   "displayName", "defaultMode", "contact", "links", "skills", "preferences", "documents", "applicationAnswers",
@@ -164,6 +165,27 @@ export class ProfileStore {
       else document.profiles.push(updated);
       await this.#write(document);
       return { count: approvedAnswers.length, approvedAt: approvedAt.toISOString() };
+    });
+    this.#pending = operation.catch(() => undefined);
+    return operation;
+  }
+
+  async setVerifiedExamples(profileId, records, identity) {
+    if (identity?.profileId !== profileId || !identity?.roles?.includes("owner")
+      || typeof identity.actorId !== "string" || !identity.actorId.trim()) {
+      throw Object.assign(new Error("owner authority required for verified examples"), { status: 403 });
+    }
+    const operation = this.#pending.then(async () => {
+      const verifiedExamples = verifiedExamplesForStorage(records, identity);
+      const document = await this.#read();
+      const index = document.profiles.findIndex((profile) => profile.id === profileId);
+      const current = index >= 0 ? document.profiles[index] : { id: profileId };
+      const updated = { ...current, verifiedExamples };
+      if (index >= 0) document.profiles[index] = updated;
+      else document.profiles.push(updated);
+      await this.#write(document);
+      return { count: verifiedExamples.length,
+        verifiedAt: verifiedExamples[0]?.verifiedAt ?? new Date().toISOString() };
     });
     this.#pending = operation.catch(() => undefined);
     return operation;

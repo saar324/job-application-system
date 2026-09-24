@@ -5,7 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import { SimulationAdapter } from "../src/adapters/simulation.js";
 import { DiscoveryService } from "../src/discovery/service.js";
-import { handledRoleIndex, isHandledRole, knownRoleIndex, roleKeys } from "../src/discovery/handled-roles.js";
+import { handledRoleIndex, isHandledRole, knownRoleIndex, relatedApplicationRole,
+  roleKeys } from "../src/discovery/handled-roles.js";
 import { ProfileStore } from "../src/profile-store.js";
 import { ApplicationService } from "../src/service.js";
 import { JsonStore } from "../src/store.js";
@@ -24,11 +25,38 @@ test("ATS role identities match direct application and feed URLs without trackin
     roleKeys({ source: "ashby", externalId: "example:11111111-1111-4111-8111-111111111111" })), false);
   assert.ok(isHandledRole({ applyUrl: "https://careers.example.test/roles/engineer/apply?utm_source=board" },
     roleKeys({ applyUrl: "https://careers.example.test/roles/engineer" })));
-  assert.ok(isHandledRole({ company: "Lemon.io", title: "Senior React Full-stack Developer",
+  assert.equal(isHandledRole({ company: "Lemon.io", title: "Senior React Full-stack Developer",
     applyUrl: "https://board-two.example.test/jobs/44" }, roleKeys({ company: "Lemon.io",
-    title: "Senior React Full-stack Developer", applyUrl: "https://board-one.example.test/jobs/22" })));
+    title: "Senior React Full-stack Developer", applyUrl: "https://board-one.example.test/jobs/22" })), false);
   assert.equal(isHandledRole({ company: "Lemon.io", title: "Senior ML Developer" },
     roleKeys({ company: "Lemon.io", title: "Senior React Full-stack Developer" })), false);
+});
+
+test("same title is a review signal unless distinct official ATS IDs prove separate openings", () => {
+  const previous = { id: "old", profileId: "owner", company: "Example", title: "Engineer",
+    applyUrl: "https://board.example.test/jobs/old" };
+  const state = { opportunities: [previous], applications: [{ id: "application",
+    profileId: "owner", opportunityId: "old", status: "submitted" }] };
+  assert.equal(relatedApplicationRole(state, "owner", { company: "Example", title: "Engineer",
+    applyUrl: "https://other.example.test/jobs/new" }), "possible_duplicate");
+  assert.equal(relatedApplicationRole(state, "other", { company: "Example", title: "Engineer",
+    applyUrl: "https://other.example.test/jobs/new" }), null);
+  state.applications[0].status = "failed";
+  assert.equal(relatedApplicationRole(state, "owner", { company: "Example", title: "Engineer",
+    applyUrl: "https://board.example.test/jobs/old" }), null,
+  "a failed pre-submit attempt must remain retryable");
+  state.applications[0].status = "submitted";
+  state.opportunities[0].applyUrl = "https://jobs.ashbyhq.com/example/11111111-1111-4111-8111-111111111111";
+  assert.equal(relatedApplicationRole(state, "owner", { company: "Example", title: "Engineer",
+    applyUrl: "https://jobs.ashbyhq.com/example/22222222-2222-4222-8222-222222222222" }), null);
+  assert.equal(relatedApplicationRole(state, "owner", { company: "Example", title: "Engineer",
+    applyUrl: "https://jobs.ashbyhq.com/example/11111111-1111-4111-8111-111111111111/application" }),
+  "same_role");
+  const distinct = { company: "Example", title: "Engineer",
+    applyUrl: "https://jobs.ashbyhq.com/example/22222222-2222-4222-8222-222222222222",
+    listingUrl: "https://board.example.test/jobs/old" };
+  assert.equal(isHandledRole(distinct, knownRoleIndex(state, "owner")), false,
+    "a shared secondary listing URL must not hide a distinct official ATS role");
 });
 
 test("only applications for the current profile enter the handled index", () => {
@@ -57,6 +85,54 @@ test("a receipt filters an employer role found through another source", () => {
   assert.equal(isHandledRole(employerRole, knownRoleIndex(state, "b")), false);
 });
 
+test("unresolved listings stay retriable and a verified destination updates the same role", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-pending-discovery-"));
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  const config = { defaultMode: "full_time", modes: { full_time: { minimumScore: 0 } } };
+  const service = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const identity = { actorId: "owner", profileId: "owner" };
+  const pending = await service.addOpportunity({ source: "board", externalId: "role-1",
+    title: "Platform Engineer", company: "Example", score: 80,
+    applyUrl: "https://board.example.test/jobs/role-1",
+    listingUrl: "https://board.example.test/jobs/role-1",
+    applicationDestinationPending: true }, identity, { serverVerifiedDiscovery: true });
+  assert.equal(isHandledRole(pending, knownRoleIndex(store.snapshot(), "owner")), false);
+  const unverifiedRetry = await service.addOpportunity({ source: "board", externalId: "role-1",
+    title: "Platform Engineer", company: "Example", score: 80,
+    applyUrl: "https://careers.example.test/jobs/role-1/apply",
+    listingUrl: "https://board.example.test/jobs/role-1",
+    applicationDestinationPending: false, applicationDestinationVerified: false },
+  identity, { serverVerifiedDiscovery: true });
+  assert.equal(unverifiedRetry.id, pending.id);
+  assert.equal(unverifiedRetry.applicationDestinationPending, true);
+  assert.equal(isHandledRole(unverifiedRetry, knownRoleIndex(store.snapshot(), "owner")), false);
+  const resolved = await service.addOpportunity({ source: "board", externalId: "role-1",
+    title: "Platform Engineer", company: "Example", score: 80,
+    applyUrl: "https://careers.example.test/jobs/role-1/apply",
+    listingUrl: "https://board.example.test/jobs/role-1",
+    applicationDestinationPending: false, applicationDestinationVerified: true },
+  identity, { serverVerifiedDiscovery: true });
+  assert.equal(resolved.id, pending.id);
+  assert.equal(resolved.applicationDestinationPending, false);
+  assert.equal(resolved.applyUrl, "https://careers.example.test/jobs/role-1/apply");
+  assert.equal(isHandledRole(resolved, knownRoleIndex(store.snapshot(), "owner")), true);
+  assert.equal(store.snapshot().opportunities.length, 1);
+});
+
+test("an observed direct URL without employer verification remains retriable", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-unverified-discovery-"));
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  const config = { defaultMode: "full_time", modes: { full_time: { minimumScore: 0 } } };
+  const service = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const identity = { actorId: "owner", profileId: "owner" };
+  const lead = await service.addOpportunity({ source: "board", externalId: "role-2",
+    title: "Platform Engineer", company: "Example",
+    applyUrl: "https://careers.example.test/jobs/role-2/apply",
+    applicationDestinationPending: false, applicationDestinationVerified: false }, identity,
+  { serverVerifiedDiscovery: true });
+  assert.equal(isHandledRole(lead, knownRoleIndex(store.snapshot(), "owner")), false);
+});
+
 test("official board search excludes handled and previously seen roles before applying the result limit", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-handled-discovery-"));
   const profiles = await new ProfileStore(path.join(directory, "profiles.json"), { allowMissing: true }).init();
@@ -65,6 +141,7 @@ test("official board search excludes handled and previously seen roles before ap
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   await store.mutate((state) => {
     state.opportunities.push({ id: "old", profileId: "owner", source: "direct",
+      company: "Example", title: "Engineer",
       applyUrl: "https://jobs.ashbyhq.com/example/11111111-1111-4111-8111-111111111111/application" });
     state.applications.push({ id: "old-application", profileId: "owner", opportunityId: "old", status: "submitted" });
   });
@@ -75,7 +152,7 @@ test("official board search excludes handled and previously seen roles before ap
   const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
   const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
   const fetchImpl = async () => new Response(JSON.stringify({ jobs: ids.map((id, index) => ({
-    id, title: `Engineer ${index + 1}`, isRemote: true, location: "Europe, Remote",
+    id, title: "Engineer", isRemote: true, location: "Europe, Remote",
     applyUrl: `https://jobs.ashbyhq.com/example/${id}/application`,
     jobUrl: `https://jobs.ashbyhq.com/example/${id}`,
     descriptionPlain: "TypeScript engineering", publishedAt: `2026-09-${20 - index}`

@@ -31,35 +31,34 @@ test("full-time discovery scores, ingests, and applies to qualifying jobs", asyn
     skills: ["TypeScript", "Node.js"],
     preferences: {
       locations: ["remote"],
-      fullTime: { jobTitles: ["Senior Engineer"], automatedDiscoverySources: ["remoteok"] }
+      fullTime: { jobTitles: ["Senior Engineer"], automatedDiscoverySources: ["ashby"] }
     }
   });
   const config = {
     defaultMode: "full_time",
-    discovery: { limitPerSource: 10 },
+    discovery: { limitPerSource: 10, sourceOptions: { ashby: {
+      boards: [{ slug: "sample", company: "Example" }] } } },
     modes: {
       full_time: {
         minimumScore: 75, dailyApplicationCap: 8, autoApply: true,
-        autoApplyDiscovered: true, sources: ["jobicy"], requireConfirmationFor: []
+        autoApplyDiscovered: true, sources: ["ashby"], requireConfirmationFor: []
       }
     }
   };
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
-  const fetchImpl = async () => new Response(JSON.stringify([
-    { legal: "metadata" },
-    {
-      id: "123", position: "Senior Node.js Engineer", company: "Example",
-      description: "TypeScript Node.js platform", tags: ["TypeScript", "Node.js"],
-      location: "Worldwide", date: new Date().toISOString(),
-      url: "https://remoteok.com/jobs/123", apply_url: "https://careers.example.test/apply/123"
-    }
-  ]), { status: 200, headers: { "content-type": "application/json" } });
+  const roleId = "11111111-1111-4111-8111-111111111111";
+  const applyUrl = `https://jobs.ashbyhq.com/sample/${roleId}/application`;
+  const fetchImpl = async () => new Response(JSON.stringify({ jobs: [{
+    id: roleId, title: "Senior Node.js Engineer", isRemote: true,
+    descriptionPlain: "TypeScript Node.js platform", location: "Worldwide",
+    applyUrl, jobUrl: `https://jobs.ashbyhq.com/sample/${roleId}`
+  }] }), { status: 200, headers: { "content-type": "application/json" } });
   const discovery = new DiscoveryService({ applicationService, profiles, config, fetchImpl });
   const result = await discovery.scan({}, { actorId: "applicant-one-openclaw", profileId: "applicant-one" });
 
   assert.equal(result.found, 1);
-  assert.deepEqual(result.sources, ["remoteok"]);
+  assert.deepEqual(result.sources, ["ashby"]);
   assert.equal(result.qualifying, 1);
   assert.equal(result.items[0].application.status, "queued");
   await applicationService.waitForIdle();
@@ -385,6 +384,20 @@ test("explicitly excluded job locations are rejected", () => {
   assert.match(scored.scoreDetails.hardExclusion, /excluded location Japan/);
 });
 
+test("a remote role with an accepted hiring region survives another excluded region", () => {
+  const profile = { skills: ["Node.js"], preferences: { fullTime: {
+    jobTitles: ["Example Specialist"], remoteOnly: true,
+    allowedLocations: ["Portugal", "Europe"], excludedLocations: ["Japan"]
+  } } };
+  const base = { title: "Example Specialist", description: "Node.js", remote: true };
+  const mixed = scoreOpportunity({ ...base, location: "Europe, Japan" }, profile, "full_time");
+  assert.equal(mixed.scoreDetails.hardExclusion, undefined);
+  const excludedOnly = scoreOpportunity({ ...base, location: "Remote — Japan" }, profile, "full_time");
+  assert.match(excludedOnly.scoreDetails.hardExclusion, /excluded location Japan/);
+  const otherCountries = scoreOpportunity({ ...base, location: "Japan, Canada" }, profile, "full_time");
+  assert.match(otherCountries.scoreDetails.hardExclusion, /excluded location Japan/);
+});
+
 test("known employment and compensation conflicts cannot silently auto-apply", () => {
   const profile = {
     skills: ["Node.js"],
@@ -572,9 +585,10 @@ test("Himalayas listings wait for an employer application URL before auto-apply"
   assert.equal(result.qualifying, 2);
   assert.equal(result.items[0].application, undefined);
   assert.equal(result.items[0].applicationBlockedBySource, "employer_application_url_required");
-  assert.equal(result.items[1].application.status, "queued");
+  assert.equal(result.items[1].application, undefined);
+  assert.equal(result.items[1].applicationBlockedBySource, "employer_application_url_required");
   await applicationService.waitForIdle();
-  assert.equal(applicationService.list("applications", "applicant-one").length, 1);
+  assert.equal(applicationService.list("applications", "applicant-one").length, 0);
 });
 
 test("public boards distinguish board listings from employer application destinations", async () => {

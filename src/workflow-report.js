@@ -51,6 +51,16 @@ export function buildWorkflowReport(state, campaign, at = new Date().toISOString
   const simulated = applications.filter((item) => item.status === "submitted"
     && item.receipt?.simulated === true).length;
   const sourceYield = mergeSourceYield(scan?.sourceYield ?? [], sourceCoverage.scans ?? []);
+  const health = sourceCoverage.health ?? [];
+  const coverage = { plannedSources: sourceCoverage.plannedCount ?? health.length,
+    attemptedSources: health.filter((row) => Number(row.requestsMade ?? 0) > 0).length,
+    exhaustedSources: health.filter((row) => row.exhausted === true).length,
+    partialSources: health.filter((row) => row.completed && row.exhausted !== true
+      && !["manual", "cooldown"].includes(row.status)).length,
+    manualSources: health.filter((row) => row.status === "manual").length,
+    cooldownSources: health.filter((row) => row.status === "cooldown").length,
+    exhaustive: health.length > 0 && health.length === (sourceCoverage.plannedCount ?? health.length)
+      && health.every((row) => row.exhausted === true) };
   const handledFiltered = Number(scan?.handledFiltered
     ?? (scan?.sourceYield ?? []).reduce((sum, item) => sum + Number(item.handledFiltered ?? 0), 0))
     + sourceCoverage.scans.reduce((sum, item) => sum + Number(item.handledFiltered ?? 0), 0);
@@ -58,6 +68,32 @@ export function buildWorkflowReport(state, campaign, at = new Date().toISOString
     ...sourceCoverage.scans.flatMap((item) => item.opportunityIds ?? [])]);
   const opportunities = new Map((state.opportunities ?? []).filter((item) => item.profileId === campaign.profileId)
     .map((item) => [item.id, item]));
+  const attemptedApplicationIds = new Set(attempts.map((item) => item.applicationId));
+  const verifiedApplicationIds = new Set(verified.map((item) => item.id));
+  const applicationOutcomesBySource = new Map();
+  const reportedSourceIds = new Set(sourceYield.map((row) => row.sourceId));
+  const unattributedOutcomes = { queuedApplications: 0, attemptedApplications: 0,
+    verifiedReceipts: 0 };
+  for (const application of applications) {
+    const opportunity = opportunities.get(application.opportunityId);
+    const sourceId = opportunity?.discoverySource ?? opportunity?.source;
+    const attributed = sourceId && reportedSourceIds.has(sourceId);
+    const counts = attributed ? (applicationOutcomesBySource.get(sourceId)
+      ?? { queuedApplications: 0, attemptedApplications: 0, verifiedReceipts: 0 })
+      : unattributedOutcomes;
+    counts.queuedApplications += 1;
+    if (attemptedApplicationIds.has(application.id)) counts.attemptedApplications += 1;
+    if (verifiedApplicationIds.has(application.id)) counts.verifiedReceipts += 1;
+    if (attributed) applicationOutcomesBySource.set(sourceId, counts);
+  }
+  // Join durable application outcomes to the discovery source once per
+  // application, even if several scan batches reported the same source.
+  const sourceFunnel = sourceYield.map((row) => ({ ...row,
+    ...(applicationOutcomesBySource.get(row.sourceId)
+      ?? { queuedApplications: 0, attemptedApplications: 0, verifiedReceipts: 0 }) }));
+  const receiptLatencies = verified.map((item) =>
+    Date.parse(item.receipt.submittedAt) - Date.parse(opportunities.get(item.opportunityId)?.createdAt))
+    .filter((value) => Number.isFinite(value) && value >= 0);
   const preloadedCandidates = [...selected].filter((id) => {
     const created = opportunities.get(id)?.createdAt;
     return !created || Date.parse(created) < Date.parse(startedAt);
@@ -84,7 +120,12 @@ export function buildWorkflowReport(state, campaign, at = new Date().toISOString
   const maintenanceSamples = [...sourceMaintenance.map((item) => ({
     durationMs: item.details?.durationMs, requests: item.details?.requestsMade })),
   ...browserReserveCampaigns];
-  const hasAcquisition = Boolean(scan) && sourceCoverage.coveredCount > 0;
+  // A supplied/preselected lead can create a campaign scan and source report
+  // without this campaign making a discovery request. Such a run must not be
+  // presented as a fresh search-to-receipt timing sample.
+  const hasAcquisition = Boolean(scan) && sourceCoverage.coveredCount > 0
+    && [...(scan?.sourceYield ?? []), ...(sourceCoverage.scans ?? [])]
+      .some((row) => Number(row.requestsMade ?? 0) > 0);
   const measurementKind = hasAcquisition && preloadedCandidates === 0
     ? "fresh_campaign" : "preloaded_or_incomplete";
   const stageSummary = Object.fromEntries([...STAGES].map((stage) => {
@@ -92,7 +133,8 @@ export function buildWorkflowReport(state, campaign, at = new Date().toISOString
     const samples = rows.map((event) => event.details.durationMs)
       .filter((value) => Number.isFinite(value));
     return [stage, { events: rows.length, measuredMs: samples.length
-      ? samples.reduce((sum, value) => sum + value, 0) : null }];
+      ? samples.reduce((sum, value) => sum + value, 0) : null,
+    samples: samples.length, medianMs: median(samples), p95Ms: nearestRank(samples, 0.95) }];
   }));
   const draftSamples = attempts.map((item) => item.workerMetrics?.draftCalls)
     .filter((value) => Number.isInteger(value) && value >= 0);
@@ -118,11 +160,14 @@ export function buildWorkflowReport(state, campaign, at = new Date().toISOString
     counts: { newVerified: verified.length, manualReceipts, simulated,
       attemptedApplications: new Set(attempts.map((item) => item.applicationId)).size,
       attempts: attempts.length, handledFiltered,
+      fitReviewCandidates: Array.isArray(scan?.fitReviewCandidates)
+        ? scan.fitReviewCandidates.length : null,
       blocked: applications.filter((item) => ["waiting_confirmation", "waiting_research"].includes(item.status)).length,
       skipped: applications.filter((item) => item.status === "skipped").length,
       rejected: applications.filter((item) => item.status === "rejected").length,
       failed: applications.filter((item) => item.status === "failed").length },
-    sourceYield, sourceHealth: sourceCoverage.health ?? [], stages: stageSummary,
+    sourceYield: sourceFunnel, unattributedOutcomes,
+    sourceHealth: health, coverage, stages: stageSummary,
     cost: { modelCalls: attempts.length && draftSamples.length === attempts.length
       ? draftSamples.reduce((sum, value) => sum + value, 0) : null,
       observedModelCalls: draftSamples.length ? draftSamples.reduce((sum, value) => sum + value, 0) : null,
@@ -135,8 +180,23 @@ export function buildWorkflowReport(state, campaign, at = new Date().toISOString
     verifiedReceiptRatePerHour: verified.length && wallClockMs > 0
       ? verified.length * 3_600_000 / wallClockMs : null,
     wallMsPerNewVerified: verified.length ? wallClockMs / verified.length : null,
+    perRoleLatency: { samples: receiptLatencies.length,
+      medianMs: median(receiptLatencies), p95Ms: nearestRank(receiptLatencies, 0.95) },
     target100InOneHourProven: false
   };
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function nearestRank(values, percentile) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.ceil(sorted.length * percentile) - 1];
 }
 
 function mergeSourceYield(primary, fallbacks) {
@@ -145,8 +205,14 @@ function mergeSourceYield(primary, fallbacks) {
     const sourceId = row.sourceId;
     if (typeof sourceId !== "string") continue;
     const current = bySource.get(sourceId) ?? { sourceId, found: null, qualifying: null,
-      excluded: null, handledFiltered: null, destinationPending: null, selected: null };
-    for (const key of ["found", "qualifying", "excluded", "handledFiltered", "destinationPending", "selected"]) {
+      excluded: null, handledFiltered: null, destinationPending: null, selected: null,
+      retryDeferred: null,
+      rawRowsObserved: null, adapterPrescreenRejected: null, dedupFiltered: null,
+      scored: null, pagesVisited: null, requestsMade: null, elapsedMs: null };
+    for (const key of ["found", "qualifying", "excluded", "handledFiltered", "destinationPending",
+      "retryDeferred",
+      "selected", "rawRowsObserved", "adapterPrescreenRejected", "dedupFiltered", "scored",
+      "pagesVisited", "requestsMade", "elapsedMs"]) {
       if (Number.isFinite(row[key])) current[key] = (current[key] ?? 0) + row[key];
     }
     bySource.set(sourceId, current);

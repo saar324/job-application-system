@@ -10,6 +10,15 @@ import { ApplicationService } from "../src/service.js";
 import { JsonStore } from "../src/store.js";
 
 const identity = { actorId: "campaign-owner", profileId: "campaign-owner" };
+const officialUrl = (board, index) => `https://jobs.ashbyhq.com/${board}/00000000-0000-4000-8000-${
+  index.toString(16).padStart(12, "0")}/application`;
+const officialBoard = (board) => ({ companyName: `Board ${board}`, jobs: Array.from({ length: 20 }, (_, index) => ({
+  id: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
+  title: `Senior Engineer ${board}-${index}`, isRemote: true, location: "Worldwide",
+  employmentType: "Full-Time", publishedAt: new Date(Date.now() - index * 1000).toISOString(),
+  descriptionPlain: board === "two" ? "TypeScript Node.js PostgreSQL" : "engineering",
+  applyUrl: officialUrl(board, index), jobUrl: officialUrl(board, index)
+})) });
 
 test("campaign scans once, prepares a reserve sequentially, and submits only the exact approved target", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-campaign-"));
@@ -20,13 +29,14 @@ test("campaign scans once, prepares a reserve sequentially, and submits only the
     documents: { resume: "/secure/resume.pdf" },
     skills: ["TypeScript", "Node.js"],
     preferences: { locations: ["Remote"], fullTime: {
-      jobTitles: ["Senior Engineer"], automatedDiscoverySources: ["remoteok"], submissionApproval: "automatic"
+      jobTitles: ["Senior Engineer"], automatedDiscoverySources: ["ashby"], submissionApproval: "automatic"
     } }
   });
   const config = { defaultMode: "full_time", execution: { concurrency: 4 },
-    discovery: { limitPerSource: 10 }, modes: { full_time: {
+    discovery: { limitPerSource: 10, sourceOptions: { ashby: { boards: [
+      { slug: "one", company: "Company One" }] } } }, modes: { full_time: {
       minimumScore: 0, autoApply: true, autoApplyDiscovered: false, dailyApplicationCap: 20,
-      submissionApproval: "automatic", sources: ["remoteok"], requireConfirmationFor: []
+      submissionApproval: "automatic", sources: ["ashby"], requireConfirmationFor: []
     } } };
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   let active = 0; let maximumActive = 0;
@@ -48,12 +58,7 @@ test("campaign scans once, prepares a reserve sequentially, and submits only the
   const discovery = new DiscoveryService({ applicationService: service, profiles, config,
     fetchImpl: async () => {
       fetches += 1;
-      return new Response(JSON.stringify([{ legal: "metadata" }, ...["one", "two", "three"].map((id) => ({
-        id, position: `Senior Engineer ${id}`, company: `Company ${id}`,
-        description: "TypeScript Node.js", tags: ["TypeScript", "Node.js"], location: "Worldwide",
-        date: new Date().toISOString(), url: `https://remoteok.com/jobs/${id}`,
-        apply_url: `https://${id}.employer.example.test/apply`
-      }))]));
+      return new Response(JSON.stringify(officialBoard("one")));
     } });
 
   const started = await discovery.startCampaign({ target: 2, reserve: 1 }, identity);
@@ -147,9 +152,15 @@ test("campaign searches every fallback source, caps each pool at ten, then ranks
   } };
   const service = new ApplicationService({ store, config, adapter, profiles });
   const discovery = new DiscoveryService({ applicationService: service, profiles, config,
-    fetchImpl: async () => new Response(JSON.stringify([{ legal: "metadata" }])) });
+    fetchImpl: async (url) => String(url).includes("api.ashbyhq.com")
+      ? new Response(JSON.stringify(officialBoard(String(url).split("/").at(-1))))
+      : new Response(JSON.stringify([{ legal: "metadata" }])) });
   const previouslySeen = await service.addOpportunity({ source: "old", title: "Senior Engineer Seen",
     company: "Seen Co", applyUrl: "https://seen.example.test/jobs/1", location: "Worldwide", remote: true }, identity);
+  await store.mutate((state) => state.applications.push({ id: "handled-role", profileId: identity.profileId,
+    opportunityId: previouslySeen.id, status: "submitted", createdAt: new Date().toISOString(),
+    receipt: {
+      submittedAt: new Date().toISOString(), finalUrl: previouslySeen.applyUrl } }));
 
   const started = await discovery.startCampaign({ target: 2, reserve: 0,
     fallbackSources: ["board_one", "board_two"] }, identity);
@@ -160,7 +171,7 @@ test("campaign searches every fallback source, caps each pool at ten, then ranks
     company: `Board ${board} ${index}`, description: board === "two" ? "TypeScript Node.js PostgreSQL" : "engineering",
     location: "Worldwide", remote: true, employmentType: "full_time",
     postedAt: new Date(Date.now() - index * 1000).toISOString(),
-    applyUrl: `https://${board}.example.test/jobs/${index}`, applicationDestinationVerified: true });
+    applyUrl: officialUrl(board, index), applicationDestinationVerified: true });
   const first = await discovery.addCampaignSourceResults(started.campaignId, {
     sourceId: "board_one", completed: false, pagesVisited: 1, requestsMade: 7,
     items: [{ ...make(99), applyUrl: previouslySeen.applyUrl },
@@ -173,8 +184,7 @@ test("campaign searches every fallback source, caps each pool at ten, then ranks
   assert.equal(first.sourceCoverage.scans[0].selected, 6);
   assert.equal(first.sourceCoverage.scans[0].handledFiltered, 1);
   assert.equal(first.sourceCoverage.scans[0].destinationPending, 1);
-  assert.ok(first.sourceCoverage.scans[0].errors.some((item) =>
-    item.error === "verified HTTPS employer application URL required"));
+  assert.equal(first.sourceCoverage.scans[0].pendingOpportunityIds.length, 1);
   assert.deepEqual(first.sourceCoverage.scans[0].exclusionReasons,
     [{ reason: "profile requires a remote role", count: 1 }]);
   const second = await discovery.addCampaignSourceResults(started.campaignId, {
@@ -227,14 +237,19 @@ test("a held campaign application is replaced from the durable pool in one seque
   } };
   const service = new ApplicationService({ store, config, profiles, adapter });
   const discovery = new DiscoveryService({ applicationService: service, profiles, config,
-    fetchImpl: async () => new Response(JSON.stringify({ jobs: [] })) });
+    fetchImpl: async () => new Response(JSON.stringify({ companyName: "Company", jobs: [1, 2].map((number) => ({
+      id: `00000000-0000-4000-8000-${number.toString(16).padStart(12, "0")}`,
+      title: `Senior Engineer ${number}`, isRemote: true, location: "Remote",
+      descriptionPlain: "Engineering TypeScript",
+      applyUrl: officialUrl("company", number), jobUrl: officialUrl("company", number)
+    })) })) });
   const campaign = await discovery.startCampaign({ target: 1, reserve: 0, sources: [],
     fallbackSources: ["board_one"] }, identity);
   await discovery.addCampaignSourceResults(campaign.campaignId, { sourceId: "board_one", completed: true,
     items: [1, 2].map((number) => ({ title: `Senior Engineer ${number}`, company: `Company ${number}`,
       location: "Remote", remote: true, description: "Engineering TypeScript",
       listingUrl: `https://board.example.test/jobs/${number}`,
-      applyUrl: `https://company${number}.example.test/apply`, applicationDestinationVerified: true }))
+      applyUrl: officialUrl("company", number), applicationDestinationVerified: true }))
   }, identity);
   await service.waitForIdle();
   const current = service.campaignStatus(campaign.campaignId, identity.profileId);
