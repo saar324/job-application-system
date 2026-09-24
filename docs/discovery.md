@@ -27,7 +27,9 @@ Mode-level `sources` chooses enabled adapter IDs. ATS board selections live unde
 
 Some providers need deployment-wide API credentials. The server reads them only from its process environment (`.env`, the Compose `env_file`, or the systemd `EnvironmentFile`) and passes them to the adapter. They are never accepted from config JSON, profiles, or MCP or HTTP requests, and they are redacted from scan errors, audit events, and source descriptors. If a selected keyed source has no credentials, the scan reports `source_not_configured` for it without a network request, and the other sources run normally.
 
-Each keyed source has a durable, deployment-wide request ledger stored in the SQLite database (`source_quota_usage` and `source_quota_holds`). Every request is reserved against all of the provider's UTC calendar windows before it is sent, so concurrent scans and restarts cannot exceed the allowance. When a window is full, the source returns a `quota_exhausted` error with the `window` and `resetAt`. An HTTP 429 response puts the source into the standard six-hour `rate_limited` cooldown. The source descriptor shows `configured`, the remaining allowance per window, and any active cooldown.
+Each keyed source has a durable, deployment-wide request ledger stored in the SQLite database (`source_quota_usage` and `source_quota_holds`). Every request is reserved against all of the provider's UTC calendar windows before it is sent, so concurrent scans and restarts cannot exceed the allowance. When a window is full, the source returns a `quota_exhausted` error with the `window` and `resetAt`. A full `second` window is waited out instead of refused. An HTTP 429 response puts the source into the standard six-hour `rate_limited` cooldown. The source descriptor shows `configured`, the remaining allowance per window, and any active cooldown.
+
+A provider that bills per result rather than per request uses a `credits_*` window. The adapter reserves the most it could be charged, capped at what remains, sizes its request to the amount granted, and then settles the reservation with the provider's reported charge.
 
 ### Adzuna
 
@@ -60,6 +62,49 @@ Agents can use the provider filters `what`, `what_or`, `what_exclude`, `where`, 
 Adzuna results use the external ID `{country}:{id}`. Their descriptions are snippets, marked with the `description_snippet_only` uncertainty. Each result's `redirect_url` is both the listing URL and a pending application URL, marked `employer_application_url_unverified`, so no application is prepared until an employer or official ATS destination is verified. A salary with `salary_is_predicted` is stored only as `compensationEstimate` evidence and does not count as stated pay for compensation checks.
 
 Adzuna's terms allow personal research use. Anything published from its data must be attributed to Adzuna, as those terms require. The source descriptor includes an `attribution` label for that purpose.
+
+### JobsPipe
+
+JobsPipe's Jobs API aggregates postings from ATSs and job boards into one schema, with full descriptions, an active or closed status, verification timestamps, seniority, visa-sponsorship stance and a ghost-likelihood score. To enable it:
+
+1. Sign in at <https://jobspipe.dev/dashboard>, open Settings, then API Keys, and generate a key. It is shown once. The Free plan needs no payment.
+2. Set `JOBSPIPE_API_KEY` in the server environment.
+3. Optionally add private options, and add `jobspipe` to a mode's `sources`:
+
+```json
+{
+  "discovery": {
+    "sourceOptions": {
+      "jobspipe": {
+        "plan": "free",
+        "monthlyCredits": 800,
+        "perSecond": 2,
+        "maxPages": 2,
+        "excludeSources": ["linkedin"],
+        "defaultCountries": ["REPLACE_WITH_COUNTRY_CODES"]
+      }
+    }
+  }
+}
+```
+
+- `plan` declares the account's plan: `free` (the default: 2 requests a second, 1,000 credits a month, pages of 25), `builder` or `growth` (10 a second, 25,000 or 100,000 credits, pages of 100), or `scale` or `business` (50 a second, 300,000 or 500,000 credits). `monthlyCredits` and `perSecond` can lower the plan's allowance but never raise it.
+- `maxPages` is the number of cursor pages per query, from 1 to 10. It defaults to 2.
+- `excludeSources` defaults to `["linkedin"]`, so postings JobsPipe found on LinkedIn are excluded. Removing `linkedin` is an explicit owner decision. Agents can add exclusions with `source_not` but cannot remove these.
+- `defaultCountries` is sent as `job_country_code_or` when a query has none.
+- Any other key, including a credential, is rejected at startup.
+
+**Credits.** JobsPipe bills one credit per distinct job returned in a UTC calendar month. Repeats and empty results are free, a 400 response costs one credit, and 502 and 504 responses are refunded. Before each request, the ledger reserves at most the remaining monthly credits, and `limit` is lowered to the amount granted. When no credits remain, the source reports `quota_exhausted` without a request. After the response, the ledger records `metadata.credits_charged`. If the outcome of a request is unknown, for example after a network error, the whole reservation is kept. The descriptor's `quota.windows.credits_month` shows the credits used and remaining.
+
+**Errors.** A 401 reports `key_rejected` and pauses the source until a different key is configured. A 402 reports `quota_exhausted` and pauses it until the next UTC month. A 429 applies the `rate_limited` cooldown. A 502 or 504 reports a retryable `provider_timeout` without a pause.
+
+Agents can use the filters `job_title_or`, `job_title_not`, `description_or`, `description_not`, `job_country_code_or`, `job_location_or`, `remote`, `work_arrangement_or`, `posted_at_max_age_days`, `employment_type_or`, `job_seniority_or`, `min_salary_usd`, `visa_sponsorship_or`, `language_or`, `company_name_or`, `max_ghost_score`, `employer_type_not`, and `source_not`. The `_or` and `_not` filters take arrays. Any other filter, such as `has_recruiter_email`, is rejected before a request. Every search sends `status: "active"` and, unless the query sets it, `posted_at_max_age_days: 7`. Without `job_title_or`, the adapter searches for the profile's preferred titles, and with no titles it makes no request.
+
+Results use the JobsPipe `id` as the external ID and keep the posting status, verification and last-seen times, expiry, ghost score, visa-sponsorship stance, seniority, employment types, country codes and origin sources in `postingEvidence`. Only a stated salary with its currency counts as compensation; corpus estimates are stored as `compensationEstimate` evidence. Recruiter emails, applicant counts and company financials are dropped in the adapter and never stored. Closed or expired results are dropped, and an opportunity whose expiry passes before preparation is not given an application; the reason is recorded in the `application.blocked` audit event.
+
+When a result's URL is a Greenhouse, Lever or Ashby job URL, the scan verifies it against the official ATS feed and stores the official role, with `provenance.discoveredVia: "jobspipe"`. If verification fails, the result stays `applicationDestinationPending` with an `official_ats_*` uncertainty. Other results are pending until an employer destination is verified.
+
+JobsPipe's terms prohibit redistributing the data in bulk or as a competing dataset, feed or API. Anyone who displays postings must keep the link to the original posting. The account holder is the controller of any personal data received.
 
 The installed skill's `references/sources.json` is intentionally empty. A deployment can maintain a private copy with its own browser sources, regions, screening rules, and priorities.
 
@@ -108,4 +153,4 @@ Unknown compensation is never invented. Hard exclusions and thresholds come from
 
 Create a module in `src/discovery/sources/` that exports an object with an `id` and async `search` function. Return normalized opportunities containing at least `title`, `company`, and `applyUrl`, register the adapter in `src/discovery/service.js`, and add isolated regression tests. Follow the provider's current terms and preserve source links.
 
-A keyed adapter receives `credentials` in `search()` and must not read `process.env`. Add its environment names to `SOURCE_CREDENTIAL_ENV` in `src/discovery/source-credentials.js` (the systemd environment split picks them up automatically) and its provider allowance to `SOURCE_QUOTA_DEFAULTS` in `src/discovery/source-quota.js`. The service then handles `source_not_configured`, quota reservation, 429 cooldowns, and error redaction.
+A keyed adapter receives `credentials` in `search()` and must not read `process.env`. Add its environment names to `SOURCE_CREDENTIAL_ENV` in `src/discovery/source-credentials.js` (the systemd environment split picks them up automatically) and its provider allowance to `SOURCE_QUOTA_DEFAULTS` in `src/discovery/source-quota.js`. An adapter whose allowance depends on private options exports `quotaLimits(sourceConfig)`. The service then handles `source_not_configured`, quota reservation, per-second pacing, 429 cooldowns, and error redaction. It also passes a `quota` handle to keyed adapters: `reserve(credits)` for credit windows, `settle(reservation, charged)`, and `hold(reason, { window })`, where `key_rejected` lasts until the key changes. Requests with a body are cached per method, URL and body.

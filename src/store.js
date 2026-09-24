@@ -78,13 +78,35 @@ export class JsonStore {
         || !windows.some((window) => window.window === item.window));
       const rows = windows.map((window) => ({ window, row: ledger.usage.find((item) => item.sourceId === sourceId
         && item.window === window.window && item.start === window.start) }));
-      const blocked = rows.find(({ window, row }) => (row?.used ?? 0) + cost > window.limit);
+      const charged = Object.fromEntries(rows.map(({ window, row }) => [window.window, window.clamp
+        ? Math.min(window.cost ?? cost, window.limit - (row?.used ?? 0)) : window.cost ?? cost]));
+      const blocked = rows.find(({ window, row }) => window.clamp ? charged[window.window] < 1
+        : (row?.used ?? 0) + charged[window.window] > window.limit);
       if (blocked) return { reserved: false, window: blocked.window.window, used: blocked.row?.used ?? 0 };
       for (const { window, row } of rows) {
-        if (row) row.used += cost;
-        else ledger.usage.push({ sourceId, window: window.window, start: window.start, used: cost });
+        if (row) row.used += charged[window.window];
+        else ledger.usage.push({ sourceId, window: window.window, start: window.start, used: charged[window.window] });
       }
-      return { reserved: true };
+      return { reserved: true, charged };
+    });
+  }
+
+  async settleSourceQuota({ sourceId, windows, delta }) {
+    return this.mutate((state) => {
+      const ledger = state.sourceQuota ??= { usage: [], holds: [] };
+      for (const window of windows) {
+        const row = ledger.usage.find((item) => item.sourceId === sourceId && item.window === window.window
+          && item.start === window.start);
+        if (row) row.used = Math.max(0, row.used + delta);
+        else ledger.usage.push({ sourceId, window: window.window, start: window.start, used: Math.max(0, delta) });
+      }
+    });
+  }
+
+  async releaseSourceQuotaHold({ sourceId, reason }) {
+    return this.mutate((state) => {
+      const ledger = state.sourceQuota ??= { usage: [], holds: [] };
+      ledger.holds = ledger.holds.filter((item) => item.sourceId !== sourceId || item.reason !== reason);
     });
   }
 
