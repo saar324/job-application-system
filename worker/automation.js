@@ -414,7 +414,10 @@ export async function inventoryFormStep(page) {
     const labels = [...(element.labels ?? [])].map((label) => label.innerText.trim()).filter(Boolean);
     const ariaLabelledBy = (element.getAttribute("aria-labelledby") ?? "").split(/\s+/)
       .map((id) => document.getElementById(id)?.innerText?.trim()).filter(Boolean).join(" ");
-    const stableLabel = element.getAttribute("aria-label") || ariaLabelledBy || labels.join(" ")
+    const greenhouseResumeLabel = element.type === "file" && element.id === "resume"
+      ? element.closest('.file-upload[role="group"][aria-labelledby="upload-label-resume"]')
+        ?.querySelector("#upload-label-resume")?.textContent?.trim() : "";
+    const stableLabel = greenhouseResumeLabel || element.getAttribute("aria-label") || ariaLabelledBy || labels.join(" ")
       || element.getAttribute("placeholder") || element.getAttribute("name") || element.id;
     if (!stableLabel || element.matches('.iti__search-input, [id^="iti-"][type="search"]')) return null;
     const rawLabel = stableLabel;
@@ -436,7 +439,8 @@ export async function inventoryFormStep(page) {
       || /(?:^|\s)\*(?:\s|$)/.test(value);
     const groupRequired = Boolean(groupQuestion && visuallyRequired(groupQuestion));
     const required = element.required || element.getAttribute("aria-required") === "true"
-      || visuallyRequired(rawLabel) || type === "radio" && groupRequired;
+      || visuallyRequired(rawLabel) || Boolean(greenhouseResumeLabel && /\*\s*$/.test(greenhouseResumeLabel))
+      || type === "radio" && groupRequired;
     const options = tag === "select"
       ? [...element.options].filter((option) => option.value).map((option) => ({ value: option.value, label: option.text.trim() }))
       : [];
@@ -949,10 +953,13 @@ export async function automateApplication({ page, profile, opportunity, applicat
       requirements: [{ kind: "unstable_form", action: "manual_review",
         message: "Inspect the current form before continuing" }] }, step);
     }
-    const currentFieldKeys = new Set(fields.map((field) => `${field.key}:${field.label}`));
-    for (const [key, field] of retainedFilledFields) {
-      if (!currentFieldKeys.has(key)) fields.push({ ...field, detached: true });
-    }
+    const restoreRetainedFilledFields = () => {
+      const currentFieldKeys = new Set(fields.map((field) => `${field.key}:${field.label}`));
+      for (const [key, field] of retainedFilledFields) {
+        if (!currentFieldKeys.has(key)) fields.push({ ...field, detached: true });
+      }
+    };
+    restoreRetainedFilledFields();
     timings.planFillMs += performance.now() - planStarted;
     timings.fields += inventory.length;
     const prose = unresolved.filter((field) => !field.manualOnly && eligibleProseField(field));
@@ -1045,6 +1052,10 @@ export async function automateApplication({ page, profile, opportunity, applicat
         surface, profile, opportunity, application.answers ?? {}, preparedAnswers
       ));
     }
+    // Prose drafting refills the form after an ATS may have replaced a
+    // successful upload input with its filename chip. Carry that earlier
+    // upload into the final review, which must still verify its live state.
+    restoreRetainedFilledFields();
     if (visitedSteps.has(signature)) {
       const validation = await inlineValidationQuestions(surface, inventory);
       if (validation.length) return pause({ status: "needs_input",
