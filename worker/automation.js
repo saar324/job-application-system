@@ -282,9 +282,22 @@ async function describe(locator) {
 async function fillControl(locator, field, value, surface) {
   if (field.type === "file") {
     const file = { name: path.basename(String(value)), size: (await stat(String(value))).size };
-    const isAshby = new URL(surface.url()).hostname === "jobs.ashbyhq.com";
+    const host = new URL(surface.url()).hostname;
+    const isAshby = host === "jobs.ashbyhq.com";
+    const isGreenhouse = ["job-boards.greenhouse.io", "job-boards.eu.greenhouse.io",
+      "boards.greenhouse.io", "boards.eu.greenhouse.io"].includes(host);
     const rootPage = typeof surface.page === "function" ? surface.page() : surface;
+    const greenhouseResume = isGreenhouse && field.id === "resume"
+      && await locator.evaluate((element) =>
+        element.closest('.file-upload[role="group"]')?.getAttribute("aria-labelledby")
+          === "upload-label-resume").catch(() => false);
     await locator.setInputFiles(String(value));
+    if (greenhouseResume) {
+      // Greenhouse uploads to S3 before replacing this input with a success
+      // chip. Selecting a local file alone is not an upload acknowledgement.
+      await rootPage.waitForFunction(greenhouseResumeUploaded, { name: file.name, formIndex: -1 },
+        { timeout: 20_000 });
+    }
     if (isAshby) {
       // Ashby's GraphQL operation name has changed over time, so binding the
       // upload to one request payload creates a slow false failure. Trust the
@@ -296,7 +309,7 @@ async function fillControl(locator, field, value, surface) {
             .some((input) => [...(input.files ?? [])].some((item) => item.name === expected)),
       file.name, { timeout: 8_000 });
     }
-    return { uploadAcknowledged: true, files: [file] };
+    return { uploadAcknowledged: true, files: [file], greenhouseResume };
   } else if (field.tag === "select") {
     const desired = normalize(value);
     const option = field.options.find((item) => normalize(item.label) === desired || normalize(item.value) === desired);
@@ -355,6 +368,26 @@ async function fillControl(locator, field, value, surface) {
   } else {
     await locator.fill(String(value));
   }
+}
+
+export function greenhouseResumeUploaded({ name, formIndex }) {
+  const groups = [...document.querySelectorAll(
+    '.file-upload[role="group"][aria-labelledby="upload-label-resume"]')]
+    .filter((group) => formIndex < 0 || group.closest("form") === document.forms[formIndex]);
+  if (groups.length !== 1) return false;
+  const group = groups[0];
+  const label = group.querySelector("#upload-label-resume");
+  if (!/^Resume(?:\/CV)?\s*\*?$/i.test(label?.textContent?.trim() ?? "")) return false;
+  if (group.querySelector('input[type="file"], [role="progressbar"], .helper-text--error')) return false;
+  const chips = [...group.querySelectorAll(".file-upload__filename")];
+  if (chips.length !== 1) return false;
+  const chip = chips[0];
+  if (!chip.getClientRects().length || getComputedStyle(chip).visibility === "hidden") return false;
+  const remove = chip.querySelector('button[aria-label="Remove file"]');
+  if (!remove) return false;
+  const copy = chip.cloneNode(true);
+  copy.querySelectorAll("button, svg").forEach((element) => element.remove());
+  return copy.textContent?.trim().replace(/\s+/g, " ") === name;
 }
 
 const CONTROL_SELECTOR = "input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, select";
@@ -468,7 +501,15 @@ async function detachedFileLiveMatch(surface, action, field) {
   const matches = inputs.filter(({ files }) => files.length === 1
     && files[0].name === field.files[0].name
     && files[0].size === field.files[0].size);
-  return { inputCount: inputs.length, matches: matches.map((item) => item.controlIndex) };
+  const host = new URL(surface.url()).hostname;
+  const greenhouseResume = field.greenhouseResume === true && field.key === "resume" && field.uploadAcknowledged
+    && ["job-boards.greenhouse.io", "job-boards.eu.greenhouse.io",
+      "boards.greenhouse.io", "boards.eu.greenhouse.io"].includes(host)
+    && await (typeof surface.page === "function" ? surface.page() : surface)
+      .evaluate(greenhouseResumeUploaded, { name: field.files[0].name, formIndex })
+      .catch(() => false);
+  return { inputCount: inputs.length, matches: matches.map((item) => item.controlIndex),
+    greenhouseResume };
 }
 
 async function controlMatches(locator, field, answer, observed) {
@@ -600,10 +641,12 @@ export async function fillVisibleFields(page, profile, opportunity, answers, pre
       const matches = await controlMatches(locator, field, answer, observed);
       if (!matches || !validity.valid) throw new Error(validity.problem || "live value did not match the planned answer");
       fields.push({ ...fieldSummary(field, answer, observed),
-        ...(fillEvidence?.uploadAcknowledged ? { uploadAcknowledged: true } : {}) });
+        ...(fillEvidence?.uploadAcknowledged ? { uploadAcknowledged: true } : {}),
+        ...(fillEvidence?.greenhouseResume ? { greenhouseResume: true } : {}) });
     } catch (error) {
       if (field.type === "file" && fillEvidence?.uploadAcknowledged) {
-        fields.push({ ...fieldSummary(field, answer, fillEvidence.files), uploadAcknowledged: true });
+        fields.push({ ...fieldSummary(field, answer, fillEvidence.files), uploadAcknowledged: true,
+          ...(fillEvidence.greenhouseResume ? { greenhouseResume: true } : {}) });
         if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
       }
       if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
@@ -1123,11 +1166,16 @@ export async function automateApplication({ page, profile, opportunity, applicat
         if (field.detached) {
           if (field.type === "file" && field.status === "filled") {
             const live = await detachedFileLiveMatch(surface, action, field);
-            if (live?.matches.length === 1 && !matchedDetachedFileInputs.has(live.matches[0])) {
+            const greenhouseResume = field.greenhouseResume === true && field.key === "resume"
+              && /^(?:job-boards|boards)(?:\.eu)?\.greenhouse\.io$/.test(
+                new URL(surface.url()).hostname);
+            if (greenhouseResume && live?.greenhouseResume) continue;
+            if (!greenhouseResume && live?.matches.length === 1
+              && !matchedDetachedFileInputs.has(live.matches[0])) {
               matchedDetachedFileInputs.add(live.matches[0]);
               continue;
             }
-            if (live?.inputCount === 0 && field.uploadAcknowledged) {
+            if (!greenhouseResume && live?.inputCount === 0 && field.uploadAcknowledged) {
               const body = await surface.locator("body").innerText().catch(() => "");
               if (body.includes(field.value)) continue;
             }

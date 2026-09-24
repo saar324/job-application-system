@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { after, before } from "node:test";
 import { chromium } from "playwright";
-import { automateApplication, unavailablePostingUrl,
+import { automateApplication, greenhouseResumeUploaded, unavailablePostingUrl,
   waitForSubmissionEvidence } from "../worker/automation.js";
 
 let browser;
@@ -683,6 +683,75 @@ test("a rescanned Greenhouse-style file control retains an exact live upload", a
   assert.ok(fileFields.some((field) => field.detached === true));
   assert.ok(fileFields.every((field) => field.files[0].name === "resume.pdf"
     && field.files[0].size === 11));
+});
+
+test("Greenhouse resume success chip survives final review beside an empty cover-letter input", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
+  const resume = path.join(directory, "resume.pdf");
+  await writeFile(resume, "resume-body");
+  const url = "https://job-boards.greenhouse.io/example/jobs/12345";
+  const html = `<form>
+    <div role="group" aria-labelledby="upload-label-resume" class="file-upload">
+      <div id="upload-label-resume">Resume/CV*</div>
+      <div class="file-upload__wrapper"><label for="resume">Attach</label>
+        <input id="resume" type="file"></div>
+    </div>
+    <div role="group" aria-labelledby="upload-label-cover_letter" class="file-upload">
+      <div id="upload-label-cover_letter">Cover Letter</div>
+      <div class="file-upload__wrapper"><label for="cover_letter">Attach</label>
+        <input id="cover_letter" type="file"></div>
+    </div>
+    <button type="submit">Submit Application</button>
+  </form><script>
+    document.querySelector('#resume').addEventListener('change', (event) => setTimeout(() => {
+      event.target.closest('.file-upload').querySelector('.file-upload__wrapper').innerHTML =
+        '<div class="file-upload__filename">resume.pdf<button type="button" aria-label="Remove file"></button></div>';
+    }, 40));
+  </script>`;
+  const result = await run(html, {}, { ...profile, documents: { resume } },
+    { finalApprovalRequired: true },
+    async (page) => page.route(url, (route) => route.fulfill({ status: 200,
+      contentType: "text/html", body: html })), {}, { applyUrl: url });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.ok(result.requirements[0].preview.filled.some((field) =>
+    field.key === "resume" && field.value === "resume.pdf"));
+});
+
+test("Greenhouse stale filename text and incomplete uploads lack success evidence", async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.setContent(`<form>
+    <div role="group" aria-labelledby="upload-label-resume" class="file-upload">
+      <div id="upload-label-resume">Resume/CV*</div>
+      <div class="file-upload__wrapper"><span>resume.pdf</span></div>
+    </div>
+    <div role="group" aria-labelledby="upload-label-cover_letter" class="file-upload">
+      <div id="upload-label-cover_letter">Cover Letter</div>
+      <div class="file-upload__wrapper"><label for="cover_letter">Attach</label>
+        <input id="cover_letter" type="file"></div>
+    </div>
+    <button type="submit">Submit Application</button></form>`);
+    const proof = () => page.evaluate(greenhouseResumeUploaded,
+      { name: "resume.pdf", formIndex: 0 });
+    assert.equal(await proof(), false);
+    await page.locator(".file-upload__wrapper").first().evaluate((wrapper) => {
+      wrapper.innerHTML = '<div class="file-upload__filename">resume.pdf'
+        + '<button type="button" aria-label="Remove file"></button></div>';
+    });
+    assert.equal(await proof(), true);
+    await page.locator(".file-upload__wrapper").first().evaluate((wrapper) => {
+      wrapper.insertAdjacentHTML("beforeend", '<div role="progressbar"></div>');
+    });
+    assert.equal(await proof(), false);
+    await page.locator('[role="progressbar"]').evaluate((bar) => bar.remove());
+    await page.locator(".file-upload__wrapper").first().evaluate((wrapper) => {
+      wrapper.insertAdjacentHTML("beforeend", '<p class="helper-text--error">Upload failed</p>');
+    });
+    assert.equal(await proof(), false);
+  } finally {
+    await context.close();
+  }
 });
 
 test("a rescanned file control that loses the upload pauses final review", async () => {
