@@ -80,6 +80,38 @@ test("Jobicy requests the full non-paginated response per title", async () => {
   assert.deepEqual(items.map((item) => item.externalId), ["late"]);
 });
 
+test("Jobicy keeps a later-query role when the first query fills the raw cap", async () => {
+  const searchProfile = { preferences: { fullTime: {
+    jobTitles: ["Example Platform Engineer", "Example Interface Engineer"] } } };
+  const first = Array.from({ length: 200 }, (_, index) => ({
+    id: `noise-${index}`, jobTitle: "Example Platform Engineer", companyName: "Example",
+    url: `https://jobicy.com/jobs/noise-${index}`
+  }));
+  const later = { id: "suitable-later", jobTitle: "Example Interface Engineer",
+    companyName: "Example", url: "https://jobicy.com/jobs/suitable-later",
+    jobDescription: "Example role description" };
+  const requests = [];
+  const errors = [];
+  const items = await jobicy.search({ limit: 200, profile: searchProfile,
+    onError: (entry) => errors.push(entry), fetchImpl: async (url) => {
+      const term = new URL(url).searchParams.get("tag");
+      requests.push(term);
+      const jobs = term === "Example Platform Engineer" ? first
+        : term === "Example Interface Engineer" ? [{ ...first[0], jobDescription: "Updated posting text" }, later] : [];
+      return new Response(JSON.stringify({ jobs }));
+    } });
+  assert.ok(requests.includes("Example Platform Engineer"));
+  assert.ok(requests.includes("Example Interface Engineer"));
+  assert.ok(requests.length <= 16);
+  assert.equal(items.length, 200);
+  assert.ok(items.some((item) => item.externalId === later.id));
+  assert.equal(items.filter((item) => item.externalId === first[0].id).length, 1);
+  assert.equal(items.find((item) => item.externalId === first[0].id).description,
+    "Updated posting text");
+  assert.ok(errors.some((entry) => entry.reason === "partial_raw_pool_cap"
+    && entry.rawRows === 201 && entry.omittedRows === 1));
+});
+
 test("unpaginated feeds report rows omitted by the bounded pool", async () => {
   const jobicyReasons = [];
   await jobicy.search({ limit: 1, profile, onError: (entry) => jobicyReasons.push(entry.reason),
