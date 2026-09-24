@@ -1,10 +1,12 @@
 export function publicFeedUrl(sourceId, { query = "engineer", page = 1, limit = 25,
-  residenceCountry } = {}) {
+  residenceCountry, geographyScope = "europe" } = {}) {
   if (sourceId === "jobgether") {
     const url = new URL("https://jobgether.com/api/v1/jobs");
     const country = String(residenceCountry ?? "").trim().toLowerCase();
+    const location = geographyScope === "residence" && country ? country
+      : geographyScope === "worldwide" ? "worldwide" : "europe";
     url.search = new URLSearchParams({ keyword: query,
-      locations: ["europe", ...(country ? [country] : [])].join(","),
+      locations: location,
       contractType: "full-time", remoteType: "full-remote", sort: "relevance",
       page: String(page), limit: String(Math.min(25, limit)) }).toString();
     return url.toString();
@@ -16,6 +18,13 @@ export function publicFeedUrl(sourceId, { query = "engineer", page = 1, limit = 
     return "https://weworkremotely.com/categories/remote-programming-jobs.rss";
   }
   return null;
+}
+
+export function jobgetherGeographyScope(residenceCountry, queryIndex = 0, sourceCycle = 0) {
+  const scopes = String(residenceCountry ?? "").trim()
+    ? ["europe", "residence", "worldwide"] : ["europe", "worldwide"];
+  const cycle = Number.isInteger(sourceCycle) && sourceCycle >= 0 ? sourceCycle : 0;
+  return scopes[(queryIndex + cycle) % scopes.length];
 }
 
 export function parsePublicFeed(sourceId, payload) {

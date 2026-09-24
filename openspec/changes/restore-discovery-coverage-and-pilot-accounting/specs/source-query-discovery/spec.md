@@ -19,6 +19,14 @@ The system SHALL generate a bounded, versioned query plan from configured role p
 - **WHEN** the public board says worldwide but the current employer posting restricts hiring to another region
 - **THEN** the role is held or excluded with the employer restriction as evidence and is not queued for automatic submission
 
+#### Scenario: A browser source has a selected regional location
+- **WHEN** a reviewed source listing URL opens with Europe, EMEA, or remote already selected
+- **THEN** generic role search leaves that location control unchanged and preserves the posting's own location in candidate evidence
+
+#### Scenario: A provider supports both continent and country search scopes
+- **WHEN** the same lexical source has separate Europe and residence-country searches
+- **THEN** bounded queries rotate those scopes with recorded provenance instead of combining them into a request that may favor one scope
+
 #### Scenario: A relevant role scores below the deterministic semantic shortlist
 - **WHEN** a close-fit role has unfamiliar title wording or skills expressed as synonyms and misses the preliminary top-20 score window
 - **THEN** a bounded stratified review sample can examine it using role and verified applicant evidence, and any proposed eligibility change is reviewed without overriding hard exclusions

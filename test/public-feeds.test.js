@@ -1,18 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parsePublicFeed, publicFeedUrl } from "../src/discovery/public-feeds.js";
+import { jobgetherGeographyScope, parsePublicFeed,
+  publicFeedUrl } from "../src/discovery/public-feeds.js";
 
 test("Jobgether official API query is bounded and normalized", () => {
   const url = new URL(publicFeedUrl("jobgether", { query: "platform developer", page: 2,
     limit: 100, residenceCountry: "Portugal" }));
   assert.equal(url.pathname, "/api/v1/jobs");
-  assert.equal(url.searchParams.get("locations"), "europe,portugal");
+  assert.equal(url.searchParams.get("locations"), "europe");
   assert.equal(url.searchParams.get("remoteType"), "full-remote");
   assert.equal(url.searchParams.get("sort"), "relevance");
   assert.equal(url.searchParams.get("limit"), "25");
   assert.equal(new URL(publicFeedUrl("jobgether")).searchParams.get("locations"), "europe");
-  assert.equal(new URL(publicFeedUrl("jobgether", { residenceCountry: "Bulgaria" }))
-    .searchParams.get("locations"), "europe,bulgaria");
+  assert.deepEqual([0, 1, 2].map((index) => jobgetherGeographyScope("Portugal", index)),
+    ["europe", "residence", "worldwide"]);
+  assert.equal(jobgetherGeographyScope("Portugal", 0, 1), "residence");
+  assert.equal(new URL(publicFeedUrl("jobgether", { residenceCountry: "Portugal",
+    geographyScope: "residence" })).searchParams.get("locations"), "portugal");
+  assert.equal(new URL(publicFeedUrl("jobgether", { residenceCountry: "Portugal",
+    geographyScope: "worldwide" })).searchParams.get("locations"), "worldwide");
+  assert.equal(new URL(publicFeedUrl("jobgether", { residenceCountry: "",
+    geographyScope: "residence" })).searchParams.get("locations"), "europe");
   const parsed = parsePublicFeed("jobgether", { jobs: [{ id: "one", title: "Platform Developer",
     company: "Acme", url: "https://jobgether.com/offer/one", location: "Europe",
     remote: "Full Remote", contractType: "Full time", postedAt: "2026-09-20",
