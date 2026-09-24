@@ -1,4 +1,5 @@
-import { lstat, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, lstat, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 const SAFE_ID = /^[a-zA-Z0-9_-]{1,80}$/;
@@ -40,6 +41,9 @@ export async function validateWorkerPayload(payload, documentRoot) {
     if (link.isSymbolicLink() || !metadata.isFile()) {
       throw Object.assign(new Error(`staged ${role} is not a regular file`), { status: 400 });
     }
+    await access(resolved, constants.R_OK).catch(() => {
+      throw Object.assign(new Error(`staged ${role} is not readable by the worker`), { status: 400 });
+    });
     payload.profile.documents[role] = resolved;
   }
   return payload;

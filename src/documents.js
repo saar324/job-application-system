@@ -1,4 +1,4 @@
-import { copyFile, lstat, mkdir, realpath, stat } from "node:fs/promises";
+import { chmod, chown, copyFile, lstat, mkdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { NeedsInputError } from "./adapters/errors.js";
 
@@ -55,12 +55,24 @@ export class DocumentStager {
     if (!this.extensions.has(extension)) throw new DocumentPolicyError(`unsupported file extension: ${extension || "none"}`);
 
     const directory = path.join(this.stagingRoot, applicationId);
-    await mkdir(directory, { recursive: true, mode: 0o750 });
+    await mkdir(directory, { recursive: true, mode: 0o2750 });
+    const groupId = (await stat(this.stagingRoot)).gid;
+    const directoryEntry = await lstat(directory);
+    if (!directoryEntry.isDirectory() || directoryEntry.isSymbolicLink()) {
+      throw new DocumentPolicyError("staging directory is not a regular directory");
+    }
+    if (directoryEntry.gid !== groupId) await chown(directory, directoryEntry.uid, groupId);
+    await chmod(directory, 0o2750);
     const destination = path.join(directory, `${role === "coverLetter" ? "cover-letter" : "resume"}${extension}`);
     await copyFile(resolved, destination);
-    await lstat(destination).then((entry) => {
-      if (!entry.isFile() || entry.isSymbolicLink()) throw new DocumentPolicyError("staged document is not a regular file");
-    });
+    const entry = await lstat(destination);
+    if (!entry.isFile() || entry.isSymbolicLink()) {
+      throw new DocumentPolicyError("staged document is not a regular file");
+    }
+    // copyFile can preserve a private source's 0600 mode and primary group.
+    // The API and worker are separate users sharing the staging root's group.
+    if (entry.gid !== groupId) await chown(destination, entry.uid, groupId);
+    await chmod(destination, 0o640);
     return destination;
   }
 }
