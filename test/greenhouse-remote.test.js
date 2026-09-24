@@ -43,3 +43,10 @@ test("a remote-work perk, aggregator label, hybrid wording, and changed region d
   assert.equal(await revalidateOfficialAtsRole(verified, async () =>
     new Response(JSON.stringify({ ...row, location: { name: "Germany" } }))), false);
 });
+
+test("fully remote work remains eligible when the company also hosts onsite team events", () => {
+  assert.equal(greenhouseRemoteRole({ ...row, location: { name: "Europe (Full Remote)" },
+    content: "<p>Fully remote work from Europe.</p><p>Onsite team events in Warsaw.</p>" }), true);
+  assert.equal(greenhouseRemoteRole({ ...row,
+    content: "<p>Fully remote work from Europe.</p><p>Onsite work three days each week.</p>" }), false);
+});

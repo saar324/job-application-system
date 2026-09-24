@@ -1,6 +1,7 @@
 import { plainText } from "../text.js";
 import { normalizeApplicationQuestions } from "../normalization.js";
 import { greenhouseRemoteRole } from "../greenhouse-remote.js";
+import { greenhouseAnnualSalary } from "../greenhouse-compensation.js";
 
 function configuredBoards(sourceConfig) {
   const boards = sourceConfig?.boards ?? [];
@@ -75,6 +76,7 @@ export const greenhouse = {
         listingUrl: `https://job-boards.greenhouse.io/${board.token}/jobs/${job.id}`,
         applyUrl: `https://job-boards.greenhouse.io/${board.token}/jobs/${job.id}`,
         description: descriptionOf(job),
+        compensation: greenhouseAnnualSalary(job.content),
         tags: [
           ...(job.departments ?? []).map((item) => item.name),
           ...(job.offices ?? []).map((item) => item.name)

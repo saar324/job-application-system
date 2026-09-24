@@ -22,6 +22,7 @@ const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ash
 const atsBoardKey = (parsed) => parsed ? `${parsed.source}:${parsed.board}` : null;
 const AGGREGATOR_SOURCES = new Set(["himalayas", "jobicy"]);
 const discoverySourceOf = (role) => role.discoverySource ?? role.source;
+const exactRoleText = (value) => String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 
 export class DiscoveryService {
   constructor({ applicationService, profiles, config, fetchImpl = fetch, enricher = null,
@@ -925,6 +926,14 @@ export class DiscoveryService {
                   throw error;
                 }), (reason) => { failure = reason; });
               if (verified) {
+                if (resolution.evidence === "himalayas_explicit_apply_link"
+                  && (!exactRoleText(raw.title) || !exactRoleText(raw.company)
+                    || exactRoleText(raw.title) !== exactRoleText(verified.title)
+                    || exactRoleText(raw.company) !== exactRoleText(verified.company))) {
+                  if (row) row.excluded += 1;
+                  excluded += 1;
+                  continue;
+                }
                 candidate = { ...verified, discoverySource: origin,
                   provenance: { aggregatorSourceId: origin, aggregatorExternalId: raw.externalId,
                     aggregatorListingUrl: raw.listingUrl, officialAtsVerified: true } };

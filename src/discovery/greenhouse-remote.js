@@ -6,7 +6,10 @@ export function greenhouseRemoteRole(row) {
   const title = String(row?.title ?? "");
   const location = String(row?.location?.name ?? "");
   const content = plainText(row?.content ?? "");
-  const statement = `${title} ${location} ${content}`;
+  // In-person team gatherings do not make an otherwise fully remote role
+  // onsite. Keep actual hybrid/office work requirements as blockers.
+  const statement = `${title} ${location} ${content}`.replace(
+    /\b(?:onsite|on-site|in-office) (?:team |company |global )?(?:events?|offsites?|retreats?|meetups?|gatherings?)\b/gi, "");
   if (/\b(?:hybrid|on[- ]?site|in[- ]office|office[- ]based)\b/i.test(statement)
     || /\b(?:not|no) (?:a |an )?(?:(?:fully|100%) )?remote\b/i.test(statement)
     || /\bremote work (?:is )?(?:not available|not offered|only occasionally)\b/i.test(statement)
