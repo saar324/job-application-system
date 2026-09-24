@@ -296,7 +296,7 @@ test("opportunistic roles require explicit acceptable pay and strong technical f
     }
   });
   const config = {
-    defaultMode: "full_time", discovery: { limitPerSource: 10 },
+    defaultMode: "full_time", discovery: { limitPerSource: 10, broadenedSources: { remoteok: true } },
     modes: { full_time: {
       minimumScore: 75, dailyApplicationCap: 8, autoApply: true,
       autoApplyDiscovered: true, sources: ["remoteok"], requireConfirmationFor: []

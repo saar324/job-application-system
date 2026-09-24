@@ -1,5 +1,28 @@
 ## ADDED Requirements
 
+### Requirement: Broadened discovery has a separate advisory release stage
+The system SHALL keep newly broadened roles from a source in advisory/manual fit review until the paired quality promotion gate passes. A private source-specific flag SHALL default off and SHALL be reversible independently. The server SHALL derive and durably store advisory provenance from fetched role evidence; request metadata SHALL NOT grant or erase this status. Campaign selection, reserve replacement, standing policy intake, automatic final permit, and final permit commit SHALL NOT automatically submit an advisory role. An already stored baseline role SHALL retain its existing submission policy when broader retrieval is enabled. Every newly stored role from a flagged source SHALL be advisory, including an exact-title role that appears only on a later page. Stage 1 SHALL NOT be reported as passing the prose-quality gate or ten-receipt throughput target.
+
+#### Scenario: A broadened role is found on a flagged source
+- **WHEN** an official ATS title variant or added board yields a role outside the pre-broadening configured-board path
+- **THEN** the role remains visible with advisory provenance, but no automatic application or final-action permit is created
+
+#### Scenario: A source flag is disabled after discovery
+- **WHEN** a previously flagged source is rolled back or the same role is discovered again
+- **THEN** new broadened retrieval stops and the already stored advisory role remains in manual review rather than gaining standing-policy authority
+
+#### Scenario: A configured-board baseline role is found
+- **WHEN** an unflagged configured-board role matches the pre-broadening configured-title path and all existing policy gates
+- **THEN** its existing automatic submission behavior is preserved without advisory provenance
+
+#### Scenario: A flagged source finds an exact-title late-page opening
+- **WHEN** a source flag is on and a new configured-title role appears on a later fetched page
+- **THEN** the role is advisory because the old path did not prove it would have been observed
+
+#### Scenario: A caller forges or omits advisory metadata
+- **WHEN** a caller adds or re-adds an opportunity with release-stage fields
+- **THEN** the server ignores those fields and never removes a server-owned advisory marker
+
 ### Requirement: Substantive application answers are specific and grounded
 For substantive prose, the system SHALL use the current question, role requirements, current employer evidence, and verified applicant examples. Each applicant example SHALL record an ID, exact facts, source, owner approval or independent verification, scope, and review date. Each material applicant and employer claim SHALL map to supporting evidence; a reference to an existing evidence ID alone SHALL NOT establish support. An independent review SHALL check claim support and question responsiveness before automatic final action. If a draft or review provider is unavailable, new prose SHALL receive explicit manual review and automatic final action SHALL be held. If evidence is insufficient, the system SHALL ask for research or applicant input rather than produce generic or invented text. Optional substantive questions SHALL be evaluated for value and answered only when specific supported content is available.
 

@@ -35,7 +35,7 @@ export function isLearnedBoardRequest(sourceId, rawUrl, boardKeys) {
 // for this profile. This never makes a future posting eligible by itself: the
 // normal role scorer and official destination checks still run for every row.
 export function sourceConfigWithLearnedBoards(state, profileId, sourceId, configured = {},
-  { now = Date.now(), cycle = 0, isBackedOff = () => false,
+  { now = Date.now(), cycle = 0, includeLearned = true, isBackedOff = () => false,
     isAtRequestBudget = () => false } = {}) {
   const definition = SOURCE_KEYS[sourceId];
   if (!definition) return configured;
@@ -43,6 +43,7 @@ export function sourceConfigWithLearnedBoards(state, profileId, sourceId, config
   const configuredBase = configured[listKey] ?? [];
   if (!Array.isArray(configuredBase)) return configured;
   const base = configuredBase.filter((item) => !isBackedOff(`${sourceId}:${item?.[boardKey]}`));
+  if (!includeLearned) return { ...configured, [listKey]: base };
   const seen = new Set(base.map((item) => String(item?.[boardKey] ?? "").toLowerCase()));
   const recent = (state?.opportunities ?? []).filter((item) => item.profileId === profileId
     && item.applicationDestinationVerified === true

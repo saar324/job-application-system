@@ -51,6 +51,12 @@ export async function loadConfig(env = process.env) {
   if (!Number.isInteger(maximumSemantic) || maximumSemantic < 0 || maximumSemantic > 200) {
     throw new Error("discovery.semantic.maxCandidates must be an integer from 0 to 200");
   }
+  const broadenedSources = config.discovery?.broadenedSources ?? {};
+  if (!broadenedSources || typeof broadenedSources !== "object" || Array.isArray(broadenedSources)
+    || Object.entries(broadenedSources).some(([source, enabled]) =>
+      !/^[a-z][a-z0-9_-]{0,79}$/.test(source) || typeof enabled !== "boolean")) {
+    throw new Error("discovery.broadenedSources must map source IDs to booleans");
+  }
   for (const [mode, settings] of Object.entries(config.modes)) {
     if (!Number.isFinite(settings.minimumScore) || settings.minimumScore < 0 || settings.minimumScore > 100) {
       throw new Error(`${mode}.minimumScore must be from 0 to 100`);

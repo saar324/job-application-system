@@ -34,6 +34,10 @@
 
 ## 4. Validation and rollout
 
+- [x] 4.S1 Add default-off per-source broad-discovery flags and durable, server-owned advisory provenance. Keep configured-board legacy-title roles on the current standing-policy path. Ensure campaigns, reserve replacement, intake, final permit, and commit do not automatically submit advisory roles; cover rollback and forged provenance with regression tests.
+- [ ] 4.S1a Run a bounded old/new shadow for each proposed source, with labeled fit and employer geography, duplicate identity, relevant-role recall, yield, and provider limits. Enable one source flag at a time only after its Stage 1 review, and roll back that flag on regression. Stage 1 permits advisory/manual review only.
+- [ ] 4.S2 Keep broader automatic submission and new-prose automatic final action disabled until 0.0/4.0c paired quality evidence, verified applicant examples, independent claim review, and ten audited live roles meet the specified gates. A successful Stage 1 rollout does not close Stage 2 or the verified-receipt timing pilot.
+
 - [ ] 4.0 Review the frozen development corpus and holdout coverage after implementation, including accepted and rejected titles, employer geography, incomplete profile evidence, incidental skill mentions, personal examples, optional questions, stale reused answers, and same-title distinct openings. Measure top-ten precision and suitable-role recall within bounded coverage in addition to exact skill/exclusion agreement.
 - [ ] 4.0a Evaluate a bounded sample of below-threshold and opportunistic rejects with evidence-based semantic judgment, including title variants the deterministic top-20 shortlist missed. Route changed judgments to fit review; never override a verified hard exclusion automatically.
 - [ ] 4.0b Expand the drafting evidence packet with verified applicant examples and current employer facts; research when evidence is insufficient for the actual question. Require material claim-to-evidence mapping and a quality review of approved-answer reuse, especially same-employer/different-role. Audit optional high-value questions instead of blindly leaving them blank or filling generic text.

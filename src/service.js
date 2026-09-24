@@ -115,7 +115,8 @@ export class ApplicationService {
     return buildWorkflowReport(state, { ...this.campaignStatus(campaignId, profileId, state), profileId });
   }
 
-  async addOpportunity(input, identity, { serverVerifiedDiscovery = false } = {}) {
+  async addOpportunity(input, identity, { serverVerifiedDiscovery = false,
+    advisoryDiscovery = null } = {}) {
     if (!input.title || !input.company || !input.applyUrl) {
       throw new ClientError(400, "title, company, and applyUrl are required");
     }
@@ -123,6 +124,7 @@ export class ApplicationService {
     // establish authorization for an automatic final action.
     const candidate = { ...input };
     for (const field of ["discoveryVerification", "discoveryState", "destinationFirstObservedAt",
+      "discoveryRelease",
       "destinationRetryAfter", "destinationExpiresAt", "destinationRetryCount",
       "closedObservedAt", "closedRetryAfter", "closedRetryCount", "closedOrigin"]) {
       delete candidate[field];
@@ -176,6 +178,10 @@ export class ApplicationService {
               ? { sourceId: candidate.source ?? "agent", verifiedAt: now(),
                 score: Number(candidate.score ?? 0) } : undefined
           });
+          if (advisoryDiscovery?.stage === "advisory") {
+            existing.discoveryRelease = { stage: "advisory", sourceId: advisoryDiscovery.sourceId,
+              reason: advisoryDiscovery.reason };
+          }
           audit(state, identity, "opportunity.destination_resolved", existing.id, {
             source: candidate.source ?? "agent"
           });
@@ -215,6 +221,9 @@ export class ApplicationService {
       }
       const item = {
         ...candidate, id: randomUUID(), profileId: identity.profileId, dedupKey,
+        ...(serverVerifiedDiscovery && advisoryDiscovery?.stage === "advisory"
+          ? { discoveryRelease: { stage: "advisory", sourceId: advisoryDiscovery.sourceId,
+            reason: advisoryDiscovery.reason } } : {}),
         mode: candidate.mode ?? this.config.defaultMode, source: candidate.source ?? "agent",
         score: Number(candidate.score ?? 0), status: "discovered", createdAt: now(),
         ...(candidate.applicationDestinationPending === true ? {
@@ -291,7 +300,8 @@ export class ApplicationService {
       ? await this.profiles.status(identity.profileId, mode, this.config.defaultMode) : null;
     const covered = input.forceFinalApproval !== true
       && policyCovers(profile?.standingSubmissionPolicy, initialOpportunity, mode)
-      && verifiedDiscoveryIsFresh(initialOpportunity, mode);
+      && verifiedDiscoveryIsFresh(initialOpportunity, mode)
+      && initialOpportunity.discoveryRelease?.stage !== "advisory";
     const submissionApproval = covered ? "automatic" : "always";
     if (!["automatic", "always"].includes(submissionApproval)) {
       throw new ClientError(400, `invalid submissionApproval for ${mode}`);
@@ -350,6 +360,11 @@ export class ApplicationService {
         decision.autoApply = false;
         decision.confirmations.push({ kind: "possible_duplicate",
           message: "An earlier application has the same employer and title. Verify that this is a separate opening before submission." });
+      }
+      if (opportunity.discoveryRelease?.stage === "advisory") {
+        decision.autoApply = false;
+        decision.confirmations.push({ kind: "discovery_fit_review",
+          message: "Review the newly broadened role and its current employer evidence before applying." });
       }
       const employerFrequencyReview = recentEmployerReceipts(state, identity.profileId,
         opportunity.company) >= 2;
@@ -441,6 +456,7 @@ export class ApplicationService {
         reasonCodes.push("recent_employer_submissions");
       }
       if (!policyCovers(policy, opportunity, current.mode)) reasonCodes.push("policy_not_covering");
+      if (opportunity.discoveryRelease?.stage === "advisory") reasonCodes.push("advisory_discovery_review_required");
       if (!verifiedDiscoveryIsFresh(opportunity, current.mode)) reasonCodes.push("discovery_unverified_or_stale");
       if (profile && opportunity) {
         const freshScore = scoreOpportunity(opportunity, profile, current.mode,
@@ -546,6 +562,7 @@ export class ApplicationService {
         || decision?.id !== input.permit || decision.status !== "reserved"
         || Date.parse(decision.expiresAt) <= Date.now()
         || !policyCovers(policy, opportunity, current.mode)
+        || opportunity.discoveryRelease?.stage === "advisory"
         || policy.id !== decision.policyId || policy.version !== decision.policyVersion
         || decision.previewFingerprint !== input.previewFingerprint) {
         throw new ClientError(409, "final submission permit is invalid or revoked");
@@ -923,6 +940,7 @@ export class ApplicationService {
     for (const opportunity of opportunities) {
       if (selectedIds.length >= campaign.target + campaign.reserve) break;
       if (campaign.reserveOnly) { selectedIds.push(opportunity.id); continue; }
+      if (opportunity.discoveryRelease?.stage === "advisory") continue;
       try {
         await this.requestApplication(opportunity.id, { campaignId }, identity);
         selectedIds.push(opportunity.id);
@@ -1314,7 +1332,8 @@ export class ApplicationService {
             && confirmation.kind === "final_submission_approval")).length;
       if (ready >= target + reserve) break;
       const used = new Set(current.map((item) => item.opportunityId));
-      const next = ranked.find((item) => !used.has(item.id));
+      const next = ranked.find((item) => !used.has(item.id)
+        && item.discoveryRelease?.stage !== "advisory");
       if (!next) break;
       try {
         const application = await this.requestApplication(next.id, { campaignId }, identity);

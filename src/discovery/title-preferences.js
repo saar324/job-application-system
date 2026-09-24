@@ -84,3 +84,18 @@ export function discoveryTitleRelevant(title, profile) {
   if ((preferences.excludedTitles ?? []).some((candidate) => matchesConfiguredTitle(title, candidate))) return false;
   return Boolean(configuredTitlePriority(title, profile));
 }
+
+// Preserve the pre-broadening ATS title gate for staged rollout. This is a
+// retrieval baseline only: it never grants fit or submission authority.
+export function legacyDiscoveryTitleRelevant(title, profile) {
+  const words = (value) => new Set(String(value ?? "").toLowerCase()
+    .match(/[a-z0-9+#.]{2,}/g) ?? []);
+  const preferences = profile?.preferences?.fullTime ?? {};
+  const matches = (candidate) => {
+    const titleWords = words(title);
+    const configured = [...words(candidate)];
+    return configured.length > 0 && configured.every((word) => titleWords.has(word));
+  };
+  return !(preferences.excludedTitles ?? []).some(matches)
+    && [...(preferences.jobTitles ?? []), ...(preferences.secondaryJobTitles ?? [])].some(matches);
+}

@@ -118,6 +118,24 @@ test("two aggregator sources resolve one Ashby role, re-score official evidence,
     .reduce((sum, row) => sum + row.selected, 0), 1);
 });
 
+test("a broadened public source keeps a verified exact-title ATS role advisory", async () => {
+  const { service, discovery, config } = await fixture(async (url) => {
+    const value = String(url);
+    if (value.includes("jobicy.com/api/")) return new Response(JSON.stringify({ jobs: [jobicyRow(ashbyUrl)] }));
+    if (value.includes("api.ashbyhq.com/")) return new Response(JSON.stringify({ jobs: [officialAshby] }));
+    throw new Error(`unexpected fetch ${value}`);
+  });
+  config.discovery.broadenedSources = { jobicy: true };
+  const scan = await discovery.scan({ sources: ["jobicy"], prepareApplications: true }, identity);
+  assert.equal(scan.items.length, 1);
+  assert.equal(scan.items[0].opportunity.discoverySource, "jobicy");
+  assert.deepEqual(scan.items[0].opportunity.discoveryRelease,
+    { stage: "advisory", sourceId: "jobicy", reason: "broadened_source" });
+  assert.equal(scan.items[0].application, undefined);
+  assert.equal(scan.items[0].applicationBlockedBySource, "advisory_fit_review_required");
+  assert.equal(service.list("applications", "person").length, 0);
+});
+
 test("bounded board redirect to Ashby is verified; non-ATS redirect stays pending", async () => {
   const boardUrl = "https://jobicy.com/jobs/one";
   let headCalls = 0;
