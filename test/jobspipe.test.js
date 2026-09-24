@@ -10,7 +10,7 @@ import { loadConfig } from "../src/config.js";
 import { DiscoveryService } from "../src/discovery/service.js";
 import { normalizeOpportunity } from "../src/discovery/normalization.js";
 import { scoreOpportunity } from "../src/discovery/scoring.js";
-import { jobspipe, jobspipeQuotaLimits } from "../src/discovery/sources/jobspipe.js";
+import { jobspipe, jobspipeQuotaLimits, validateJobspipeOptions } from "../src/discovery/sources/jobspipe.js";
 import { redactSecrets } from "../src/discovery/source-credentials.js";
 import { SourceQuota } from "../src/discovery/source-quota.js";
 import { ProfileStore } from "../src/profile-store.js";
@@ -135,6 +135,46 @@ test("the default LinkedIn exclusion is always in the body unless private config
   assert.deepEqual(bodies[1].source_not, ["linkedin", "example-board"], "agents can add exclusions, not remove them");
   assert.equal(bodies[2].source_not, undefined);
   assert.ok(bodies.every((body) => body.status === "active"));
+});
+
+test("private default filters reach every scan and stay below an agent's own query", async () => {
+  const quota = () => new SourceQuota(new JsonStore(path.join(os.tmpdir(), "unused.json")))
+    .forSource("jobspipe", jobspipeQuotaLimits());
+  const bodies = [];
+  const fetchImpl = async (url, options) => { bodies.push(JSON.parse(options.body)); return page([]); };
+  const sourceConfig = { maxPages: 1, defaultCountries: ["bg"],
+    defaults: { remote: "true", work_arrangement_or: ["remote"], posted_at_max_age_days: "14",
+      employer_type_not: ["agency"], source_not: ["example-board"] } };
+
+  const ledger = new SourceQuota(await new JsonStore(path.join(await mkdtemp(path.join(os.tmpdir(), "jp-def-")),
+    "state.json")).init()).forSource("jobspipe", jobspipeQuotaLimits());
+  await jobspipe.search({ profile, credentials: { apiKey }, quota: ledger, fetchImpl, sourceConfig });
+  assert.equal(bodies[0].remote, true, "a plain scan carries the owner's standing filters");
+  assert.deepEqual(bodies[0].work_arrangement_or, ["remote"]);
+  assert.deepEqual(bodies[0].employer_type_not, ["agency"]);
+  assert.equal(bodies[0].posted_at_max_age_days, 14, "a default overrides the built-in 7-day window");
+  assert.deepEqual(bodies[0].job_country_code_or, ["BG"]);
+  assert.deepEqual(bodies[0].source_not, ["linkedin", "example-board"],
+    "standing exclusions add to the LinkedIn default");
+
+  await jobspipe.search({ profile, credentials: { apiKey }, quota: ledger, fetchImpl, sourceConfig,
+    query: { remote: "false", posted_at_max_age_days: "3" } });
+  assert.equal(bodies[1].remote, false, "an agent's query wins over a standing default");
+  assert.equal(bodies[1].posted_at_max_age_days, 3);
+  assert.deepEqual(bodies[1].work_arrangement_or, ["remote"], "untouched defaults still apply");
+  assert.ok(quota);
+});
+
+test("private default filters are validated, and cannot restate country or titles", async () => {
+  assert.throws(() => validateJobspipeOptions({ defaults: { has_recruiter_email: "true" } }),
+    /defaults: unsupported filter: has_recruiter_email/);
+  assert.throws(() => validateJobspipeOptions({ defaults: { remote: "yes" } }), /defaults: unsupported filter: remote/);
+  assert.throws(() => validateJobspipeOptions({ defaults: ["remote"] }), /defaults must be an object/);
+  assert.throws(() => validateJobspipeOptions({ defaults: { job_country_code_or: ["BG"] } }),
+    /defaults\.job_country_code_or is not supported; use discovery\.sourceOptions\.jobspipe\.defaultCountries/);
+  assert.throws(() => validateJobspipeOptions({ defaults: { job_title_or: ["Program Manager"] } }),
+    /defaults\.job_title_or is not supported; use the profile's preferred titles/);
+  assert.deepEqual(validateJobspipeOptions({ defaults: { remote: "true" } }).defaults, { remote: "true" });
 });
 
 test("JobsPipe results normalize with verification evidence, stated pay only, and no contact data", async () => {
