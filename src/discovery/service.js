@@ -16,7 +16,8 @@ import { leadRetryDecision, matchingStoredLead } from "./candidate-state.js";
 import { selectSemanticCandidateIndexes } from "./semantic-candidate-selection.js";
 import { selectFitReviewCandidates } from "./fit-review-selection.js";
 import { fetchVerifiedOfficialAtsRole, officialAtsDestination, officialAtsIdentityFromUrl } from "./official-ats.js";
-import { sourceConfigWithLearnedBoards } from "./learned-boards.js";
+import { sourceConfigWithLearnedBoards, isLearnedBoardRequest,
+  learnedBoardRequestsInLastDay, MAX_LEARNED_BOARD_REQUESTS_PER_DAY } from "./learned-boards.js";
 
 const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever].map((source) => [source.id, source]));
 const atsBoardKey = (parsed) => parsed ? `${parsed.source}:${parsed.board}` : null;
@@ -75,6 +76,8 @@ export class DiscoveryService {
       ? profile?.preferences?.freelance : profile?.preferences?.fullTime;
     const snapshot = this.applicationService.store.snapshot();
     const backedOff = activeAtsBoardBackoffs(snapshot, identity.profileId);
+    const atBudget = (key) => learnedBoardRequestsInLastDay(snapshot.audit,
+      identity.profileId, key) >= MAX_LEARNED_BOARD_REQUESTS_PER_DAY;
     const enabled = preference?.automatedDiscoverySources ?? settings.sources ?? [];
     const sourceCycles = completedSourceCycles(snapshot.audit, identity.profileId, enabled);
     const capabilities = {
@@ -96,7 +99,8 @@ export class DiscoveryService {
       configuredBoards: (() => {
         const options = sourceConfigWithLearnedBoards(snapshot, identity.profileId, id,
           this.config.discovery?.sourceOptions?.[id] ?? {},
-          { cycle: sourceCycles[id] ?? 0, isBackedOff: (key) => backedOff.has(key) });
+          { cycle: sourceCycles[id] ?? 0, isBackedOff: (key) => backedOff.has(key),
+            isAtRequestBudget: atBudget });
         return (options.boards ?? options.sites ?? []).map((item) => item.slug ?? item.token);
       })(),
       ...(["himalayas", "jobicy", "remoteok", "arbeitnow"].includes(id)
@@ -711,6 +715,22 @@ export class DiscoveryService {
     const backedOff = activeAtsBoardBackoffs(snapshot, identity.profileId);
     const sourceCycles = input.sourceCycles ?? completedSourceCycles(snapshot.audit,
       identity.profileId, selected.map((source) => source.id));
+    const sourceConfigs = new Map(selected.map((source) => [source.id,
+      sourceConfigWithLearnedBoards(snapshot, identity.profileId, source.id,
+        this.config.discovery?.sourceOptions?.[source.id] ?? {},
+        { cycle: sourceCycles[source.id] ?? 0,
+          isBackedOff: (key) => backedOff.has(key),
+          isAtRequestBudget: (key) => learnedBoardRequestsInLastDay(snapshot.audit,
+            identity.profileId, key) >= MAX_LEARNED_BOARD_REQUESTS_PER_DAY })]));
+    const learnedBoardKeys = new Set([...sourceConfigs].flatMap(([sourceId, options]) =>
+      (options.boards ?? options.sites ?? []).filter((board) => board.seedProvenance)
+        .map((board) => `${sourceId}:${String(board.slug ?? board.token).toLowerCase()}`)));
+    const learnedBoards = new Map([...sourceConfigs].flatMap(([sourceId, options]) =>
+      (options.boards ?? options.sites ?? []).filter((board) => board.seedProvenance)
+        .map((board) => [`${sourceId}:${String(board.slug ?? board.token).toLowerCase()}`,
+          { sourceId, board: String(board.slug ?? board.token),
+            seedProvenance: board.seedProvenance, seedVerifiedAt: board.seedVerifiedAt }])));
+    const learnedBoardRequests = new Map();
     const handledKeys = knownRoleIndex(snapshot, identity.profileId);
     const titlesByOpportunity = new Map(snapshot.opportunities
       .filter((item) => item.profileId === identity.profileId)
@@ -753,9 +773,33 @@ export class DiscoveryService {
         if (sourceId && (requestsBySource.get(sourceId) ?? 0) >= maxRequestsPerSource) {
           throw new Error("source request budget exhausted");
         }
+        // Claim the in-memory request slot before the durable board reservation
+        // yields, so concurrent ATS origins cannot overshoot source/global caps.
         requestCount += 1;
         if (sourceId) requestsBySource.set(sourceId, (requestsBySource.get(sourceId) ?? 0) + 1);
+        const learnedBoardKey = isLearnedBoardRequest(sourceId, key, learnedBoardKeys);
+        try {
+          if (learnedBoardKey) {
+            const reserved = await this.applicationService.store.mutate((state) => {
+              const at = Date.now();
+              if (learnedBoardRequestsInLastDay(state.audit, identity.profileId,
+                learnedBoardKey, at) >= MAX_LEARNED_BOARD_REQUESTS_PER_DAY) return false;
+              state.audit.push({ id: randomUUID(), at: new Date(at).toISOString(),
+                actorId: identity.actorId, profileId: identity.profileId,
+                action: "discovery.ats_learned_board_request", subjectId: learnedBoardKey,
+                details: { sourceId } });
+              return true;
+            });
+            if (!reserved) throw new Error("learned board request budget exhausted");
+          }
+        } catch (error) {
+          requestCount -= 1;
+          if (sourceId) requestsBySource.set(sourceId, requestsBySource.get(sourceId) - 1);
+          throw error;
+        }
         requestStartedAtByOrigin.set(new URL(key).origin, Date.now());
+        if (learnedBoardKey) learnedBoardRequests.set(learnedBoardKey,
+          (learnedBoardRequests.get(learnedBoardKey) ?? 0) + 1);
         fetchCache.set(key, Promise.resolve(this.fetchImpl(url, options)));
       }
       try { return (await fetchCache.get(key)).clone(); }
@@ -799,10 +843,7 @@ export class DiscoveryService {
       searchTitles,
       searchCycle: sourceCycles[source.id] ?? 0,
       isHandled,
-      sourceConfig: sourceConfigWithLearnedBoards(snapshot, identity.profileId, source.id,
-        this.config.discovery?.sourceOptions?.[source.id] ?? {},
-        { cycle: sourceCycles[source.id] ?? 0,
-          isBackedOff: (key) => backedOff.has(key) }),
+      sourceConfig: sourceConfigs.get(source.id),
       onError: (error) => internalErrors.push({ source: source.id, ...error }),
       onStats: (stats) => {
         const previous = providerStats.get(source.id) ?? { rawRows: 0,
@@ -1147,6 +1188,16 @@ export class DiscoveryService {
     telemetry.observe("discovery.jobs_found", uniqueFound.length, { mode });
     telemetry.observe("discovery.scan_ms", performance.now() - scanStarted, { mode });
     for (const [sourceId, roles] of handledBySource) sourceYield.get(sourceId).handledFiltered = roles.size;
+    const learnedBoardYield = [...learnedBoards].map(([key, board]) => ({ ...board,
+      requestsMade: learnedBoardRequests.get(key) ?? 0,
+      eligibleUnhandled: new Set(accepted.filter((role) => {
+        const parsed = officialAtsIdentityFromUrl(role.applyUrl);
+        return role.applicationDestinationVerified === true
+          && role.applicationDestinationPending !== true
+          && discoverySourceOf(role) === board.sourceId
+          && parsed && `${parsed.source}:${parsed.board}` === key;
+      }).flatMap((role) => [...roleKeys(role)].filter((roleKey) => roleKey.startsWith(`${key}:`)))).size
+    }));
     return {
       mode,
       sources: requestedSources,
@@ -1161,6 +1212,7 @@ export class DiscoveryService {
       fitReviewCandidates: selectFitReviewCandidates(fitReviewCandidates,
         unverifiedSkillCandidates),
       sourceYield: [...sourceYield.values()],
+      learnedBoardYield,
       searchPlanSeed: { profile: { preferences: { fullTime: {
         jobTitles: modePreferences.jobTitles ?? [],
         secondaryJobTitles: modePreferences.secondaryJobTitles ?? []
