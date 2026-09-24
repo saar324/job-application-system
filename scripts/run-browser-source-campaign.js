@@ -6,7 +6,8 @@ import { chromium } from "playwright";
 import { createHash } from "node:crypto";
 import { extractSourcePage, isBlockingStatus, isChallengePage,
   sourceAutomationPolicy } from "../src/discovery/browser-source.js";
-import { parsePublicFeed, publicFeedUrl } from "../src/discovery/public-feeds.js";
+import { jobgetherGeographyScope, parsePublicFeed,
+  publicFeedUrl } from "../src/discovery/public-feeds.js";
 import { SourceProgress } from "../src/discovery/source-progress.js";
 import { SourceJournal } from "../src/discovery/source-journal.js";
 import { SourceBudget, SourceTimeoutError } from "../src/discovery/source-budget.js";
@@ -14,11 +15,15 @@ import { settleSourcePage } from "../src/discovery/browser-settle.js";
 import { nextQueryPage } from "../src/discovery/query-pagination.js";
 import { searchTitleQueryPlan } from "../src/discovery/search-title-queries.js";
 import { browserListingPlan } from "../src/discovery/browser-listing-plan.js";
+import { applyBroadSearch } from "../src/discovery/browser-search.js";
 
 const options = argumentsOf(process.argv.slice(2));
 if (!options.campaign || !options.catalog) {
   console.error("usage: run-browser-source-campaign --campaign ID --catalog FILE [--server URL] [--token-file FILE] [--source-timeout-ms 50000] [--headed]");
   process.exit(2);
+}
+if (options.location) {
+  throw new Error("--location is not source-specific; configure a reviewed regional listing URL instead");
 }
 const catalog = JSON.parse(await readFile(path.resolve(options.catalog), "utf8"));
 const querySeed = options.queryPlanFile
@@ -139,9 +144,12 @@ async function searchSource(source, policy, progressState, budget, sourceCycle =
       ? jobgetherQueryPlan(options.query, policy, sourceCycle) : null;
     const feedQueries = queryPlan ? queryPlan.queries.map((item) => item.term)
       : [options.query ?? "engineer"];
+    const feedScopes = feedQueries.map((_, index) => source.id === "jobgether"
+      ? jobgetherGeographyScope(sourceContext.residenceCountry, index, sourceCycle) : null);
     if (queryPlan) {
       progress(source.id, 0, 0, "query-plan", { cycle: queryPlan.cycle,
-        queries: queryPlan.queries.map(({ term, origin }) => ({ term, origin })),
+        queries: queryPlan.queries.map(({ term, origin }, index) =>
+          ({ term, origin, geographyScope: feedScopes[index] })),
         skippedTerms: queryPlan.skippedTerms,
         coverageBlocked: queryPlan.coverageBlocked });
     }
@@ -156,6 +164,7 @@ async function searchSource(source, policy, progressState, budget, sourceCycle =
       return result(false);
     }
     const feedUrl = publicFeedUrl(source.id, { query: feedQueries[0], ...sourceContext,
+      geographyScope: feedScopes[0],
       limit: source.id === "jobgether" ? 25
         : source.id === "remotive" || source.id === "weworkremotely" ? 100 : 10 });
     if (feedUrl) {
@@ -179,7 +188,8 @@ async function searchSource(source, policy, progressState, budget, sourceCycle =
         nextUrl = null;
         const seeds = new Map();
         const linksByQuery = feedQueries.map(() => []);
-        queryStats = feedQueries.map((term) => ({ term, pages: 0, rawRows: 0,
+        queryStats = feedQueries.map((term, index) => ({ term,
+          geographyScope: feedScopes[index], pages: 0, rawRows: 0,
           uniqueRows: 0, detailAttempts: 0, extractedJobs: 0 }));
         const firstQueryForLink = new Map();
         const addSeeds = (items, queryIndex) => {
@@ -205,6 +215,7 @@ async function searchSource(source, policy, progressState, budget, sourceCycle =
           const next = nextQueryPage(cursors, lastQueryIndex);
           if (!next) break;
           const pageUrl = publicFeedUrl(source.id, { query: next.query, ...sourceContext,
+            geographyScope: feedScopes[next.index],
             page: next.page, limit: 25 });
           requestsMade += 1;
           const pageResponse = await politeFeedFetch(pageUrl, policy, budget);
@@ -268,7 +279,7 @@ async function searchSource(source, policy, progressState, budget, sourceCycle =
       if (listing.challenge) { challenge = true; break; }
       if (!listing.ok) { errors.push({ error: `listing returned HTTP ${listing.status}: ${nextUrl}` }); break; }
       if (pagesVisited === 0) await budget.run(() => applyBroadSearch(page,
-        options.query ?? "engineer", options.location ?? "", budget));
+        options.query ?? "engineer", budget));
       pagesVisited += 1;
       const extracted = extractSourcePage(await budget.run(() => page.content()),
         page.url(), source.id, sourceContext);
@@ -365,46 +376,6 @@ async function politeFeedFetch(url, policy, budget) {
   hostLastRequest.set(host, Date.now());
   return response;
 }
-
-async function applyBroadSearch(page, query, location, budget) {
-  const selectors = [
-    'input[type="search"]', 'input[name*="keyword" i]', 'input[name*="search" i]',
-    'input[placeholder*="job" i]', 'input[placeholder*="role" i]', 'input[placeholder*="keyword" i]'
-  ];
-  for (const selector of selectors) {
-    const inputs = page.locator(selector);
-    for (let index = 0; index < Math.min(await inputs.count(), 4); index += 1) {
-      const input = inputs.nth(index);
-      if (!await input.isVisible().catch(() => false)) continue;
-      const before = page.url();
-      await input.fill(query);
-      const locationInput = page.locator('input[placeholder*="location" i]').filter({ visible: true }).first();
-      if (await locationInput.isVisible().catch(() => false)) {
-        await locationInput.fill(location);
-        await budget.sleep(400);
-        const option = page.getByRole("option", { name: new RegExp(`^${escapePattern(location)}$`, "i") })
-          .filter({ visible: true }).first();
-        if (await option.isVisible().catch(() => false)) await option.click({ timeout: 2_000 }).catch(() => undefined);
-      }
-      const submit = page.locator("button[data-submit]").filter({ visible: true }).first();
-      if (await submit.isVisible().catch(() => false)) {
-        await submit.click({ timeout: 3_000, noWaitAfter: true }).catch(() => undefined);
-      } else await input.press("Enter");
-      await settleSourcePage(page, budget);
-      if (page.url() === before) {
-        const button = page.getByRole("button", { name: /^search$/i }).filter({ visible: true }).first();
-        if (await button.isVisible().catch(() => false)) {
-          await button.click({ timeout: 3_000, noWaitAfter: true }).catch(() => undefined);
-          await settleSourcePage(page, budget);
-        }
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
-function escapePattern(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
 function jobgetherQueryPlan(query, policy, sourceCycle = 0) {
   if (query && String(query).trim().toLowerCase() !== "engineer") {
