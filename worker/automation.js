@@ -291,7 +291,12 @@ async function fillControl(locator, field, value, surface) {
       && await locator.evaluate((element) =>
         element.closest('.file-upload[role="group"]')?.getAttribute("aria-labelledby")
           === "upload-label-resume").catch(() => false);
-    await locator.setInputFiles(String(value));
+    try { await locator.setInputFiles(String(value)); }
+    catch (error) {
+      // React can remove the input during its change event before Playwright
+      // resolves. Only the exact completed upload chip may recover this path.
+      if (!greenhouseResume) throw error;
+    }
     if (greenhouseResume) {
       // Greenhouse uploads to S3 before replacing this input with a success
       // chip. Selecting a local file alone is not an upload acknowledgement.
@@ -1171,6 +1176,16 @@ export async function automateApplication({ page, profile, opportunity, applicat
       if (validation.length) return pause({ status: "needs_input",
         message: "The application has field errors before final submission",
         requirements: validation }, step);
+      const greenhouseResumeGroup = /^(?:job-boards|boards)(?:\.eu)?\.greenhouse\.io$/.test(
+        new URL(surface.url()).hostname)
+        && await surface.locator('.file-upload[role="group"][aria-labelledby="upload-label-resume"]').count();
+      if (greenhouseResumeGroup && ![...observedFields.values()].some((field) =>
+        field.step === step && field.key === "resume" && field.type === "file"
+          && field.status === "filled" && field.greenhouseResume === true)) {
+        return pause({ status: "needs_input", message: "The resume upload is missing from final review",
+          requirements: [{ kind: "final_review_changed", fields: ["resume"],
+            message: "Review Resume/CV again before submission" }] }, step);
+      }
       const matchedDetachedFileInputs = new Set();
       for (const field of [...observedFields.values()].filter((item) => item.step === step)) {
         if (field.type === "ashby_custom") continue;

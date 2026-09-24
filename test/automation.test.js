@@ -703,10 +703,10 @@ test("Greenhouse resume success chip survives final review beside an empty cover
     </div>
     <button type="submit">Submit Application</button>
   </form><script>
-    document.querySelector('#resume').addEventListener('change', (event) => setTimeout(() => {
+    document.querySelector('#resume').addEventListener('change', (event) => {
       event.target.closest('.file-upload').querySelector('.file-upload__wrapper').innerHTML =
         '<div class="file-upload__filename">resume.pdf<button type="button" aria-label="Remove file"></button></div>';
-    }, 40));
+    });
   </script>`;
   const result = await run(html, {}, { ...profile, documents: { resume } },
     { finalApprovalRequired: true },
@@ -715,6 +715,77 @@ test("Greenhouse resume success chip survives final review beside an empty cover
   assert.equal(result.requirements[0].kind, "final_submission_approval");
   assert.ok(result.requirements[0].preview.filled.some((field) =>
     field.key === "resume" && field.value === "resume.pdf"));
+});
+
+test("Greenhouse immediate upload replacement survives a detached file-control response", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
+  const resume = path.join(directory, "resume.pdf");
+  await writeFile(resume, "resume-body");
+  const url = "https://job-boards.greenhouse.io/example/jobs/12345";
+  const html = `<form>
+    <div role="group" aria-labelledby="upload-label-resume" class="file-upload">
+      <div id="upload-label-resume">Resume/CV*</div>
+      <div class="file-upload__wrapper"><label for="resume">Attach</label>
+        <input id="resume" type="file"></div>
+    </div>
+    <div role="group" aria-labelledby="upload-label-cover_letter" class="file-upload">
+      <div id="upload-label-cover_letter">Cover Letter</div>
+      <div class="file-upload__wrapper"><label for="cover_letter">Attach</label>
+        <input id="cover_letter" type="file"></div>
+    </div>
+    <button type="submit">Submit Application</button>
+  </form><script>
+    document.querySelector('#resume').addEventListener('change', (event) => {
+      event.target.closest('.file-upload').querySelector('.file-upload__wrapper').innerHTML =
+        '<div class="file-upload__filename">resume.pdf<button type="button" aria-label="Remove file"></button></div>';
+    });
+  </script>`;
+  const result = await run(html, {}, { ...profile, documents: { resume } },
+    { finalApprovalRequired: true }, async (page) => {
+      const originalLocator = page.locator.bind(page);
+      page.locator = (selector, ...args) => {
+        const locator = originalLocator(selector, ...args);
+        if (!selector.startsWith("input:not([type=hidden])")) return locator;
+        const originalNth = locator.nth.bind(locator);
+        locator.nth = (index) => {
+          const control = originalNth(index);
+          const originalSetInputFiles = control.setInputFiles.bind(control);
+          control.setInputFiles = async (...files) => {
+            await originalSetInputFiles(...files);
+            throw new Error("The upload input detached while Playwright handled the change event");
+          };
+          return control;
+        };
+        return locator;
+      };
+      await page.route(url, (route) => route.fulfill({ status: 200,
+        contentType: "text/html", body: html }));
+    }, {}, { applyUrl: url });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled.find((field) => field.key === "resume")?.files,
+    [{ name: "resume.pdf", size: 11 }]);
+  assert.ok(result.requirements[0].preview.unfilled.some((field) => field.key === "cover_letter"));
+});
+
+test("Greenhouse success chip without a captured upload cannot enter final approval", async () => {
+  const url = "https://job-boards.greenhouse.io/example/jobs/12345";
+  const html = `<form>
+    <div role="group" aria-labelledby="upload-label-resume" class="file-upload">
+      <div id="upload-label-resume">Resume/CV*</div>
+      <div class="file-upload__filename">resume.pdf
+        <button type="button" aria-label="Remove file"></button></div>
+    </div>
+    <div role="group" aria-labelledby="upload-label-cover_letter" class="file-upload">
+      <div id="upload-label-cover_letter">Cover Letter</div>
+      <input id="cover_letter" type="file">
+    </div>
+    <button type="submit">Submit Application</button>
+  </form>`;
+  const result = await run(html, {}, profile, { finalApprovalRequired: true },
+    async (page) => page.route(url, (route) => route.fulfill({ status: 200,
+      contentType: "text/html", body: html })), {}, { applyUrl: url });
+  assert.equal(result.requirements[0].kind, "final_review_changed");
+  assert.deepEqual(result.requirements[0].fields, ["resume"]);
 });
 
 test("Greenhouse drafted prose retains the verified resume in the approval and fingerprint", async () => {
