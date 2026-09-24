@@ -33,6 +33,9 @@ export function normalizeOpportunity(raw, { source = raw.source ?? "unknown" } =
     location: raw.location ? evidence(source, "location", raw.location) : undefined,
     employmentType: raw.employmentType ? evidence(source, "employmentType", raw.employmentType) : undefined,
     compensation: raw.compensation ? evidence(source, "compensation", JSON.stringify(raw.compensation)) : undefined,
+    // Provider-predicted pay is evidence only; eligibility reads `compensation`.
+    compensationEstimate: raw.compensationEstimate
+      ? evidence(source, "compensationEstimate", JSON.stringify(raw.compensationEstimate), "low") : undefined,
     applicationQuestions: raw.applicationQuestions?.length
       ? evidence(source, "applicationQuestions", `${raw.applicationQuestions.length} questions`) : undefined
   };

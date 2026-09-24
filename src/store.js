@@ -67,6 +67,44 @@ export class JsonStore {
     });
   }
 
+  async reserveSourceQuota({ sourceId, windows, cost = 1, at = new Date().toISOString() }) {
+    return this.mutate((state) => {
+      const ledger = state.sourceQuota ??= { usage: [], holds: [] };
+      ledger.holds = ledger.holds.filter((item) => item.until > at);
+      const hold = ledger.holds.find((item) => item.sourceId === sourceId);
+      if (hold) return { reserved: false, hold: { reason: hold.reason, until: hold.until } };
+      ledger.usage = ledger.usage.filter((item) => item.sourceId !== sourceId
+        || windows.some((window) => window.window === item.window && window.start === item.start)
+        || !windows.some((window) => window.window === item.window));
+      const rows = windows.map((window) => ({ window, row: ledger.usage.find((item) => item.sourceId === sourceId
+        && item.window === window.window && item.start === window.start) }));
+      const blocked = rows.find(({ window, row }) => (row?.used ?? 0) + cost > window.limit);
+      if (blocked) return { reserved: false, window: blocked.window.window, used: blocked.row?.used ?? 0 };
+      for (const { window, row } of rows) {
+        if (row) row.used += cost;
+        else ledger.usage.push({ sourceId, window: window.window, start: window.start, used: cost });
+      }
+      return { reserved: true };
+    });
+  }
+
+  async holdSourceQuota({ sourceId, reason, until }) {
+    return this.mutate((state) => {
+      const ledger = state.sourceQuota ??= { usage: [], holds: [] };
+      const existing = ledger.holds.find((item) => item.sourceId === sourceId);
+      if (!existing) ledger.holds.push({ sourceId, reason, until });
+      else if (until > existing.until) Object.assign(existing, { reason, until });
+    });
+  }
+
+  async sourceQuotaUsage({ sourceId, windows, at = new Date().toISOString() }) {
+    const ledger = this.#state.sourceQuota ?? { usage: [], holds: [] };
+    const hold = ledger.holds.find((item) => item.sourceId === sourceId && item.until > at);
+    return { used: Object.fromEntries(windows.map((window) => [window.window, ledger.usage.find((item) =>
+      item.sourceId === sourceId && item.window === window.window && item.start === window.start)?.used ?? 0])),
+    hold: hold ? { reason: hold.reason, until: hold.until } : null };
+  }
+
   async mutate(fn) {
     const operation = this.#pending.then(async () => {
       const draft = structuredClone(this.#state);

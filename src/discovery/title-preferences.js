@@ -72,6 +72,23 @@ export function preferredTitleGroups(profile) {
   };
 }
 
+// Up to eight primary and four secondary preferred titles, deduplicated, used
+// as provider search terms by sources that need a keyword.
+export function profileSearchTerms(profile) {
+  const groups = preferredTitleGroups(profile);
+  const preferred = groups.primary.length
+    ? groups.primary
+    : profile?.preferences?.jobTitles ?? [];
+  const primaryValues = [...preferred]
+    .filter((value) => typeof value === "string" && value.trim())
+    .map((value) => value.trim());
+  const primary = [...new Map(primaryValues.map((value) => [value.toLowerCase(), value])).values()].slice(0, 8);
+  const secondary = groups.secondary
+    .filter((value) => typeof value === "string" && value.trim())
+    .map((value) => value.trim()).slice(0, 4);
+  return [...new Map([...primary, ...secondary].map((value) => [value.toLowerCase(), value])).values()];
+}
+
 export function configuredTitlePriority(title, profile) {
   const groups = preferredTitleGroups(profile);
   if (groups.primary.some((candidate) => matchesConfiguredTitle(title, candidate))) return "primary";
