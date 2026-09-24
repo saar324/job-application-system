@@ -105,7 +105,10 @@ test("JobsPipe sends an allowlisted Bearer POST for active roles and follows cur
   assert.equal(first.method, "POST");
   assert.equal(first.headers.authorization, `Bearer ${apiKey}`);
   assert.equal(first.headers["content-type"], "application/json");
-  assert.deepEqual(first.body, { posted_at_max_age_days: 7, job_title_or: ["Platform Engineer"], status: "active",
+  // Titles come from the shared search plan, which adds role-family variants and
+  // a broad probe to the configured title.
+  assert.deepEqual(first.body, { posted_at_max_age_days: 7,
+    job_title_or: ["Platform Engineer", "Platform Developer", "software"], status: "active",
     source_not: ["linkedin"], limit: 25 });
   assert.equal(second.body.cursor, "cursor-2", "a second body with the cursor is not served from the first's cache");
   assert.equal(result.found, 50);

@@ -1,5 +1,5 @@
 import { plainText } from "../text.js";
-import { profileSearchTerms } from "../title-preferences.js";
+import { searchTitleQueryPlan } from "../search-title-queries.js";
 import { redactSecrets } from "../source-credentials.js";
 import { officialAtsIdentityFromUrl } from "../official-ats.js";
 
@@ -258,12 +258,14 @@ export const jobspipe = {
   // grants at most the remaining monthly credits (or throws), `settle` records
   // the provider's charge, and `hold` pauses the source.
   async search({ limit = 25, fetchImpl = fetch, profile, query = {}, sourceConfig = {}, credentials, quota,
+    searchTitles = [], searchCycle = 0,
     onError = () => {} }) {
     if (!credentials?.apiKey) throw Object.assign(new Error("source_not_configured"), { code: "source_not_configured" });
     if (!quota) throw new Error("jobspipe requires the durable credit ledger");
     const filters = validateJobspipeFilters(query);
     const settings = jobspipeSettings(sourceConfig);
-    const titles = filters.job_title_or ?? profileSearchTerms(profile);
+    const plan = searchTitleQueryPlan(profile, searchTitles, { maximum: 16, cycle: searchCycle });
+    const titles = filters.job_title_or ?? plan.queries.map((item) => item.term);
     if (!titles.length) return [];
     const excluded = [...new Set([...settings.excludeSources, ...(settings.defaults.source_not ?? []),
       ...(filters.source_not ?? [])])];
