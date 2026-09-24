@@ -553,6 +553,13 @@ export class DiscoveryService {
             (exclusionReasons.get("official_ats_identity_mismatch") ?? 0) + 1);
           continue;
         }
+        // An official role URL already in this profile's handled index needs
+        // no further lookup. Preserve the mismatch check above so a forged
+        // listing cannot claim the identity of a different ATS opening.
+        if (officialIdentity && knownKeys.has(officialIdentity.key)) {
+          handledFiltered += 1;
+          continue;
+        }
         if (officialIdentity && atsBackoffKeys.has(atsBoardKey(officialIdentity))) {
           excluded += 1;
           exclusionReasons.set("official_ats_backoff",
@@ -932,6 +939,7 @@ export class DiscoveryService {
     const normalizedFound = [];
     const seenOfficialKeys = new Set();
     const officialAttempts = new Map();
+    const resolutionAttempts = new Map();
     let excluded = 0;
     let officialResolutionMs = 0;
     const configuredOfficialCandidateCap = Number(
@@ -958,6 +966,7 @@ export class DiscoveryService {
         const started = performance.now();
         try {
           const attempt = officialAttempts.get(origin) ?? 0;
+          const resolutionAttempt = resolutionAttempts.get(origin) ?? 0;
           const mayResolve = Boolean(officialAtsIdentityFromUrl(raw.applyUrl)
             || raw.applicationDestinationPending === true);
           let resolution;
@@ -965,10 +974,10 @@ export class DiscoveryService {
             resolution = { reason: "aggregator_backoff" };
           } else if (!mayResolve) {
             resolution = { reason: "non_ats_destination" };
-          } else if (attempt >= officialCandidateCap) {
+          } else if (resolutionAttempt >= officialCandidateCap * 2) {
             resolution = { reason: "candidate_cap" };
           } else {
-            officialAttempts.set(origin, attempt + 1);
+            resolutionAttempts.set(origin, resolutionAttempt + 1);
             try {
               resolution = await officialAtsUrlFromAggregator(raw,
                 (url, options) => pacedOfficialFetch(url, options, origin));
@@ -985,41 +994,54 @@ export class DiscoveryService {
               excluded += 1;
               continue;
             }
-            const key = atsBoardKey(resolution.identity);
-            if (!backedOff.has(key)) {
-              let failure = "verification_failed";
-              const verified = await fetchVerifiedOfficialAtsRole(resolution.url,
-                this.config.discovery?.sourceOptions ?? {},
-                (url, options) => pacedOfficialFetch(url, options, origin).catch((error) => {
-                  if (/budget exhausted/i.test(error.message)) throw new Error("official lookup budget exhausted");
-                  throw error;
-                }), (reason) => { failure = reason; });
-              if (verified) {
-                if (resolution.evidence === "himalayas_explicit_apply_link"
-                  && (!exactRoleText(raw.title) || !exactRoleText(raw.company)
-                    || exactRoleText(raw.title) !== exactRoleText(verified.title)
-                    || exactRoleText(raw.company) !== exactRoleText(verified.company))) {
+            // Public-board IDs differ from employer ATS IDs. Once the bounded
+            // redirect reveals an already handled official role, avoid both a
+            // fresh ATS request and a slot in the new-role verification cap.
+            if (isHandled({ source: origin, applyUrl: resolution.url })) continue;
+            if (seenOfficialKeys.has(resolution.identity.key)) {
+              if (row) row.dedupFiltered += 1;
+              continue;
+            }
+            if (attempt >= officialCandidateCap) {
+              resolution = { reason: "candidate_cap" };
+            } else {
+              const key = atsBoardKey(resolution.identity);
+              if (!backedOff.has(key)) {
+                officialAttempts.set(origin, attempt + 1);
+                let failure = "verification_failed";
+                const verified = await fetchVerifiedOfficialAtsRole(resolution.url,
+                  this.config.discovery?.sourceOptions ?? {},
+                  (url, options) => pacedOfficialFetch(url, options, origin).catch((error) => {
+                    if (/budget exhausted/i.test(error.message)) throw new Error("official lookup budget exhausted");
+                    throw error;
+                  }), (reason) => { failure = reason; });
+                if (verified) {
+                  if (resolution.evidence === "himalayas_explicit_apply_link"
+                    && (!exactRoleText(raw.title) || !exactRoleText(raw.company)
+                      || exactRoleText(raw.title) !== exactRoleText(verified.title)
+                      || exactRoleText(raw.company) !== exactRoleText(verified.company))) {
+                    if (row) row.excluded += 1;
+                    excluded += 1;
+                    continue;
+                  }
+                  candidate = { ...verified, discoverySource: origin,
+                    provenance: { aggregatorSourceId: origin, aggregatorExternalId: raw.externalId,
+                      aggregatorListingUrl: raw.listingUrl, officialAtsVerified: true } };
+                  if (isHandled({ ...candidate, source: origin })) continue;
+                } else if (failure === "closed_or_mismatched_role"
+                  || failure === "ineligible_or_mismatched_destination") {
                   if (row) row.excluded += 1;
                   excluded += 1;
                   continue;
+                } else {
+                  resolution = { reason: failure };
+                  if (["http_403", "http_429"].includes(failure)) {
+                    await this.#recordAtsBackoff(identity, key, failure);
+                    backedOff.add(key);
+                  }
                 }
-                candidate = { ...verified, discoverySource: origin,
-                  provenance: { aggregatorSourceId: origin, aggregatorExternalId: raw.externalId,
-                    aggregatorListingUrl: raw.listingUrl, officialAtsVerified: true } };
-                if (isHandled({ ...candidate, source: origin })) continue;
-              } else if (failure === "closed_or_mismatched_role"
-                || failure === "ineligible_or_mismatched_destination") {
-                if (row) row.excluded += 1;
-                excluded += 1;
-                continue;
-              } else {
-                resolution = { reason: failure };
-                if (["http_403", "http_429"].includes(failure)) {
-                  await this.#recordAtsBackoff(identity, key, failure);
-                  backedOff.add(key);
-                }
-              }
-            } else resolution = { reason: "ats_backoff" };
+              } else resolution = { reason: "ats_backoff" };
+            }
           }
           if (candidate === raw) {
             // Unverified aggregator content remains observable and retriable,

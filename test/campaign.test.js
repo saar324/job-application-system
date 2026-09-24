@@ -129,6 +129,53 @@ test("campaign rechecks handled ATS identity after a public-board redirect", asy
   assert.equal(service.campaignStatus(result.campaignId, identity.profileId).elapsedMs, elapsed);
 });
 
+test("Arbeitnow keeps a same-title distinct Ashby opening visible after filtering a receipt", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-campaign-distinct-"));
+  const profiles = await new ProfileStore(path.join(directory, "profiles.json"), { allowMissing: true }).init();
+  await profiles.patch(identity.profileId, {
+    contact: { firstName: "Applicant", lastName: "Example", email: "applicant@example.test",
+      phone: "+10000000000", location: "Remote" },
+    documents: { resume: "/secure/resume.pdf" }, skills: ["TypeScript", "Node.js"],
+    preferences: { locations: ["Remote"], fullTime: { jobTitles: ["Senior Engineer"],
+      automatedDiscoverySources: ["arbeitnow"] } }
+  });
+  const config = { defaultMode: "full_time", discovery: { limitPerSource: 10 },
+    modes: { full_time: { minimumScore: 0, autoApply: false, autoApplyDiscovered: false,
+      dailyApplicationCap: 20, sources: ["arbeitnow"], requireConfirmationFor: [] } } };
+  const store = await new JsonStore(path.join(directory, "state.json")).init();
+  const service = new ApplicationService({ store, config, profiles,
+    adapter: { name: "unused", async submit() {} } });
+  const oldUrl = officialUrl("example", 1);
+  const newUrl = officialUrl("example", 2);
+  await store.mutate((state) => {
+    state.opportunities.push({ id: "prior-role", profileId: identity.profileId,
+      source: "ashby", externalId: "example:00000000-0000-4000-8000-000000000001",
+      title: "Senior Engineer", company: "Example", applyUrl: oldUrl,
+      applicationDestinationVerified: true });
+    state.applications.push({ id: "prior-receipt", profileId: identity.profileId,
+      opportunityId: "prior-role", status: "submitted",
+      receipt: { submittedAt: new Date().toISOString() } });
+  });
+  const discovery = new DiscoveryService({ applicationService: service, profiles, config,
+    fetchImpl: async (url) => {
+      const value = String(url);
+      if (value.endsWith("/apply")) return new Response(null, { status: 302,
+        headers: { location: value.includes("distinct") ? newUrl : oldUrl } });
+      return new Response(JSON.stringify({ data: ["handled", "distinct"].map((slug) => ({
+        slug, title: "Senior Engineer", company_name: "Example", remote: true,
+        location: "Remote", description: "TypeScript Node.js", job_types: ["full_time"],
+        url: `https://www.arbeitnow.com/jobs/companies/example/${slug}`
+      })) }));
+    } });
+  const result = await discovery.scan({ sources: ["arbeitnow"], prepareApplications: false }, identity);
+  assert.equal(result.handledFiltered, 1);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].opportunity.applyUrl, newUrl);
+  assert.equal(result.items[0].opportunity.applicationDestinationPending, true,
+    "the distinct role still needs fresh employer verification");
+  assert.equal(service.list("applications", identity.profileId).length, 1);
+});
+
 test("campaign searches every fallback source, caps each pool at ten, then ranks globally", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-campaign-all-sources-"));
   const profiles = await new ProfileStore(path.join(directory, "profiles.json"), { allowMissing: true }).init();

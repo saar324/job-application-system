@@ -193,6 +193,30 @@ test("a matching official ATS identity upgrades a pending cross-source role", as
   assert.equal(service.list("opportunities", "person").length, 1);
 });
 
+test("a browser listing for a submitted ATS role is handled before official lookup", async () => {
+  let fetches = 0;
+  const { service, discovery, campaign } = await fixture(async () => {
+    fetches += 1;
+    return new Response(JSON.stringify({ jobs: [job] }));
+  });
+  const prior = await service.addOpportunity({ source: "ashby", externalId: `example:${roleId}`,
+    title: job.title, company: "Example", applyUrl, listingUrl: job.jobUrl,
+    applicationDestinationVerified: true }, identity);
+  await service.store.mutate((state) => state.applications.push({
+    id: "prior-submitted-role", profileId: identity.profileId,
+    opportunityId: prior.id, status: "submitted",
+    receipt: { submittedAt: new Date().toISOString() }
+  }));
+  const result = await discovery.addCampaignSourceResults(campaign.campaignId, {
+    sourceId: "board_one", items: [{ ...browserCandidate, title: "Different board title",
+      company: "Different board company" }], completed: true
+  }, identity);
+  assert.equal(result.sourceCoverage.scans[0].handledFiltered, 1);
+  assert.equal(result.sourceCoverage.scans[0].selected, 0);
+  assert.equal(fetches, 0);
+  assert.equal(service.list("applications", identity.profileId).length, 1);
+});
+
 test("a live exact ATS role is rescored, deduplicated across browser sources, and policy permitted", async () => {
   let fetches = 0;
   const { service, discovery, campaign } = await fixture(async () => {
@@ -209,7 +233,7 @@ test("a live exact ATS role is rescored, deduplicated across browser sources, an
       listingUrl: "https://another-board.example.test/role" }], completed: true
   }, identity);
   assert.equal(second.sourceCoverage.scans[1].handledFiltered, 1);
-  assert.equal(fetches, 2);
+  assert.equal(fetches, 1);
   const opportunities = service.list("opportunities", "person");
   assert.equal(opportunities.length, 1);
   assert.equal(opportunities[0].source, "ashby");
