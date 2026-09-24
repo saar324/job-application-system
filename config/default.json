@@ -9,6 +9,7 @@
   "discovery": {
     "limitPerSource": 50,
     "scorerVersion": "2",
+    "broadenedSources": {},
     "semantic": { "maxCandidates": 20 },
     "sourceOptions": {
       "ashby": { "boards": [] },

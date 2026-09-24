@@ -15,6 +15,7 @@ import { isHandledRole, knownRoleIndex, roleKeys } from "./handled-roles.js";
 import { leadRetryDecision, matchingStoredLead } from "./candidate-state.js";
 import { selectSemanticCandidateIndexes } from "./semantic-candidate-selection.js";
 import { selectFitReviewCandidates } from "./fit-review-selection.js";
+import { legacyDiscoveryTitleRelevant } from "./title-preferences.js";
 import { fetchVerifiedOfficialAtsRole, officialAtsDestination, officialAtsIdentityFromUrl } from "./official-ats.js";
 import { sourceConfigWithLearnedBoards, isLearnedBoardRequest,
   learnedBoardRequestsInLastDay, MAX_LEARNED_BOARD_REQUESTS_PER_DAY } from "./learned-boards.js";
@@ -22,6 +23,7 @@ import { sourceConfigWithLearnedBoards, isLearnedBoardRequest,
 const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever].map((source) => [source.id, source]));
 const atsBoardKey = (parsed) => parsed ? `${parsed.source}:${parsed.board}` : null;
 const AGGREGATOR_SOURCES = new Set(["himalayas", "jobicy"]);
+const STAGED_ATS_SOURCES = new Set(["ashby", "greenhouse", "lever"]);
 const discoverySourceOf = (role) => role.discoverySource ?? role.source;
 const exactRoleText = (value) => String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 
@@ -99,8 +101,9 @@ export class DiscoveryService {
       configuredBoards: (() => {
         const options = sourceConfigWithLearnedBoards(snapshot, identity.profileId, id,
           this.config.discovery?.sourceOptions?.[id] ?? {},
-          { cycle: sourceCycles[id] ?? 0, isBackedOff: (key) => backedOff.has(key),
-            isAtRequestBudget: atBudget });
+          { cycle: sourceCycles[id] ?? 0,
+            includeLearned: this.config.discovery?.broadenedSources?.[id] === true,
+            isBackedOff: (key) => backedOff.has(key), isAtRequestBudget: atBudget });
         return (options.boards ?? options.sites ?? []).map((item) => item.slug ?? item.token);
       })(),
       ...(["himalayas", "jobicy", "remoteok", "arbeitnow"].includes(id)
@@ -187,6 +190,7 @@ export class DiscoveryService {
         await this.profiles.get(identity.profileId), mode,
         target + reserve);
       const ready = [...scan.items, ...preloaded].filter((entry) => !entry.opportunity.applicationDestinationPending
+        && entry.opportunity.discoveryRelease?.stage !== "advisory"
         && /^https:\/\//i.test(entry.opportunity.applyUrl ?? ""));
       const ranked = [...ready].sort((left, right) => Number(right.opportunity.score ?? 0) - Number(left.opportunity.score ?? 0)
         || Date.parse(right.opportunity.postedAt ?? 0) - Date.parse(left.opportunity.postedAt ?? 0));
@@ -575,6 +579,14 @@ export class DiscoveryService {
           provenance: { importedBy: "campaign_browser_fallback", browserSourceId: sourceId,
             sourceUrl: raw.provenance?.sourceUrl, officialAtsVerified: true } }, { source: official.source }) : raw;
         if (isHandledRole(verified, knownKeys)) { handledFiltered += 1; continue; }
+        const broadenedBrowserSource = this.config.discovery?.broadenedSources?.[sourceId] === true;
+        if (official && !broadenedBrowserSource
+          && !legacyDiscoveryTitleRelevant(verified.title, profile)) {
+          excluded += 1;
+          exclusionReasons.set("broadened_source_disabled",
+            (exclusionReasons.get("broadened_source_disabled") ?? 0) + 1);
+          continue;
+        }
         for (const key of roleKeys(verified)) knownKeys.add(key);
         let scored = { ...verified, mode: campaign.mode,
           ...scoreOpportunity(verified, profile, campaign.mode, { version: scorerVersion }) };
@@ -612,7 +624,9 @@ export class DiscoveryService {
             applicationDestinationVerified: false });
           continue;
         }
-        eligible.push({ scored, serverVerifiedDiscovery: Boolean(official) });
+        eligible.push({ scored, serverVerifiedDiscovery: Boolean(official),
+          advisoryDiscovery: official && broadenedBrowserSource
+            ? { stage: "advisory", sourceId, reason: "broadened_browser_source" } : null });
       } catch (error) {
         errors.push({ stage: "candidate_import", error: String(error.message ?? error).slice(0, 500) });
       }
@@ -632,7 +646,7 @@ export class DiscoveryService {
         alreadyPending.add(opportunity.id);
       }
     }
-    for (const { scored, serverVerifiedDiscovery } of eligible.sort((left, right) =>
+    for (const { scored, serverVerifiedDiscovery, advisoryDiscovery } of eligible.sort((left, right) =>
       Number(right.scored.score ?? 0) - Number(left.scored.score ?? 0)
       || Date.parse(right.scored.postedAt ?? 0) - Date.parse(left.scored.postedAt ?? 0))
       .slice(0, remainingSourceSlots)) {
@@ -640,7 +654,7 @@ export class DiscoveryService {
         ...(campaign.reserveOnly && serverVerifiedDiscovery
           ? { reserveObservedAt: new Date().toISOString(),
             reserveExpiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString() } : {}) },
-        identity, { serverVerifiedDiscovery });
+        identity, { serverVerifiedDiscovery, advisoryDiscovery });
       opportunityIds.push(opportunity.id); selected += 1;
       for (const key of roleKeys(opportunity)) knownKeys.add(key);
     }
@@ -719,6 +733,7 @@ export class DiscoveryService {
       sourceConfigWithLearnedBoards(snapshot, identity.profileId, source.id,
         this.config.discovery?.sourceOptions?.[source.id] ?? {},
         { cycle: sourceCycles[source.id] ?? 0,
+          includeLearned: this.config.discovery?.broadenedSources?.[source.id] === true,
           isBackedOff: (key) => backedOff.has(key),
           isAtRequestBudget: (key) => learnedBoardRequestsInLastDay(snapshot.audit,
             identity.profileId, key) >= MAX_LEARNED_BOARD_REQUESTS_PER_DAY })]));
@@ -1063,6 +1078,16 @@ export class DiscoveryService {
     const unverifiedSkillCandidates = [];
     for (let index = 0; index < normalizedFound.length; index += 1) {
       let raw = normalizedFound[index];
+      const sourceId = discoverySourceOf(raw);
+      const atsSource = STAGED_ATS_SOURCES.has(sourceId);
+      const boardKey = atsSource ? `${sourceId}:${String(raw.externalId ?? "").split(":")[0].toLowerCase()}` : null;
+      const broadenedSourceEnabled = this.config.discovery?.broadenedSources?.[sourceId] === true;
+      // The old ATS title gate used full-time preferences. Public freelance
+      // discovery had no equivalent title prefilter, so preserve that path.
+      const legacyTitleAllowed = (mode === "freelance" && !atsSource)
+        || legacyDiscoveryTitleRelevant(raw.title, profile);
+      const broaderRole = learnedBoards.has(boardKey)
+        || !legacyTitleAllowed;
       if (this.enricher && semanticCandidates.has(index)) {
         try { raw = await this.enricher.enrich(raw, profile); }
         catch (error) {
@@ -1074,6 +1099,8 @@ export class DiscoveryService {
       const shadow = shadowScorerVersion
         ? scoreOpportunity(raw, profile, mode, { version: shadowScorerVersion }) : null;
       let scored = { ...raw, mode, ...score,
+        ...(broadenedSourceEnabled ? { discoveryRelease: { stage: "advisory", sourceId,
+          reason: learnedBoards.has(boardKey) ? "learned_board" : "broadened_source" } } : {}),
         ...(shadow ? { scoreComparison: { activeVersion: scorerVersion, activeScore: score.score,
           shadowVersion: shadowScorerVersion, shadowScore: shadow.score,
           changedEligibility: Boolean(score.scoreDetails.hardExclusion) !== Boolean(shadow.scoreDetails.hardExclusion) } } : {}) };
@@ -1121,6 +1148,11 @@ export class DiscoveryService {
         }
         continue;
       }
+      if (broaderRole && !broadenedSourceEnabled) {
+        excluded += 1;
+        if (sourceYield.has(sourceId)) sourceYield.get(sourceId).excluded += 1;
+        continue;
+      }
       if (scored.applicationDestinationPending) {
         const destinationStarted = performance.now();
         try { scored = await resolveEmployerApplicationUrl(scored, cachedFetch); }
@@ -1164,12 +1196,15 @@ export class DiscoveryService {
         ...(input.reserveOnly && scored.applicationDestinationVerified
           ? { reserveObservedAt: new Date().toISOString(),
             reserveExpiresAt: new Date(Date.now() + 45 * 60_000).toISOString() } : {})
-      }, identity, { serverVerifiedDiscovery: true });
+      }, identity, { serverVerifiedDiscovery: true,
+        advisoryDiscovery: scored.discoveryRelease });
       const entry = { opportunity };
       const autoApplyDiscovered = input.prepareApplications === false ? false : modeConfig.autoApplyDiscovered;
       if (autoApplyDiscovered && scored.applicationDestinationPending) {
         entry.applicationBlockedBySource = "employer_application_url_required";
         telemetry.count("discovery.application_destination_pending", 1, { source: scored.source });
+      } else if (autoApplyDiscovered && opportunity.discoveryRelease?.stage === "advisory") {
+        entry.applicationBlockedBySource = "advisory_fit_review_required";
       } else if (autoApplyDiscovered && profileStatus.readyToApply) {
         try { entry.application = await this.applicationService.requestApplication(opportunity.id, {}, identity); }
         catch (error) {

@@ -156,7 +156,7 @@ test("a learned board makes at most two list requests per day across scans", asy
     preferences: { locations: ["Worldwide"], fullTime: { jobTitles: ["Software Developer Alpha"],
       allowedLocations: ["Worldwide"], remoteOnly: true,
       automatedDiscoverySources: ["ashby"] } } });
-  const config = { defaultMode: "full_time", discovery: { sourceOptions: { ashby: {
+  const config = { defaultMode: "full_time", discovery: { broadenedSources: { ashby: true }, sourceOptions: { ashby: {
     boards: [], ownerCuratedBoards: [{ profileId: "owner", company: "Example",
       officialRoleUrl: "https://jobs.ashbyhq.com/curated/11111111-1111-4111-8111-111111111111/application",
       reviewedAt: new Date().toISOString() }] } } },

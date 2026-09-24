@@ -1,5 +1,13 @@
 # Discovery coverage and application quality rollout
 
+## Two release stages
+
+Stage 1 is a source-by-source advisory search release. In the private server config, set `discovery.broadenedSources.ashby`, `.greenhouse`, `.lever`, or another enabled structured source ID to `true` only after reviewing that source's bounded shadow. Browser fallback source IDs can be flagged individually. The shipped default is `{}`. For official ATS sources, a flag enables additional learned boards and nonlegacy title variants; for structured public sources, it enables titles outside the old configured-title match. Every newly stored role from an enabled source is advisory, including an exact-title late-page hit, and cannot enter an automatic campaign submission or standing final permit. Already stored baseline opportunities and configured-title roles from unflagged sources continue through the normal policy. For a flagged browser source, newly verified official roles are advisory. Disable a source flag to stop its broadened acquisition; existing advisory roles remain advisory and need fit and final-form review before any manual submission. This is a rollback of acquisition, not a way to remove a safety hold.
+
+Before enabling a source, compare its old and expanded bounded results with the same profile. Record fit decisions, employer hiring geography, official destination identity, duplicate receipts, relevant-role recall, false positives, yield per request, elapsed time, and 403/429/challenge outcomes. Keep its flag off if those checks are unresolved. The current Arbeitnow listing for an already submitted official ATS role illustrates an open cross-source identity gap; resolve its official role ID before counting it as a new lead.
+
+Stage 2 would allow broader automatic submissions only after the frozen paired fit and prose-quality gate, verified applicant examples, independent claim review, and manual audit of ten live role choices and answers. No Stage 2 switch exists yet. Production has no configured draft or independent claim-review provider, so new prose still needs manual review. Stage 1 does not supply a ten-receipt time estimate.
+
 This guide accompanies [the OpenSpec change](../openspec/changes/restore-discovery-coverage-and-pilot-accounting/proposal.md). It describes the draft implementation and the evidence needed before promotion. A passing fixture suite is not a completed ten-application pilot.
 
 ## Search behavior
