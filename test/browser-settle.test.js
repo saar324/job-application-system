@@ -17,11 +17,10 @@ test("a source-budget-limited network-idle wait stops before scrolling", async (
   let scrolled = 0;
   const page = { waitForLoadState: () => new Promise(() => {}),
     evaluate: async () => { scrolled += 1; } };
-  // Keep the budget clock fixed to exercise the boundary where a timer fired
-  // but rounded remainingMs still appears positive under CI scheduling.
+  // Keep the wall clock fixed: timer expiry must still exhaust the budget.
   const budget = new SourceBudget(5, () => 0);
   await assert.rejects(settleSourcePage(page, budget, { idleTimeoutMs: 100,
     postScrollWaitMs: 1 }), SourceTimeoutError);
   assert.equal(scrolled, 0);
-  assert.equal(budget.remainingMs(), 5);
+  assert.equal(budget.remainingMs(), 0);
 });
