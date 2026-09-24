@@ -55,14 +55,16 @@ export class DocumentStager {
     if (!this.extensions.has(extension)) throw new DocumentPolicyError(`unsupported file extension: ${extension || "none"}`);
 
     const directory = path.join(this.stagingRoot, applicationId);
-    await mkdir(directory, { recursive: true, mode: 0o2750 });
+    // The server runs with RestrictSUIDSGID, so do not request a setgid bit.
+    // We assign the shared group explicitly to the directory and each file.
+    await mkdir(directory, { recursive: true, mode: 0o750 });
     const groupId = (await stat(this.stagingRoot)).gid;
     const directoryEntry = await lstat(directory);
     if (!directoryEntry.isDirectory() || directoryEntry.isSymbolicLink()) {
       throw new DocumentPolicyError("staging directory is not a regular directory");
     }
     if (directoryEntry.gid !== groupId) await chown(directory, directoryEntry.uid, groupId);
-    await chmod(directory, 0o2750);
+    await chmod(directory, 0o750);
     const destination = path.join(directory, `${role === "coverLetter" ? "cover-letter" : "resume"}${extension}`);
     await copyFile(resolved, destination);
     const entry = await lstat(destination);
