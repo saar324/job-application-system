@@ -7,6 +7,9 @@ import { himalayas } from "./sources/himalayas.js";
 import { greenhouse } from "./sources/greenhouse.js";
 import { ashby } from "./sources/ashby.js";
 import { lever } from "./sources/lever.js";
+import { adzuna, ADZUNA_FILTERS, ADZUNA_FILTER_FORMATS, ADZUNA_FILTER_OPTIONS, adzunaCountries } from "./sources/adzuna.js";
+import { isKeyedSource, missingCredentialMessage, redactSecrets, sourceCredentials } from "./source-credentials.js";
+import { quotaError, quotaLimits, SourceQuota } from "./source-quota.js";
 import { scoreOpportunity } from "./scoring.js";
 import { telemetry } from "../telemetry.js";
 import { normalizeOpportunity } from "./normalization.js";
@@ -14,16 +17,25 @@ import { runIdempotent } from "../idempotency.js";
 import { isHandledRole, knownRoleIndex, roleKeys } from "./handled-roles.js";
 import { fetchVerifiedOfficialAtsRole, officialAtsDestination, officialAtsIdentityFromUrl } from "./official-ats.js";
 
-const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever].map((source) => [source.id, source]));
+const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever, adzuna]
+  .map((source) => [source.id, source]));
 const atsBoardKey = (parsed) => parsed ? `${parsed.source}:${parsed.board}` : null;
 
 export class DiscoveryService {
-  constructor({ applicationService, profiles, config, fetchImpl = fetch, enricher = null }) {
+  // `sourceEnv` is the only place keyed-source credentials are read from.
+  constructor({ applicationService, profiles, config, fetchImpl = fetch, enricher = null,
+    sourceEnv = process.env, sourceQuota }) {
     this.applicationService = applicationService;
     this.profiles = profiles;
     this.config = config;
     this.fetchImpl = fetchImpl;
     this.enricher = enricher;
+    this.sourceEnv = sourceEnv;
+    this.sourceQuota = sourceQuota ?? new SourceQuota(applicationService?.store);
+  }
+
+  #quotaLimits(sourceId) {
+    return quotaLimits(sourceId, this.config.discovery?.sourceOptions?.[sourceId]?.quota);
   }
 
   #atsBackoffActive(profileId, key) {
@@ -56,21 +68,27 @@ export class DiscoveryService {
         worldwide: "provider", exclude_worldwide: "provider", seniority: "provider",
         employment_type: "provider", company: "provider", timezone: "provider", sort: "provider" } },
       greenhouse: { kind: "official_feed", filters: { board: "configured", title: "local", location: "local" } },
-      ashby: { kind: "official_feed", filters: { board: "configured", title: "local", location: "local" } }
+      ashby: { kind: "official_feed", filters: { board: "configured", title: "local", location: "local" } },
+      adzuna: { kind: "keyed_api", filters: Object.fromEntries(ADZUNA_FILTERS.map((key) => [key, "provider"])),
+        filterFormats: ADZUNA_FILTER_FORMATS, maxResultsPerPage: 50, attribution: "Jobs by Adzuna" }
     };
-    return { mode: selectedMode, sources: enabled.filter((id) => SOURCES.has(id)).map((id) => ({
+    const sourceOptions = this.config.discovery?.sourceOptions ?? {};
+    return { mode: selectedMode, sources: await Promise.all(enabled.filter((id) => SOURCES.has(id)).map(async (id) => ({
       id, version: 1, ...(capabilities[id] ?? { kind: "public_board", filters: {} }),
       filterOptions: id === "himalayas" ? {
         sort: ["relevant", "recent", "salaryAsc", "salaryDesc", "nameAToZ", "nameZToA", "jobs"],
         seniority: ["Entry-level", "Mid-level", "Senior", "Manager", "Director", "Executive"],
         employment_type: ["Full Time", "Part Time", "Contractor", "Temporary", "Intern", "Volunteer", "Other"]
-      } : this.config.discovery?.sourceOptions?.[id]?.filterValues ?? {},
-      configuredBoards: (this.config.discovery?.sourceOptions?.[id]?.boards
-        ?? this.config.discovery?.sourceOptions?.[id]?.sites ?? []).map((item) => item.slug ?? item.token),
-      ...(["himalayas", "jobicy", "remoteok", "arbeitnow"].includes(id)
+      } : id === "adzuna" ? { ...ADZUNA_FILTER_OPTIONS, country: adzunaCountries(sourceOptions.adzuna) }
+        : sourceOptions[id]?.filterValues ?? {},
+      configuredBoards: (sourceOptions[id]?.boards ?? sourceOptions[id]?.sites ?? [])
+        .map((item) => item.slug ?? item.token),
+      ...(["himalayas", "jobicy", "remoteok", "arbeitnow", "adzuna"].includes(id)
         ? { applicationFlow: "resolve_employer_url_before_prepare" } : {}),
+      ...(isKeyedSource(id) ? { configured: Boolean(sourceCredentials(id, this.sourceEnv)),
+        quota: await this.sourceQuota.usage(id, this.#quotaLimits(id)) } : {}),
       maxQueries: 8, maxResultsPerQuery: 200
-    })) };
+    }))) };
   }
 
   async query(input, identity) {
@@ -98,6 +116,7 @@ export class DiscoveryService {
           || (["worldwide", "exclude_worldwide"].includes(key) && !["true", "false"].includes(value))
           || (source.filterOptions?.[key] && !(Array.isArray(value) ? value : [value])
             .every((item) => source.filterOptions[key].includes(item)))
+          || (source.filterFormats?.[key] && !new RegExp(source.filterFormats[key]).test(value))
           || JSON.stringify(value).length > 500) {
           throw Object.assign(new Error(`unsupported filter: ${key}`), { status: 400 });
         }
@@ -620,6 +639,25 @@ export class DiscoveryService {
       throw Object.assign(new Error("discovery request budgets are invalid"), { status: 400 });
     }
     const requestsBySource = new Map();
+    const credentials = new Map(selected.filter(({ id }) => isKeyedSource(id))
+      .map(({ id }) => [id, sourceCredentials(id, this.sourceEnv)]));
+    for (const [sourceId, value] of credentials) {
+      if (!value) internalErrors.push({ source: sourceId, code: "source_not_configured",
+        error: missingCredentialMessage(sourceId) });
+    }
+    // Keyed providers draw on the durable ledger before any request leaves the
+    // server; the in-memory cache key may hold credentials and is never logged.
+    const keyedFetch = async (url, options, sourceId) => {
+      const reservation = await this.sourceQuota.reserve(sourceId, this.#quotaLimits(sourceId));
+      if (!reservation.reserved) {
+        requestCount -= 1;
+        requestsBySource.set(sourceId, requestsBySource.get(sourceId) - 1);
+        throw quotaError(sourceId, reservation);
+      }
+      const response = await this.fetchImpl(url, options);
+      if (response.status === 429) await this.sourceQuota.hold(sourceId, "rate_limited");
+      return response;
+    };
     const fetchCache = new Map();
     const cachedFetch = async (url, options, sourceId) => {
       const key = String(url);
@@ -630,11 +668,13 @@ export class DiscoveryService {
         }
         requestCount += 1;
         if (sourceId) requestsBySource.set(sourceId, (requestsBySource.get(sourceId) ?? 0) + 1);
-        fetchCache.set(key, Promise.resolve(this.fetchImpl(url, options)));
+        fetchCache.set(key, credentials.has(sourceId) ? keyedFetch(url, options, sourceId)
+          : Promise.resolve(this.fetchImpl(url, options)));
       }
       return (await fetchCache.get(key)).clone();
     };
-    const requests = selected.flatMap((source) => (input.queryPlan ?? [null]).map((query) => ({ source, query })));
+    const requests = selected.filter(({ id }) => !credentials.has(id) || credentials.get(id))
+      .flatMap((source) => (input.queryPlan ?? [null]).map((query) => ({ source, query })));
     const settled = await Promise.allSettled(requests.map(({ source, query }) => source.search({
       limit: query?.limit ?? requestedLimit,
       query: query?.filters,
@@ -642,6 +682,7 @@ export class DiscoveryService {
       profile,
       isHandled,
       sourceConfig: this.config.discovery?.sourceOptions?.[source.id] ?? {},
+      ...(credentials.has(source.id) ? { credentials: credentials.get(source.id) } : {}),
       onError: (error) => internalErrors.push({ source: source.id, ...error })
     })));
     telemetry.observe("discovery.fetch_ms", performance.now() - fetchStarted, { mode });
@@ -652,8 +693,10 @@ export class DiscoveryService {
     const found = [];
     for (let index = 0; index < settled.length; index += 1) {
       const result = settled[index];
-      if (result.status === "rejected") errors.push({ source: requests[index].source.id, error: result.reason.message });
-      else found.push(...result.value.map((item) => ({ ...item, source: requests[index].source.id })));
+      if (result.status === "rejected") {
+        errors.push({ source: requests[index].source.id, error: String(result.reason?.message ?? result.reason),
+          ...(typeof result.reason?.code === "string" ? { code: result.reason.code } : {}) });
+      } else found.push(...result.value.map((item) => ({ ...item, source: requests[index].source.id })));
     }
 
     const uniqueFound = [...new Map(found.filter((raw) => !isHandled(raw))
@@ -773,13 +816,19 @@ export class DiscoveryService {
       excluded,
       readyToApply: profileStatus.readyToApply,
       missingForApplications: profileStatus.missingForApplications,
-      errors,
+      errors: errors.map((item) => redactedError(item, [...credentials.values()])),
       sourceYield: [...sourceYield.values()],
       durations: { fetchMs, screeningMs: Math.max(0, performance.now() - screeningStarted - destinationMs),
         destinationMs, totalMs: performance.now() - scanStarted },
       items: qualifying
     };
   }
+}
+
+function redactedError(item, credentialSets) {
+  if (!credentialSets.some(Boolean)) return item;
+  return Object.fromEntries(Object.entries(item).map(([key, value]) =>
+    [key, typeof value === "string" ? redactSecrets(value, ...credentialSets) : value]));
 }
 
 function perSourceLimit(entries, limit) {

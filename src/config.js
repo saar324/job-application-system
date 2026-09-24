@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateAdzunaOptions } from "./discovery/sources/adzuna.js";
+import { validateQuotaOverrides } from "./discovery/source-quota.js";
 
 function deepMerge(base, override) {
   if (!override || typeof override !== "object" || Array.isArray(override)) return base;
@@ -50,6 +52,11 @@ export async function loadConfig(env = process.env) {
   const maximumSemantic = config.discovery?.semantic?.maxCandidates ?? 20;
   if (!Number.isInteger(maximumSemantic) || maximumSemantic < 0 || maximumSemantic > 200) {
     throw new Error("discovery.semantic.maxCandidates must be an integer from 0 to 200");
+  }
+  const sourceOptions = config.discovery?.sourceOptions ?? {};
+  if (sourceOptions.adzuna !== undefined) validateAdzunaOptions(sourceOptions.adzuna);
+  for (const [sourceId, options] of Object.entries(sourceOptions)) {
+    if (options?.quota !== undefined) validateQuotaOverrides(sourceId, options.quota);
   }
   for (const [mode, settings] of Object.entries(config.modes)) {
     if (!Number.isFinite(settings.minimumScore) || settings.minimumScore < 0 || settings.minimumScore > 100) {

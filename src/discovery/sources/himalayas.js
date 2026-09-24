@@ -1,5 +1,5 @@
 import { plainText } from "../text.js";
-import { preferredTitleGroups } from "../title-preferences.js";
+import { profileSearchTerms } from "../title-preferences.js";
 import { needsEmployerApplyUrl } from "../application-destination.js";
 
 function candidateCountry(profile) {
@@ -21,26 +21,11 @@ function postedAt(value) {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
 }
 
-function searchQueries(profile) {
-  const groups = preferredTitleGroups(profile);
-  const preferred = groups.primary.length
-    ? groups.primary
-    : profile?.preferences?.jobTitles ?? [];
-  const primaryValues = [...preferred]
-    .filter((value) => typeof value === "string" && value.trim())
-    .map((value) => value.trim());
-  const primary = [...new Map(primaryValues.map((value) => [value.toLowerCase(), value])).values()].slice(0, 8);
-  const secondary = groups.secondary
-    .filter((value) => typeof value === "string" && value.trim())
-    .map((value) => value.trim()).slice(0, 4);
-  return [...new Map([...primary, ...secondary].map((value) => [value.toLowerCase(), value])).values()];
-}
-
 export const himalayas = {
   id: "himalayas",
   async search({ limit = 50, fetchImpl = fetch, profile, query = {} }) {
     const country = query.country ?? candidateCountry(profile);
-    const queries = query.q ? [query.q] : searchQueries(profile);
+    const queries = query.q ? [query.q] : profileSearchTerms(profile);
     if (!queries.length) return [];
     const perQuery = Math.max(1, Math.ceil(Math.min(limit, 200) / queries.length));
     const jobs = [];
