@@ -106,6 +106,80 @@ test("ambiguous same-title opening stays reviewable and cannot receive an automa
   assert.ok(result.reasonCodes.includes("possible_duplicate_identity_unresolved"));
 });
 
+test("recent receipts at one employer require review without discarding a distinct opening", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, dailyCap: 10,
+    campaignCap: 10 }, owner);
+  for (const [title, suffix] of [["Role Alpha", "alpha"],
+    ["Role Beta", "beta"]]) {
+    const role = await service.addOpportunity({ title, company: "Example",
+      source: "agent", applyUrl: `https://example.test/jobs/${suffix}`, score: 100,
+      applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+    const application = await service.requestApplication(role.id, {}, agent);
+    await service.store.mutate((state) => {
+      const current = state.applications.find((item) => item.id === application.id);
+      current.status = "submitted";
+      current.receipt = { submittedAt: new Date().toISOString(),
+        finalUrl: role.applyUrl, simulated: false };
+    });
+  }
+  const third = await service.addOpportunity({ title: "Role Gamma", company: "Example",
+    source: "agent", applyUrl: "https://example.test/jobs/gamma", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  const held = await service.requestApplication(third.id, {}, agent);
+  assert.equal(held.status, "waiting_confirmation");
+  assert.equal(held.finalApprovalRequired, true);
+  assert.ok(held.decision.confirmations.some((item) => item.kind === "employer_frequency_review"));
+  const other = await service.addOpportunity({ title: "Role Gamma", company: "Other",
+    source: "agent", applyUrl: "https://example.test/jobs/other", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  assert.equal((await service.requestApplication(other.id, {}, agent)).status, "queued");
+  await service.store.mutate((state) => {
+    const prior = state.applications.filter((item) => item.receipt?.submittedAt);
+    prior[0].receipt.submittedAt = new Date(Date.now() - 31 * 86_400_000).toISOString();
+    prior[1].receipt.simulated = true;
+  });
+  const later = await service.addOpportunity({ title: "Role Delta", company: "Example",
+    source: "agent", applyUrl: "https://example.test/jobs/delta", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  assert.equal((await service.requestApplication(later.id, {}, agent)).status, "queued");
+});
+
+test("a new employer receipt between permit and commit stops automatic submission", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, dailyCap: 10,
+    campaignCap: 10 }, owner);
+  const first = await service.addOpportunity({ title: "Role Alpha", company: "Example",
+    source: "agent", applyUrl: "https://example.test/jobs/alpha", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  const firstApplication = await service.requestApplication(first.id, {}, agent);
+  await service.store.mutate((state) => {
+    const current = state.applications.find((item) => item.id === firstApplication.id);
+    current.status = "submitted";
+    current.receipt = { submittedAt: new Date().toISOString(),
+      finalUrl: first.applyUrl, simulated: false };
+  });
+  const second = await service.addOpportunity({ title: "Role Beta", company: "Example",
+    source: "agent", applyUrl: "https://example.test/jobs/beta", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  const secondApplication = await service.requestApplication(second.id, {}, agent);
+  const third = await prepared(service, { title: "Role Gamma",
+    applyUrl: "https://example.test/jobs/gamma" });
+  const input = decisionInput(third, { preview: { ...decisionInput(third).preview,
+    title: "Role Gamma", destination: "https://example.test/jobs/gamma" } });
+  const decision = await service.prepareFinalSubmission(input);
+  assert.equal(decision.decision, "permit");
+  await service.store.mutate((state) => {
+    const current = state.applications.find((item) => item.id === secondApplication.id);
+    current.status = "submitted";
+    current.receipt = { submittedAt: new Date().toISOString(),
+      finalUrl: second.applyUrl, simulated: false };
+  });
+  await assert.rejects(service.commitFinalSubmission({ applicationId: third.id,
+    attemptId: "attempt-one", previewFingerprint: input.previewFingerprint,
+    permit: decision.permit }), /recent employer submissions require a fresh review/);
+});
+
 test("changed form and legal declarations hold independently of mode confirmation filters", async () => {
   const { profiles, service } = await fixture();
   await profiles.setStandingSubmissionPolicy("person", policy, owner);

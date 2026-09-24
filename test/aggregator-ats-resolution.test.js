@@ -149,6 +149,122 @@ test("bounded board redirect to Ashby is verified; non-ATS redirect stays pendin
   assert.equal(pending.items[0].opportunity.applicationDestinationVerified, false);
 });
 
+test("Himalayas explicit description link promotes only the matching current employer role", async () => {
+  const boardUrl = "https://himalayas.app/companies/example/jobs/software-engineer";
+  const requested = [];
+  const { discovery, service } = await fixture(async (url) => {
+    const value = String(url);
+    requested.push(value);
+    if (value.includes("himalayas.app/jobs/api/")) return new Response(JSON.stringify({ jobs: [
+      { ...himalayasRow(boardUrl), companyName: "Example",
+        description: `<p>TypeScript Node.js</p><p>Apply here: ${ashbyUrl}</p>` }
+    ] }));
+    if (value.includes("api.ashbyhq.com/")) return new Response(JSON.stringify({ jobs: [officialAshby] }));
+    throw new Error(`unexpected fetch ${value}`);
+  });
+  const result = await discovery.scan({ sources: ["himalayas"], prepareApplications: true }, identity);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].opportunity.source, "ashby");
+  assert.equal(result.items[0].opportunity.applicationDestinationVerified, true);
+  assert.equal(service.list("applications", "person").length, 1);
+  assert.equal(requested.filter((url) => url.includes("api.ashbyhq.com/")).length, 1);
+  assert.ok(requested.every((url) => url.includes("himalayas.app/jobs/api/")
+    || url.includes("api.ashbyhq.com/")), "the board page and arbitrary employer sites are not fetched");
+});
+
+test("Himalayas description links with ambiguous or mismatched role identity never promote", async () => {
+  const boardUrl = "https://himalayas.app/companies/example/jobs/software-engineer";
+  for (const variant of [
+    { description: `TypeScript Node.js. Apply here: ${ashbyUrl} Also: https://jobs.ashbyhq.com/example/22222222-2222-4222-8222-222222222222` },
+    { title: "Software Engineer, Platform", description: `TypeScript Node.js. Apply here: ${ashbyUrl}` },
+    { companyName: "Other Employer", description: `TypeScript Node.js. Apply here: ${ashbyUrl}` }
+  ]) {
+    let officialFetches = 0;
+    const { discovery, service } = await fixture(async (url, options = {}) => {
+      const value = String(url);
+      if (value.includes("himalayas.app/jobs/api/")) return new Response(JSON.stringify({ jobs: [
+        { ...himalayasRow(boardUrl), companyName: "Example", ...variant }
+      ] }));
+      if (value === boardUrl && options.method === "HEAD") return new Response(null, { status: 200 });
+      if (value.includes("api.ashbyhq.com/")) {
+        officialFetches += 1;
+        return new Response(JSON.stringify({ jobs: [officialAshby] }));
+      }
+      throw new Error(`unexpected fetch ${value}`);
+    });
+    const result = await discovery.scan({ sources: ["himalayas"], prepareApplications: true }, identity);
+    assert.ok(result.items.every((item) => item.opportunity.applicationDestinationPending),
+      JSON.stringify(variant));
+    assert.equal(service.list("applications", "person").length, 0);
+    assert.ok(officialFetches <= 1);
+  }
+});
+
+test("Himalayas inline official 429 stops promotion and later lookup retry", async () => {
+  const boardUrl = "https://himalayas.app/companies/example/jobs/software-engineer";
+  let officialFetches = 0;
+  const { discovery, store } = await fixture(async (url) => {
+    const value = String(url);
+    if (value.includes("himalayas.app/jobs/api/")) return new Response(JSON.stringify({ jobs: [
+      { ...himalayasRow(boardUrl), companyName: "Example",
+        description: `TypeScript Node.js. Apply here: ${ashbyUrl}` }
+    ] }));
+    if (value.includes("api.ashbyhq.com/")) {
+      officialFetches += 1;
+      return new Response("limited", { status: 429 });
+    }
+    throw new Error(`unexpected fetch ${value}`);
+  });
+  const first = await discovery.scan({ sources: ["himalayas"], prepareApplications: true }, identity);
+  assert.equal(first.items[0].opportunity.applicationDestinationPending, true);
+  assert.equal(first.sourceYield[0].rateLimited, true);
+  await discovery.scan({ sources: ["himalayas"], prepareApplications: true }, identity);
+  assert.equal(officialFetches, 1);
+  assert.ok(store.snapshot().audit.some((item) => item.action === "discovery.ats_backoff"
+    && item.subjectId === "ashby:example"));
+});
+
+test("Jobicy description links do not bypass its canonical listing destination", async () => {
+  const boardUrl = "https://jobicy.com/jobs/software-engineer";
+  let officialFetches = 0;
+  const { discovery, service } = await fixture(async (url, options = {}) => {
+    const value = String(url);
+    if (value.includes("jobicy.com/api/")) return new Response(JSON.stringify({ jobs: [
+      { ...jobicyRow(boardUrl), jobDescription: `TypeScript Node.js. Apply here: ${ashbyUrl}` }
+    ] }));
+    if (value === boardUrl && options.method === "HEAD") return new Response(null, { status: 200 });
+    if (value.includes("api.ashbyhq.com/")) {
+      officialFetches += 1;
+      return new Response(JSON.stringify({ jobs: [officialAshby] }));
+    }
+    throw new Error(`unexpected fetch ${value}`);
+  });
+  const result = await discovery.scan({ sources: ["jobicy"], prepareApplications: true }, identity);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].opportunity.applicationDestinationPending, true);
+  assert.equal(service.list("applications", "person").length, 0);
+  assert.equal(officialFetches, 0);
+});
+
+test("Himalayas inline role link cannot override official geography", async () => {
+  const boardUrl = "https://himalayas.app/companies/example/jobs/software-engineer";
+  const { discovery, service } = await fixture(async (url) => {
+    const value = String(url);
+    if (value.includes("himalayas.app/jobs/api/")) return new Response(JSON.stringify({ jobs: [
+      { ...himalayasRow(boardUrl), companyName: "Example",
+        description: `TypeScript Node.js. Apply here: ${ashbyUrl}` }
+    ] }));
+    if (value.includes("api.ashbyhq.com/")) return new Response(JSON.stringify({ jobs: [
+      { ...officialAshby, location: "United States" }
+    ] }));
+    throw new Error(`unexpected fetch ${value}`);
+  });
+  const result = await discovery.scan({ sources: ["himalayas"], prepareApplications: true }, identity);
+  assert.equal(result.items.length, 0);
+  assert.equal(result.excluded, 1);
+  assert.equal(service.list("applications", "person").length, 0);
+});
+
 test("official employer geography and closed or mismatched role override aggregator claims", async () => {
   for (const officialRows of [[{ ...officialAshby, location: "United States" }],
     [], [{ ...officialAshby, id: "22222222-2222-4222-8222-222222222222" }],

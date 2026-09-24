@@ -22,6 +22,20 @@ const AGGREGATOR_HOSTS = {
   jobicy: new Set(["jobicy.com", "www.jobicy.com"])
 };
 
+function himalayasDescriptionRoleLink(opportunity) {
+  if (opportunity.source !== "himalayas") return null;
+  const description = String(opportunity.description ?? "");
+  const urls = [...description.matchAll(/https:\/\/[^\s<>"']+/gi)]
+    .map((match) => match[0].replace(/[),.;!?]+$/, ""));
+  const identities = new Set(urls.map((url) => officialAtsIdentityFromUrl(url)?.key).filter(Boolean));
+  if (identities.size !== 1) return null;
+  const explicit = /\bapply\s+here\s*:\s*(https:\/\/[^\s<>"']+)/i.exec(description);
+  const url = explicit?.[1].replace(/[),.;!?]+$/, "");
+  const identity = officialAtsIdentityFromUrl(url);
+  return identity && identities.has(identity.key) ? { url, identity,
+    evidence: "himalayas_explicit_apply_link" } : null;
+}
+
 // A board link is only a hint. Follow a few HTTPS redirects on that board,
 // then require a fresh official ATS fetch before promoting any destination.
 // Never fetch an arbitrary off-board website from an aggregator row.
@@ -33,6 +47,8 @@ export async function officialAtsUrlFromAggregator(opportunity, fetchImpl = fetc
   }
   const hosts = AGGREGATOR_HOSTS[opportunity.source];
   if (!hosts) return { reason: "unsupported_source" };
+  const inline = himalayasDescriptionRoleLink(opportunity);
+  if (inline) return inline;
   for (let hop = 0; hop <= 3; hop += 1) {
     const identity = officialAtsIdentityFromUrl(current.href);
     if (identity) return { url: current.href, identity };

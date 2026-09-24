@@ -340,6 +340,13 @@ export class ApplicationService {
         decision.confirmations.push({ kind: "possible_duplicate",
           message: "An earlier application has the same employer and title. Verify that this is a separate opening before submission." });
       }
+      const employerFrequencyReview = recentEmployerReceipts(state, identity.profileId,
+        opportunity.company) >= 2;
+      if (employerFrequencyReview) {
+        decision.autoApply = false;
+        decision.confirmations.push({ kind: "employer_frequency_review",
+          message: "Two or more verified applications reached this employer in the past 30 days. Review the value of another application before submission." });
+      }
       const today = now().slice(0, 10);
       const globalDailyCount = dailyIntakeCount(state, identity.profileId, today);
       const dailyCount = dailyIntakeCount(state, identity.profileId, today, mode);
@@ -357,9 +364,11 @@ export class ApplicationService {
         id: randomUUID(), opportunityId, profileId: identity.profileId, mode,
         requestedBy: identity.actorId, answers: input.answers ?? {},
         ...(input.campaignId ? { campaignId: String(input.campaignId) } : {}),
-        submissionApproval: relatedRole === "possible_duplicate" ? "always" : submissionApproval,
+        submissionApproval: relatedRole === "possible_duplicate" || employerFrequencyReview
+          ? "always" : submissionApproval,
         ...(covered ? { standingPolicyVersion: profile.standingSubmissionPolicy.version } : {}),
-        finalApprovalRequired: relatedRole === "possible_duplicate" || submissionApproval === "always",
+        finalApprovalRequired: relatedRole === "possible_duplicate" || employerFrequencyReview
+          || submissionApproval === "always",
         status: !decision.eligible ? "skipped"
           : decision.confirmations.length || !decision.autoApply ? "waiting_confirmation" : "queued",
         decision, createdAt: now(), updatedAt: now()
@@ -414,6 +423,10 @@ export class ApplicationService {
       const relatedRole = relatedApplicationRole(state, current.profileId, opportunity, current.id);
       if (relatedRole) reasonCodes.push(relatedRole === "same_role"
         ? "prior_role_application" : "possible_duplicate_identity_unresolved");
+      if (!current.finalApprovalRequired
+        && recentEmployerReceipts(state, current.profileId, opportunity.company) >= 2) {
+        reasonCodes.push("recent_employer_submissions");
+      }
       if (!policyCovers(policy, opportunity, current.mode)) reasonCodes.push("policy_not_covering");
       if (!verifiedDiscoveryIsFresh(opportunity, current.mode)) reasonCodes.push("discovery_unverified_or_stale");
       if (profile && opportunity) {
@@ -523,6 +536,10 @@ export class ApplicationService {
       if (counted.length >= policy.dailyCap || current.campaignId
         && counted.filter((item) => item.campaignId === current.campaignId).length >= policy.campaignCap) {
         throw new ClientError(409, "final submission cap reached");
+      }
+      if (!current.finalApprovalRequired
+        && recentEmployerReceipts(state, current.profileId, opportunity.company) >= 2) {
+        throw new ClientError(409, "recent employer submissions require a fresh review");
       }
       decision.status = "consumed";
       decision.consumedAt = now();
@@ -1879,6 +1896,23 @@ function normalizedApplicationUrl(raw) {
     url.pathname = url.pathname.replace(/\/$/, "");
     return url.toString();
   } catch { return String(raw ?? "").replace(/\/$/, ""); }
+}
+
+function recentEmployerReceipts(state, profileId, company) {
+  const employer = String(company ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (!employer) return 0;
+  const roles = new Map((state.opportunities ?? [])
+    .filter((item) => item.profileId === profileId).map((item) => [item.id, item]));
+  const cutoff = Date.now() - 30 * 86_400_000;
+  return (state.applications ?? []).filter((item) => {
+    if (item.profileId !== profileId || !item.receipt?.submittedAt
+      || item.receipt.simulated === true) return false;
+    const submitted = Date.parse(item.receipt.submittedAt);
+    const roleCompany = String(roles.get(item.opportunityId)?.company ?? "")
+      .toLowerCase().replace(/[^a-z0-9]+/g, "");
+    return Number.isFinite(submitted) && submitted >= cutoff
+      && submitted <= Date.now() + 60_000 && roleCompany === employer;
+  }).length;
 }
 
 function verifiedDiscoveryIsFresh(opportunity, mode) {

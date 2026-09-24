@@ -2,6 +2,7 @@ import { roleKeys } from "./handled-roles.js";
 import { plainText } from "./text.js";
 import { normalizeApplicationQuestions } from "./normalization.js";
 import { greenhouseRemoteRole } from "./greenhouse-remote.js";
+import { greenhouseAnnualSalary } from "./greenhouse-compensation.js";
 
 const ATS_HOSTS = {
   ashby: new Set(["jobs.ashbyhq.com"]),
@@ -88,6 +89,7 @@ export async function fetchVerifiedOfficialAtsRole(rawUrl, sourceOptions = {}, f
       applyUrl: row.absolute_url || `https://job-boards.greenhouse.io/${parsed.board}/jobs/${parsed.id}`,
       listingUrl: row.absolute_url || `https://job-boards.greenhouse.io/${parsed.board}/jobs/${parsed.id}`,
       description: plainText(`${row.content ?? ""} ${(row.departments ?? []).map((item) => item.name).join(" ")}`),
+      compensation: greenhouseAnnualSalary(row.content),
       location: row.location?.name ?? "", remote: greenhouseRemoteRole(row),
       employmentType: "Full-Time", postedAt: row.updated_at,
       tags: [...(row.departments ?? []).map((item) => item.name), ...(row.offices ?? []).map((item) => item.name)],
