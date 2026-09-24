@@ -18,6 +18,24 @@ const VERIFICATION_FIELD = /\b(otp|one.?time|verification code|security code|aut
 const NARRATIVE_QUESTION = /\b(?:why|motivation|cover letter|describe|explain|project|challenge|achievement|accomplishment|story|what interests|tell us about)\b/i;
 const REUSABLE_FACT_QUESTION = /^(?:how did you hear about (?:this|the) (?:job|role)|referral source|current employer|current job title|notice period|start date|how many years of [a-z0-9 ]+ experience|[a-z ]+ language proficiency)$/;
 
+async function greenhouseEmailCodeChallenge(page, body) {
+  let host;
+  try { host = new URL(page.url()).hostname; } catch { return false; }
+  if (!/^(?:job-boards|boards)(?:\.eu)?\.greenhouse\.io$/i.test(host)
+    || !/(?:verification|security)\s+code/i.test(body)
+    || !/(?:sent to|check your e-?mail|e-?mail address|e-?mail verification)/i.test(body)) return false;
+  return page.locator('input:visible:not([type="hidden"]):not([type="submit"])')
+    .evaluateAll((inputs) => inputs.filter((input) => input.maxLength === 1).length === 8
+      || inputs.some((input) => {
+        const description = [input.name, input.id, input.placeholder,
+          input.getAttribute("aria-label"), input.getAttribute("autocomplete"),
+          ...[...(input.labels ?? [])].map((label) => label.textContent),
+          input.closest("label")?.textContent].filter(Boolean).join(" ");
+        return /(?:verification|security|one.?time)\s*code|one-time-code/i.test(description)
+          || inputs.length === 1 && input.maxLength === 8;
+      })).catch(() => false);
+}
+
 export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSubmit, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   const successAlreadyPresent = SUCCESS_TEXT.test(bodyBeforeSubmit);
@@ -25,6 +43,7 @@ export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSub
     const currentUrl = page.url();
     const body = (await page.locator("body").innerText().catch(() => "")).slice(0, 50_000);
     if (BLOCKED_SUBMISSION_TEXT.test(body)) return false;
+    if (await greenhouseEmailCodeChallenge(page, body)) return false;
     const confirmationUrl = /confirmation|thank|success|submitted/i.test(currentUrl) && currentUrl !== previousUrl;
     const invalidControls = await page.locator("input:invalid, textarea:invalid, select:invalid").count().catch(() => 0);
     const activeForm = await page.locator("form:visible").count().catch(() => 0);
@@ -1355,6 +1374,13 @@ export async function automateApplication({ page, profile, opportunity, applicat
           status: "needs_human", message: "The employer blocked the submission as possible spam",
           requirements: [{ kind: "submission_blocked", action: "manual_review",
             message: "Ashby flagged this application as possible spam. Continue in a regular browser and verify its outcome." }]
+        }, step, "final_action_started");
+      }
+      if (await greenhouseEmailCodeChallenge(surface, diagnostic.body)) {
+        return pause({
+          status: "needs_human", message: "Greenhouse requested an email security code after Submit",
+          requirements: [{ kind: "submission_email_verification", action: "manual_review",
+            message: "Greenhouse requested an emailed security code after Submit. The automated browser session has ended; human review is required to inspect any available employer verification path and reconcile the outcome. Do not retry the automated submission." }]
         }, step, "final_action_started");
       }
       return pause({

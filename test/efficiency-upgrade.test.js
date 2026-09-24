@@ -459,6 +459,24 @@ test("a worker with a durable final-action marker blocks retry", async () => {
     { approved: true, answers: { retry: true } }, identity), { status: 409 });
 });
 
+test("post-submit email verification cannot requeue a final action", async () => {
+  const service = await serviceFixture({ name: "email-code-after-submit-test",
+    async submit() { throw new NeedsReviewError("email code required", [{
+      kind: "submission_email_verification", action: "manual_review"
+    }]); },
+    async attemptStatus() { return { status: "final_action_started" }; }
+  });
+  const job = await service.addOpportunity({ title: "Engineer", company: "Example",
+    applyUrl: "https://example.test/apply", score: 90 }, identity);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const confirmation = service.list("confirmations", identity.profileId)[0];
+  assert.equal(confirmation.kind, "submission_email_verification");
+  await assert.rejects(service.resolveConfirmation(confirmation.id,
+    { approved: true, answers: { retry: true } }, identity), { status: 409 });
+  assert.equal(service.list("applications", identity.profileId)[0].status, "waiting_confirmation");
+});
+
 test("an older automatic application adopts current final-review policy on a safe retry", async () => {
   let runs = 0;
   let retriedApplication;

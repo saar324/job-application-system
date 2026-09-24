@@ -974,6 +974,34 @@ test("success text that existed before submit is not evidence", async () => {
   assert.equal(result.requirements[0].kind, "submission_unverified");
 });
 
+test("Greenhouse email security code after Submit pauses without a receipt or retry", async () => {
+  const url = "https://job-boards.greenhouse.io/example/jobs/12345";
+  const html = `<form id="application" onsubmit="event.preventDefault();
+      document.querySelector('#verification').hidden = false">
+    <label>Email <input name="email" type="email" required></label>
+    <div id="verification" hidden>
+      <p>A verification code was sent to ada@example.test. To submit your application,
+        enter the 8-character code to confirm you're a human.</p>
+      <div role="group" aria-label="Security code">Security code
+        ${Array.from({ length: 8 }, (_, index) => `<input name="code_${index}" maxlength="1">`).join("")}
+      </div>
+    </div>
+    <button type="submit">Submit application</button>
+  </form>`;
+  let finalActions = 0;
+  const result = await run(html, {}, profile, {}, (page) => page.route(url,
+    (route) => route.fulfill({ status: 200, contentType: "text/html", body: html })),
+  { markFinalActionStarted: async () => { finalActions += 1; } }, { applyUrl: url });
+  assert.equal(finalActions, 1);
+  assert.equal(result.status, "needs_human");
+  assert.equal(result.phase, "final_action_started");
+  assert.equal(result.requirements[0].kind, "submission_email_verification");
+  assert.equal(result.requirements[0].action, "manual_review");
+  assert.match(result.requirements[0].message, /automated browser session has ended/);
+  assert.match(result.requirements[0].message, /Do not retry the automated submission/);
+  assert.equal(result.receipt, undefined);
+});
+
 test("worker waits for delayed client-side submission confirmation", async () => {
   const result = await run(`
     <form onsubmit="event.preventDefault(); setTimeout(() => { document.body.innerHTML='<h1>Thank you, your application was submitted</h1>' }, 1200)">
