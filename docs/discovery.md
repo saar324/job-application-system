@@ -64,13 +64,20 @@ differently:
   measured over the same four countries it returned twenty-four rows against fifty, and the top score
   fell from 45 to 37 because narrowing shrinks the pool.
 
-  The deeper reason is normalization, not configuration. The Adzuna adapter never sets a `remote`
-  flag, and `normalizeOpportunity` derives `remote` from the location string alone
-  (`src/discovery/normalization.js`). Adzuna reports a place — `Deutschland`, `Berlin, Deutschland` —
-  so every Adzuna result is `remote: false` even when its title reads `Project Manager (m/w/d) Remote`.
-  Any profile that prefers or requires remote work will therefore score Adzuna results low whatever
-  filters are set. Treat Adzuna as a located-role source until the adapter reports work arrangement
-  from the advert itself.
+  The adapter now reads work arrangement from the advert's title and snippet, in English, German,
+  Dutch and Polish, and sets `remote` and `workArrangement` (`remote`, `hybrid` or `onsite`) itself;
+  hybrid is not treated as remote, because it still requires attendance. An advert that says nothing
+  is recorded as `work_arrangement_unknown` rather than as on-site, and a detected arrangement carries
+  `work_arrangement_inferred_from_advert` because the snippet is truncated.
+
+  That makes the data honest but does not make Adzuna a remote source, and the measurements say so.
+  Over the same four countries: with no `what`, fifty rows came back and not one snippet mentioned an
+  arrangement at all, so every row stayed unknown and scored on a located role. With
+  `"defaults": { "what": "remote" }`, the narrowed `"<title> remote"` terms matched almost nothing —
+  two rows, top score 13 — because Adzuna requires every `what` keyword to appear. There is no
+  configuration between those two that finds remote program-management work here. Use Adzuna for an
+  on-site or hybrid search in named countries, where its location filters are the point, and use a
+  provider with a real work-arrangement filter for remote work.
 
 Coverage also varies by provider: Adzuna answers HTTP 404 for a country it does not carry, so confirm
 a country is supported before adding it.

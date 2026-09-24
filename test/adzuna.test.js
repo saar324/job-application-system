@@ -99,7 +99,8 @@ test("Adzuna search builds a bounded provider query and normalizes evidence", as
   assert.equal(stated.searchCountry, "gb");
   assert.equal(stated.postedAt, "2026-09-20T08:00:00.000Z");
   assert.deepEqual(stated.compensation, { minimum: 60000, maximum: 70000, currency: "GBP", period: "year" });
-  assert.deepEqual(stated.uncertainties, ["description_snippet_only", "employer_application_url_unverified"]);
+  assert.deepEqual(stated.uncertainties, ["description_snippet_only", "employer_application_url_unverified",
+    "work_arrangement_unknown"], "an advert that never states its arrangement is recorded as unknown");
   assert.equal(predicted.compensation, undefined);
   assert.equal(predicted.compensationEstimate.predicted, true);
   assert.equal(predicted.employmentType, "contract");
@@ -138,6 +139,46 @@ test("a standing `what` narrows the profile's titles, and `what_or` never become
 
   const titleless = await search({ countries: ["de"], defaults: { what: "remote" } });
   assert.ok(titleless.length > 0);
+});
+
+test("Adzuna reads work arrangement from the advert, and hybrid is not remote", async () => {
+  const advert = async (title, description = "") => {
+    const [item] = await adzuna.search({ limit: 1, profile, credentials,
+      sourceConfig: { countries: ["de"] },
+      fetchImpl: async () => json({ count: 1, results: [row(9001, { title, description })] }) });
+    return item;
+  };
+
+  for (const title of ["Project Manager (m/w/d) Remote", "Senior PM - 100% Homeoffice möglich",
+    "Projektleiter - mobiles Arbeiten", "Program Manager - praca zdalna",
+    "Projectmanager - thuiswerken mogelijk"]) {
+    const item = await advert(title);
+    assert.equal(item.remote, true, title);
+    assert.equal(item.workArrangement, "remote");
+    assert.ok(item.uncertainties.includes("work_arrangement_inferred_from_advert"));
+  }
+
+  for (const title of ["Technical PM - hybrid working, 2 days office", "Projektmanager - teilweise Homeoffice"]) {
+    const item = await advert(title);
+    assert.equal(item.remote, false, `${title} still requires attendance`);
+    assert.equal(item.workArrangement, "hybrid");
+  }
+
+  for (const title of ["Project Manager - on-site only, no remote", "Projektleiter (m/w/d) - kein Homeoffice"]) {
+    const item = await advert(title);
+    assert.equal(item.remote, false, title);
+    assert.equal(item.workArrangement, "onsite");
+  }
+
+  const silent = await advert("Senior Technical Program Manager");
+  assert.equal(silent.workArrangement, undefined, "a silent advert stays unknown, not on-site");
+  assert.ok(silent.uncertainties.includes("work_arrangement_unknown"));
+
+  const inBody = await advert("Program Manager", "<p>Wir bieten ortsunabhängiges Arbeiten.</p>");
+  assert.equal(inBody.remote, true, "the snippet is read as well as the title");
+
+  const scored = normalizeOpportunity(await advert("Project Manager (m/w/d) Remote"));
+  assert.equal(scored.remote, true, "an adapter-set flag survives normalization's location check");
 });
 
 test("Adzuna stops the country fan-out once the limit is met and skips searches without terms", async () => {
