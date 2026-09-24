@@ -803,12 +803,22 @@ async function findAction(page) {
     return selected ? [...document.forms].indexOf(selected) : -1;
   });
   const scoped = activeForm >= 0 ? actions.filter((item) => item.form === activeForm) : actions;
+  // Selection order decides which control to click; it must never decide whether
+  // that control is final. A label like "Review and submit application" matches
+  // both NEXT_BUTTON and FINAL_BUTTON, so the final test is applied to the chosen
+  // control itself and fails closed: an extra approval prompt is cheap, an
+  // unapproved submission is irreversible.
+  const isFinal = (item, final) => final || FINAL_BUTTON.test(item.text);
   const unique = (items, final) => {
-    if (items.length === 1) return { locator: items[0].locator, text: items[0].text, final };
+    if (items.length === 1) {
+      return { locator: items[0].locator, text: items[0].text, final: isFinal(items[0], final) };
+    }
     if (items.length > 1) {
       const sameAction = items.every((item) => item.form === items[0].form
         && normalize(item.text) === normalize(items[0].text));
-      if (sameAction) return { locator: items[0].locator, text: items[0].text, final };
+      if (sameAction) {
+        return { locator: items[0].locator, text: items[0].text, final: isFinal(items[0], final) };
+      }
       return { ambiguous: true, text: items.map((item) => item.text).join(" / ") };
     }
     return null;
@@ -827,12 +837,12 @@ async function findAction(page) {
   for (let index = (await links.count()) - 1; index >= 0; index -= 1) {
     const locator = links.nth(index);
     const text = await locator.innerText().catch(() => "");
-    if (START_BUTTON.test(text)) return { locator, final: false, text };
+    if (START_BUTTON.test(text)) return { locator, final: FINAL_BUTTON.test(text), text };
   }
   for (let index = (await links.count()) - 1; index >= 0; index -= 1) {
     const locator = links.nth(index);
     const text = await locator.innerText().catch(() => "");
-    if (AUTH_BUTTON.test(text)) return { locator, final: false, text };
+    if (AUTH_BUTTON.test(text)) return { locator, final: FINAL_BUTTON.test(text), text };
   }
   return null;
 }
