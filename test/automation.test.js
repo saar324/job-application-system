@@ -998,3 +998,41 @@ test("MFA and verification fields always pause for owner input", async () => {
   assert.equal(result.requirements[0].kind, "authentication_verification");
   assert.equal(result.requirements[0].recommendation, "custom");
 });
+
+test("a combined Review and Submit label is still gated as a final action", async () => {
+  const result = await run(`
+    <form onsubmit="event.preventDefault(); document.body.textContent='Thank you, your application was submitted'">
+      <button type="submit">Review and Submit Application</button>
+    </form>
+  `, {}, profile, { finalApprovalRequired: true });
+  assert.notEqual(result.status, "submitted");
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+});
+
+test("a combined account-creation and submit label is still gated as a final action", async () => {
+  const result = await run(`
+    <form onsubmit="event.preventDefault(); document.body.textContent='Thank you, your application was submitted'">
+      <button type="submit">Create account and submit application</button>
+    </form>
+  `, {}, profile, { finalApprovalRequired: true });
+  assert.notEqual(result.status, "submitted");
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+});
+
+test("a combined final label marks the durable final-action phase before clicking", async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const artifactsDirectory = await mkdtemp(path.join(os.tmpdir(), "job-worker-test-"));
+  const html = `<form onsubmit="event.preventDefault(); document.body.textContent='Application submitted'">
+    <button type="submit">Continue and submit application</button></form>`;
+  const phases = [];
+  try {
+    const result = await automateApplication({ page, profile,
+      opportunity: { applyUrl: dataUrl(html) }, application: { id: "application-one", answers: {} },
+      artifactsDirectory, markFinalActionStarted: async () => { phases.push("marked"); } });
+    assert.equal(result.status, "submitted");
+    assert.deepEqual(phases, ["marked"]);
+  } finally { await context.close(); }
+});
