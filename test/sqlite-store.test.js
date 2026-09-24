@@ -20,7 +20,7 @@ test("SQLite store preserves normalized application state across restart", async
   });
   store.close();
   const reopened = await new SqliteStore(file).init();
-  assert.equal(reopened.schemaVersion(), 2);
+  assert.equal(reopened.schemaVersion(), 3);
   assert.equal(reopened.snapshot().applications[0].id, "app-1");
   reopened.close();
 });
