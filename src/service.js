@@ -600,7 +600,7 @@ export class ApplicationService {
     const approvalProfile = target.kind === "final_submission_approval" && input.approved === true
       ? await this.profiles?.get(identity.profileId) : null;
     let requireApprovalOnRetry = false;
-    if (["submission_unverified", "submission_recovery"].includes(target.kind)
+    if (["submission_unverified", "submission_recovery", "submission_email_verification"].includes(target.kind)
       && input.approved === true && input.answers?.retry === true && this.adapter.attemptStatus) {
       const priorApplication = this.store.snapshot().applications.find((item) => item.id === target.applicationId
         && item.profileId === identity.profileId);

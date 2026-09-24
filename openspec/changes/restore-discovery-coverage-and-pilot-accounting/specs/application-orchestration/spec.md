@@ -1,5 +1,12 @@
 ## ADDED Requirements
 
+### Requirement: Post-submit email verification remains uncertain and fenced
+When an employer asks for an emailed security code after the authorized final click, the worker SHALL identify that requirement separately from an unknown submission outcome. It SHALL keep the durable final-action marker, request manual completion of the existing employer verification flow, and SHALL NOT record a receipt or automatically click Submit again. A retry request SHALL check the worker's durable final-action state before requeueing.
+
+#### Scenario: Greenhouse requests an eight-character email code after Submit
+- **WHEN** the Greenhouse page changes from the reviewed application form to a visible security-code form with eight one-character boxes after the final click
+- **THEN** the application pauses as `submission_email_verification`, tells the owner to finish the existing verification flow and verify the outcome, and remains without a receipt and fenced against automatic retry
+
 ### Requirement: Broadened discovery has a separate advisory release stage
 The system SHALL keep newly broadened roles from a source in advisory/manual fit review until the paired quality promotion gate passes. A private source-specific flag SHALL default off and SHALL be reversible independently. The server SHALL derive and durably store advisory provenance from fetched role evidence; request metadata SHALL NOT grant or erase this status. Campaign selection, reserve replacement, standing policy intake, automatic final permit, and final permit commit SHALL NOT automatically submit an advisory role. An already stored baseline role SHALL retain its existing submission policy when broader retrieval is enabled. Every newly stored role from a flagged source SHALL be advisory, including an exact-title role that appears only on a later page. Stage 1 SHALL NOT be reported as passing the prose-quality gate or ten-receipt throughput target.
 
