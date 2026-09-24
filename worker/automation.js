@@ -25,7 +25,7 @@ async function greenhouseEmailCodeChallenge(page, body) {
     || !/(?:verification|security)\s+code/i.test(body)
     || !/(?:sent to|check your e-?mail|e-?mail address|e-?mail verification)/i.test(body)) return false;
   return page.locator('input:visible:not([type="hidden"]):not([type="submit"])')
-    .evaluateAll((inputs) => inputs.length === 8 && inputs.every((input) => input.maxLength === 1)
+    .evaluateAll((inputs) => inputs.filter((input) => input.maxLength === 1).length === 8
       || inputs.some((input) => {
         const description = [input.name, input.id, input.placeholder,
           input.getAttribute("aria-label"), input.getAttribute("autocomplete"),
@@ -1380,7 +1380,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
         return pause({
           status: "needs_human", message: "Greenhouse requested an email security code after Submit",
           requirements: [{ kind: "submission_email_verification", action: "manual_review",
-            message: "Greenhouse sent a security code by email. Complete the existing verification flow in a regular browser, then verify whether the employer received the application. Do not restart or resubmit this application." }]
+            message: "Greenhouse requested an emailed security code after Submit. The automated browser session has ended; human review is required to inspect any available employer verification path and reconcile the outcome. Do not retry the automated submission." }]
         }, step, "final_action_started");
       }
       return pause({
