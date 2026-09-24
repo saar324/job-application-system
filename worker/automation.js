@@ -432,12 +432,38 @@ async function readControl(locator, field) {
   });
 }
 
+async function detachedFileLiveMatch(surface, action, field) {
+  if (!Array.isArray(field.files) || field.files.length !== 1
+    || field.files[0].name !== field.value || !Number.isInteger(field.files[0].size)
+    || field.files[0].size <= 0) return null;
+  const formIndex = await action.locator.evaluate((element) => {
+    const form = element.form ?? element.closest("form");
+    return form ? [...document.forms].indexOf(form) : -1;
+  }).catch(() => -1);
+  const inputs = await surface.locator('input[type="file"]').evaluateAll((elements, index) =>
+    elements.map((element, controlIndex) => ({ element, controlIndex }))
+      .filter(({ element }) => !element.disabled
+        && (index < 0 || element.form === document.forms[index]))
+      .map(({ element, controlIndex }) => ({ controlIndex,
+        files: [...(element.files ?? [])].map((file) => ({ name: file.name, size: file.size }))
+      })), formIndex).catch(() => null);
+  if (!inputs) return null;
+  const matches = inputs.filter(({ files }) => files.length === 1
+    && files[0].name === field.files[0].name
+    && files[0].size === field.files[0].size);
+  return { inputCount: inputs.length, matches: matches.map((item) => item.controlIndex) };
+}
+
 async function controlMatches(locator, field, answer, observed) {
   const expected = field.type === "file" ? path.basename(String(answer.value))
     : field.type === "checkbox" ? Boolean(answer.value === true || normalize(answer.value) === "yes"
       || normalize(answer.value) === "true")
       : field.type === "radio" ? normalize(answer.value) : String(answer.value);
-  if (field.type === "file") return observed.some((file) => file.name === expected && file.size > 0);
+  if (field.type === "file") {
+    const size = (await stat(String(answer.value))).size;
+    return size > 0 && observed.length === 1
+      && observed[0].name === expected && observed[0].size === size;
+  }
   if (field.type === "checkbox") return observed === expected;
   if (field.type === "tel") return String(observed).replace(/\D/g, "") === String(expected).replace(/\D/g, "");
   if (field.type === "radio") {
@@ -1024,11 +1050,21 @@ export async function automateApplication({ page, profile, opportunity, applicat
       if (validation.length) return pause({ status: "needs_input",
         message: "The application has field errors before final submission",
         requirements: validation }, step);
+      const matchedDetachedFileInputs = new Set();
       for (const field of [...observedFields.values()].filter((item) => item.step === step)) {
         if (field.type === "ashby_custom") continue;
         if (field.detached) {
-          const body = await surface.locator("body").innerText().catch(() => "");
-          if (field.type === "file" && body.includes(field.value)) continue;
+          if (field.type === "file" && field.status === "filled") {
+            const live = await detachedFileLiveMatch(surface, action, field);
+            if (live?.matches.length === 1 && !matchedDetachedFileInputs.has(live.matches[0])) {
+              matchedDetachedFileInputs.add(live.matches[0]);
+              continue;
+            }
+            if (live?.inputCount === 0 && field.uploadAcknowledged) {
+              const body = await surface.locator("body").innerText().catch(() => "");
+              if (body.includes(field.value)) continue;
+            }
+          }
           return pause({ status: "needs_input", message: "A field changed before final submission",
             requirements: [{ kind: "final_review_changed", fields: [field.key],
               message: `Review ${field.label} again before submission` }] }, step);

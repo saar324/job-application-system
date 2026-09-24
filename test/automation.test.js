@@ -669,6 +669,67 @@ test("a verified upload remains in review after the ATS replaces its file input"
   assert.deepEqual(uploaded.files, [{ name: "resume.pdf", size: 11 }]);
 });
 
+test("a rescanned Greenhouse-style file control retains an exact live upload", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
+  const resume = path.join(directory, "resume.pdf");
+  await writeFile(resume, "resume-body");
+  const result = await run(`<form>
+    <label>Resume <input id="resume" name="resume" type="file" required
+      onchange="this.name='resume_backing'; this.id='resume_backing'"></label>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile, documents: { resume } }, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  const fileFields = result.requirements[0].preview.filled.filter((field) => field.type === "file");
+  assert.ok(fileFields.some((field) => field.detached === true));
+  assert.ok(fileFields.every((field) => field.files[0].name === "resume.pdf"
+    && field.files[0].size === 11));
+});
+
+test("a rescanned file control that loses the upload pauses final review", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
+  const resume = path.join(directory, "resume.pdf");
+  await writeFile(resume, "resume-body");
+  const result = await run(`<form>
+    <label>Resume <input id="resume" name="resume" type="file" required
+      onchange="this.name='resume_backing'; this.id='resume_backing';
+        setTimeout(() => { this.value=''; }, 400)"></label>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile, documents: { resume } }, { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.ok(["final_review_changed", "missing_answer"].includes(result.requirements[0].kind));
+});
+
+test("a rescanned file with the same name but a different size pauses final review", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
+  const resume = path.join(directory, "resume.pdf");
+  await writeFile(resume, "resume-body");
+  const result = await run(`<form>
+    <label>Resume <input id="resume" name="resume" type="file" required
+      onchange="this.name='resume_backing'; this.id='resume_backing';
+        setTimeout(() => { const files=new DataTransfer();
+          files.items.add(new File(['wrong'], 'resume.pdf', {type:'application/pdf'}));
+          this.files=files.files; }, 450)"></label>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile, documents: { resume } }, { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.ok(["final_review_changed", "missing_answer"].includes(result.requirements[0].kind));
+});
+
+test("two live file inputs with the same upload are ambiguous at final review", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
+  const resume = path.join(directory, "resume.pdf");
+  await writeFile(resume, "resume-body");
+  const result = await run(`<form>
+    <label>Resume <input id="resume" name="resume" type="file" required
+      onchange="this.name='resume_backing'; this.id='resume_backing';
+        const copy=document.createElement('input'); copy.type='file';
+        copy.files=this.files; copy.style.display='none'; this.form.append(copy)"></label>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile, documents: { resume } }, { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "final_review_changed");
+});
+
 test("an upload that disappears without its filename cannot pass final review", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
   const resume = path.join(directory, "resume.pdf");
