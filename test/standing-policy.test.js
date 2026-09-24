@@ -80,6 +80,35 @@ test("owner policy covers intake and final permit; revocation before commit bloc
     permit: preparedDecision.permit }), /revoked/);
 });
 
+test("reused approved prose requires grounded-prose authority at final permit", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", {
+    ...policy, answerClasses: ["profile_fact", "resume", "link"]
+  }, owner);
+  const application = await prepared(service);
+  const preview = { ...decisionInput(application).preview, filled: [{
+    label: "Why this role?", key: "motivation", value: "A role-specific owner-approved answer.",
+    source: "approved answer:motivation"
+  }] };
+  const decision = await service.prepareFinalSubmission(decisionInput(application, { preview }));
+  assert.equal(decision.decision, "hold");
+  assert.ok(decision.reasonCodes.includes("answer_class_not_authorized"));
+  assert.ok(decision.reasonCodes.includes("prose_not_authorized"));
+});
+
+test("a board that names another hiring employer cannot enter automatic submission", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", policy, owner);
+  const role = await service.addOpportunity({ title: "Engineer", company: "Example",
+    description: "Role Company is a software company building B2B products.",
+    applyUrl: "https://example.test/jobs/identity", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  const application = await service.requestApplication(role.id, {}, agent);
+  assert.equal(application.status, "waiting_confirmation");
+  assert.equal(application.finalApprovalRequired, true);
+  assert.ok(application.decision.confirmations.some((item) => item.kind === "employer_identity_review"));
+});
+
 test("ambiguous same-title opening stays reviewable and cannot receive an automatic final permit", async () => {
   const { profiles, service } = await fixture();
   await profiles.setStandingSubmissionPolicy("person", { ...policy, dailyCap: 2, campaignCap: 2 }, owner);

@@ -884,10 +884,17 @@ export async function automateApplication({ page, profile, opportunity, applicat
     timings.planFillMs += performance.now() - planStarted;
     timings.fields += inventory.length;
     const prose = unresolved.filter(eligibleProseField);
+    const humanAuthorshipRestriction = /\b(?:no ai|without ai|human.?written|do not use ai)\b/i.test(
+      `${opportunity.description ?? ""} ${await surface.locator("body").innerText().catch(() => "")}`
+    );
+    if (humanAuthorshipRestriction && fields.some((field) => field.source === "drafted prose"
+      || String(field.source ?? "").startsWith("approved answer:"))) {
+      return pause({ status: "needs_human", message: "The employer requires human-written application answers",
+        requirements: [{ kind: "human_authorship", action: "manual_review",
+          message: "Verify the exact applicant-written answer for this form" }] }, step);
+    }
     if (prose.length && draftProvider) {
-      if (/\b(?:no ai|without ai|human.?written|do not use ai)\b/i.test(
-        `${opportunity.description ?? ""} ${await surface.locator("body").innerText().catch(() => "")}`
-      )) return pause({ status: "needs_human", message: "The employer requires human-written application answers",
+      if (humanAuthorshipRestriction) return pause({ status: "needs_human", message: "The employer requires human-written application answers",
         requirements: [{ kind: "human_authorship", action: "manual_review",
           message: "Write these answers without automated drafting" }] }, step);
       const research = prose.filter((field) => needsCompanyResearch(field, evidencePacket));
@@ -951,6 +958,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
           || !Array.isArray(review.claims) || !review.claims.length
           || review.claims.some((claim) => claim.supported !== true
             || typeof claim.text !== "string" || !claim.text.trim()
+            || !draft.text.includes(claim.text)
             || !Array.isArray(claim.evidenceIds) || !claim.evidenceIds.length
             || claim.evidenceIds.some((id) => !allowedEvidence.has(id)))) {
           return pause({ status: "needs_input", message: "A prose claim lacks verified support",

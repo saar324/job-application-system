@@ -328,8 +328,12 @@ export class ApplicationService {
         specialistFitReview = Boolean(freshScore.scoreDetails.fitReview);
         if (specialistFitReview) {
           decision.autoApply = false;
-          decision.confirmations.push({ kind: "specialist_fit_review",
-            message: `Verify experience with ${freshScore.scoreDetails.fitReview.requirement} for this role before applying.` });
+          const review = freshScore.scoreDetails.fitReview;
+          decision.confirmations.push(review.reason === "unverified_employer_identity"
+            ? { kind: "employer_identity_review",
+              message: "Confirm the hiring employer and recipient before applying through this board." }
+            : { kind: "specialist_fit_review",
+              message: `Verify experience with ${review.requirement} for this role before applying.` });
         }
         decision.confirmations.push(...hardPolicyHolds({ opportunity, mode, answers: input.answers, profile })
           .filter((hold) => !decision.confirmations.some((existing) => existing.kind === hold.kind
@@ -446,7 +450,8 @@ export class ApplicationService {
           reasonCodes.push("current_fit_not_eligible");
         }
         if (freshScore.scoreDetails.fitReview && !current.finalApprovalRequired) {
-          reasonCodes.push("specialist_fit_review_required");
+          reasonCodes.push(freshScore.scoreDetails.fitReview.reason === "unverified_employer_identity"
+            ? "employer_identity_review_required" : "specialist_fit_review_required");
         }
       }
       if (current.standingPolicyVersion !== policy?.version) reasonCodes.push("policy_version_changed");
@@ -473,13 +478,15 @@ export class ApplicationService {
           reasonCodes.push("answer_provenance_unverified");
         }
         if (preview.filled.some((field) => {
-          const answerClass = field.source === "drafted prose" ? "grounded_prose"
+          const answerClass = field.source === "drafted prose"
+            || String(field.source ?? "").startsWith("approved answer:") ? "grounded_prose"
             : field.type === "file" ? "resume"
               : /(?:url|link|website|portfolio|github|linkedin)/i.test(field.label ?? "") ? "link"
                 : "profile_fact";
           return !policy?.answerClasses?.includes(answerClass);
         })) reasonCodes.push("answer_class_not_authorized");
-        if (fields.some((field) => field.source === "drafted prose")
+        if (fields.some((field) => field.source === "drafted prose"
+          || String(field.source ?? "").startsWith("approved answer:"))
           && !policy?.answerClasses?.includes("grounded_prose")) reasonCodes.push("prose_not_authorized");
         if (fields.some((field) => LEGAL_ATTESTATION_FIELD.test(`${field.label ?? ""} ${field.key ?? ""}`))) {
           reasonCodes.push("legal_answer_unconfirmed");
