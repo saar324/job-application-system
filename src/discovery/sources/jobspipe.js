@@ -29,7 +29,8 @@ export const JOBSPIPE_FILTER_FORMATS = Object.freeze({ job_country_code_or: "^[A
   min_salary_usd: "^\\d{1,9}$", max_ghost_score: "^\\d{1,3}$" });
 
 const NUMBER_RANGES = { posted_at_max_age_days: [1, 365], min_salary_usd: [0, 999_999_999], max_ghost_score: [0, 100] };
-const OPTION_KEYS = ["plan", "monthlyCredits", "perSecond", "maxPages", "excludeSources", "defaultCountries"];
+const OPTION_KEYS = ["plan", "monthlyCredits", "perSecond", "maxPages", "excludeSources", "defaultCountries",
+  "defaults"];
 const DEFAULT_FILTERS = Object.freeze({ posted_at_max_age_days: 7 });
 const DEFAULT_EXCLUDED_SOURCES = Object.freeze(["linkedin"]);
 const PASSTHROUGH = new Set(["code", "window", "resetAt", "status", "retryable"]);
@@ -76,7 +77,10 @@ export function jobspipeSettings(options = {}) {
     monthlyCredits: lowered(options.monthlyCredits, plan.monthlyCredits),
     maxPages: Number.isInteger(options.maxPages) && options.maxPages >= 1 && options.maxPages <= 10 ? options.maxPages : 2,
     excludeSources: Array.isArray(options.excludeSources) ? options.excludeSources : [...DEFAULT_EXCLUDED_SOURCES],
-    defaultCountries: Array.isArray(options.defaultCountries) ? options.defaultCountries.map((item) => item.toUpperCase()) : []
+    defaultCountries: Array.isArray(options.defaultCountries) ? options.defaultCountries.map((item) => item.toUpperCase()) : [],
+    // Owner-set standing filters. A scan cannot carry filters of its own, so
+    // without these every scheduled scan would search worldwide and on-site.
+    defaults: options.defaults ? validateJobspipeFilters(options.defaults) : {}
   };
 }
 
@@ -107,6 +111,19 @@ export function validateJobspipeOptions(options) {
       throw new Error(`${prefix}.${key} must list unique ${key === "excludeSources"
         ? "lowercase source names" : "two-letter country codes"}`);
     }
+  }
+  if (options.defaults !== undefined) {
+    if (!options.defaults || typeof options.defaults !== "object" || Array.isArray(options.defaults)) {
+      throw new Error(`${prefix}.defaults must be an object`);
+    }
+    for (const [key, instead] of [["job_country_code_or", `${prefix}.defaultCountries`],
+      ["job_title_or", "the profile's preferred titles"]]) {
+      if (Object.hasOwn(options.defaults, key)) {
+        throw new Error(`${prefix}.defaults.${key} is not supported; use ${instead}`);
+      }
+    }
+    try { validateJobspipeFilters(options.defaults); }
+    catch (error) { throw new Error(`${prefix}.defaults: ${error.message}`); }
   }
   return options;
 }
@@ -248,9 +265,11 @@ export const jobspipe = {
     const settings = jobspipeSettings(sourceConfig);
     const titles = filters.job_title_or ?? profileSearchTerms(profile);
     if (!titles.length) return [];
-    const excluded = [...new Set([...settings.excludeSources, ...(filters.source_not ?? [])])];
+    const excluded = [...new Set([...settings.excludeSources, ...(settings.defaults.source_not ?? []),
+      ...(filters.source_not ?? [])])];
     const body = { ...DEFAULT_FILTERS,
       ...(settings.defaultCountries.length ? { job_country_code_or: settings.defaultCountries } : {}),
+      ...settings.defaults,
       ...filters, job_title_or: titles, status: "active" };
     if (excluded.length) body.source_not = excluded;
     else delete body.source_not;
