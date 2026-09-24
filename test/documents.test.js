@@ -40,8 +40,20 @@ test("document stager grants the worker group read access to private source docu
   assert.equal(staged.gid, root.gid);
   assert.equal(staged.mode & 0o777, 0o640);
   assert.equal(directory.gid, root.gid);
-  assert.equal(directory.mode & 0o7777, 0o2750);
+  assert.equal(directory.mode & 0o7777, 0o750);
   assert.equal((await stat(resume)).mode & 0o777, 0o600);
+});
+
+test("document stager clears a previous setgid application directory", async () => {
+  const { source, staging, stager } = await fixture();
+  const directory = path.join(staging, "application-one");
+  await mkdir(directory, { mode: 0o750 });
+  await chmod(directory, 0o2750);
+  const resume = path.join(source, "candidate.pdf");
+  await writeFile(resume, "resume", { mode: 0o600 });
+  await stager.stage({ id: "application-one" },
+    { id: "person-one", documents: { resume } });
+  assert.equal((await stat(directory)).mode & 0o7777, 0o750);
 });
 
 test("document stager rejects escape symlinks, unsupported files, and oversized files", async () => {
