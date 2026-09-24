@@ -29,6 +29,50 @@ Some providers need deployment-wide API credentials. The server reads them only 
 
 Each keyed source has a durable, deployment-wide request ledger stored in the SQLite database (`source_quota_usage` and `source_quota_holds`). Every request is reserved against all of the provider's UTC calendar windows before it is sent, so concurrent scans and restarts cannot exceed the allowance. When a window is full, the source returns a `quota_exhausted` error with the `window` and `resetAt`. A full `second` window is waited out instead of refused. An HTTP 429 response puts the source into the standard six-hour `rate_limited` cooldown. The source descriptor shows `configured`, the remaining allowance per window, and any active cooldown.
 
+### Country options filter where the job is, not where you may work
+
+A keyed source's country option — Adzuna's `countries`, JobsPipe's `defaultCountries`, and the country
+filters on Jooble and Careerjet — constrains the **employer's** advertised location. It does not mean
+"a role I am eligible to hold from here". Setting it to the applicant's country of residence is the
+natural first guess and is usually wrong for a remote search: an employer posting a worldwide-remote
+role tags it with the employer's own country, so a residence pin excludes almost everything.
+
+Residence eligibility is enforced after the fetch instead, and does not need a country option at all:
+`locationExclusion` in `src/discovery/scoring.js` drops a remote posting whose stated restriction does
+not include a country in the profile's `preferences.locations`.
+
+What to do depends on whether the provider can express work arrangement, and the two behave very
+differently:
+
+- **JobsPipe** filters on `remote` and `work_arrangement_or`, and its country option is optional.
+  Leave `defaultCountries` unset and put the real constraint in
+  `"defaults": { "remote": "true", "work_arrangement_or": ["remote"] }`. Observed on this deployment:
+  pinned to a single country of residence a remote program-manager search returned three postings and
+  nothing above the score threshold; unpinned with `remote` kept it returned about fifty, including
+  matches scoring 79 and 76.
+- **Adzuna** has no remote or work-arrangement filter at all — its filters are `what`, `what_or`,
+  `what_exclude`, `where`, `distance`, `max_days_old`, `salary_min`, `full_time`, `part_time`,
+  `permanent`, `contract`, `category`, `sort_by` and `country` — and `countries` is required, because
+  the adapter searches one country at a time and returns nothing without one. It is a
+  commute-oriented, location-first provider. Expect on-site roles: a program-manager scan over four
+  European countries returned fifty postings, every one of them `remote: false`, none scoring within
+  fifteen points of the threshold. Adzuna suits an on-site or hybrid search in named countries; it is
+  a poor fit for a remote-only search. `"defaults": { "what": "remote" }` narrows each preferred title
+  to `"<title> remote"` and does surface genuinely remote adverts, but it does not rescue the source:
+  measured over the same four countries it returned twenty-four rows against fifty, and the top score
+  fell from 45 to 37 because narrowing shrinks the pool.
+
+  The deeper reason is normalization, not configuration. The Adzuna adapter never sets a `remote`
+  flag, and `normalizeOpportunity` derives `remote` from the location string alone
+  (`src/discovery/normalization.js`). Adzuna reports a place — `Deutschland`, `Berlin, Deutschland` —
+  so every Adzuna result is `remote: false` even when its title reads `Project Manager (m/w/d) Remote`.
+  Any profile that prefers or requires remote work will therefore score Adzuna results low whatever
+  filters are set. Treat Adzuna as a located-role source until the adapter reports work arrangement
+  from the advert itself.
+
+Coverage also varies by provider: Adzuna answers HTTP 404 for a country it does not carry, so confirm
+a country is supported before adding it.
+
 A provider that bills per result rather than per request uses a `credits_*` window. The adapter reserves the most it could be charged, capped at what remains, sizes its request to the amount granted, and then settles the reservation with the provider's reported charge.
 
 ### Adzuna
