@@ -25,6 +25,31 @@ Mode-level `sources` chooses enabled adapter IDs. ATS board selections live unde
 
 The installed skill's `references/sources.json` is intentionally empty. A deployment can maintain a private copy with its own browser sources, regions, screening rules, and priorities.
 
+Additional official ATS boards may be admitted from a profile's recent verified official role or real employer receipt. The owner may also put a reviewed official role URL in the private server configuration for that profile:
+
+```json
+{
+  "discovery": {
+    "sourceOptions": {
+      "ashby": {
+        "boards": [],
+        "ownerCuratedBoards": [{
+          "profileId": "PROFILE_ID",
+          "officialRoleUrl": "https://jobs.ashbyhq.com/BOARD/ROLE_UUID/application",
+          "company": "EMPLOYER",
+          "reviewedAt": "2026-09-24T08:00:00Z"
+        }],
+        "disabledBoardKeys": ["ashby:BOARD_TO_ROLL_BACK"]
+      }
+    }
+  }
+}
+```
+
+This configuration is server owned and cannot be supplied by an agent's search request. The URL must identify one role on a recognized official Ashby, Greenhouse, or Lever host. Owner-curated reviews expire after seven days; other verified-role and receipt seeds expire after 30 days. Each profile gets at most five added boards per ATS source per completed search cycle. An added board receives at most two list requests in a rolling 24 hours, recorded in the durable audit log before fetch. Configured boards retain the ordinary source request budget. Every returned role still goes through current posting, geography, fit, destination, and handled-role checks. To roll back an added board immediately, set `enabled: false` on its curated seed or add its lowercase `source:board` key to `disabledBoardKeys`; remove the key after review. A 403 or 429 still triggers the existing six-hour board cooldown and stops queued requests to that origin for the scan.
+
+The scan response includes `learnedBoardYield` with each added board's seed provenance, list requests, and count of distinct eligible, unhandled, verified-destination roles. Inspect this count and the actual roles in a read-only shadow before promoting a board. A board with zero eligible roles has zero measured application supply even if its feed returned many postings.
+
 ## Normalized records
 
 Every adapter returns a provider ID, external ID, role title, company, listing URL, application URL, description, location, work type, and posting time when available. These stable fields support deduplication and attribution.

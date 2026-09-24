@@ -65,6 +65,18 @@ The system SHALL use a profile's recent verified official-role evidence or non-s
 - **WHEN** the first queued request to an ATS origin returns 403 or 429
 - **THEN** later queued requests to that origin are not sent during the same scan and the source reports the restriction
 
+#### Scenario: Owner reviews a new official employer role
+- **WHEN** the private server configuration names the applicant profile, a recognized official role URL, and a review timestamp within seven days
+- **THEN** that board may enter the bounded retrieval rotation with owner-curated provenance; an agent-submitted URL or forged opportunity metadata cannot add it
+
+#### Scenario: Added board reaches its request budget or is rolled back
+- **WHEN** the profile has already made two list requests to the added board within 24 hours, or the server config disables that board key
+- **THEN** subsequent scans omit that added board without affecting unrelated configured boards or profiles
+
+#### Scenario: Board seed does not produce a suitable opening
+- **WHEN** a seeded board returns current listings but none pass the full unhandled role and applicant-fit gates
+- **THEN** the measured new eligible unhandled yield is zero; neither the seed nor the listing count is reported as application supply
+
 ### Requirement: Seen and pending roles are recoverable
 The system SHALL distinguish an actual handled application from an observed listing and an unresolved employer destination. A pending listing SHALL be retried only within bounded freshness and backoff policy and SHALL not be permanently excluded solely because an opportunity record exists. Matching official ATS IDs, verified canonical employer application URLs, and verified receipt URLs SHALL prevent duplicate final applications. Company and title alone SHALL signal a possible duplicate, not suppress a separate opening; a weak-only match SHALL stay visible for identity review and SHALL NOT receive an automatic second final action while ambiguity remains.
 
