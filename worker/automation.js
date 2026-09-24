@@ -15,6 +15,8 @@ const SUCCESS_TEXT = /thank you|application (?:has been |was )?(?:successfully )
 const BLOCKED_SUBMISSION_TEXT = /we couldn't submit your application[\s\S]*flagged as possible spam/i;
 const CHALLENGE_TEXT = /captcha|verify you are human|security check|unusual traffic|cloudflare/i;
 const VERIFICATION_FIELD = /\b(otp|one.?time|verification code|security code|authenticator|two.?factor|2fa|mfa|passkey)\b/i;
+const NARRATIVE_QUESTION = /\b(?:why|motivation|cover letter|describe|explain|project|challenge|achievement|accomplishment|story|what interests|tell us about)\b/i;
+const REUSABLE_FACT_QUESTION = /^(?:how did you hear about (?:this|the) (?:job|role)|referral source|current employer|current job title|notice period|start date|how many years of [a-z0-9 ]+ experience|[a-z ]+ language proficiency)$/;
 
 export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSubmit, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
@@ -117,11 +119,13 @@ function flattenProfile(profile, currentUrl) {
     "cover letter": documents.coverLetter,
   };
   // Reuse only exact normalized questions from the owner's verified answer bank.
-  // This avoids fuzzy legal or jurisdictional matches while eliminating repeated
-  // questions such as referral source, current employer, and current title.
+  // Limit the generic bank to short, repeatable facts. Legal facts use the
+  // jurisdiction-aware paths below; prose requires employer-scoped provenance.
   for (const [question, answer] of Object.entries(profile.applicationAnswers ?? {})) {
     if (answer === undefined || answer === null || answer === "" || typeof answer === "object") continue;
     const key = normalize(question);
+    if (!REUSABLE_FACT_QUESTION.test(key)
+      || typeof answer === "string" && (answer.length > 120 || /[\r\n]/.test(answer))) continue;
     if (key && values[key] === undefined) values[key] = answer;
   }
   const storedAnswers = profile.applicationAnswers ?? {};
@@ -236,6 +240,10 @@ function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, appr
   // Profile links are URLs. Never pass one to a file chooser just because its
   // label (for example, "Portfolio") matches an optional upload control.
   if (field.type === "file") return undefined;
+  // Generic profile answers have no employer, role, or authorship scope.
+  // Narrative questions can also be single-line text inputs on some forms.
+  // They need an application-specific answer, reviewed draft, or scoped record.
+  if (field.tag === "textarea" || NARRATIVE_QUESTION.test(field.label)) return undefined;
   const normalizedCandidates = new Set(candidates.map(normalize));
   for (const [key, value] of Object.entries(profileValues)) {
     if (value !== undefined && value !== "" && (label === key || normalizedCandidates.has(key))) {
@@ -556,7 +564,8 @@ export async function fillVisibleFields(page, profile, opportunity, answers, pre
           label: field.label,
           required: field.required,
           type: field.type === "file" ? "file" : field.tag === "select" ? "select" : field.type,
-          tag: field.tag, section: field.section, maxLength: field.maxLength, options,
+          tag: field.tag, section: field.section, maxLength: field.maxLength,
+          minimumWords: field.minimumWords, options,
           ...(prefilled ? { problem: "an unverified value is already present" } : {})
         });
       }

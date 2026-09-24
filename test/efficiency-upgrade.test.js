@@ -117,6 +117,46 @@ test("section word limits hold a short answer before final submission", async ()
   } finally { await browser.close(); }
 });
 
+test("word minimum reaches the draft provider and rejects an undersized draft", async () => {
+  const browser = await chromium.launch();
+  try {
+    const html = `<form><div class="ashby-application-form-section-container">
+      <h2>Project</h2><p>Please answer each question in no less than 200 words.</p>
+      <div class="ashby-application-form-field-entry">
+        <label for="project">Describe a technical product</label>
+        <textarea id="project" name="project" required></textarea></div>
+      </div><button type="submit">Submit Application</button></form>`;
+    const provider = { async draft({ questions }) {
+      assert.equal(questions[0].minimumWords, 200);
+      return [{ fieldId: "project", text: "A short answer.", evidenceIds: ["listing"] }];
+    } };
+    const result = await browserRun(browser, html, {}, provider,
+      { listing: "A technical product role with user-facing software." }, profile, supportedReview);
+    assert.equal(result.status, "needs_input");
+    assert.equal(result.requirements[0].kind, "missing_answer");
+  } finally { await browser.close(); }
+});
+
+test("generic saved narrative answers cannot bypass prose or human-authorship review", async () => {
+  const browser = await chromium.launch();
+  try {
+    const saved = { ...profile, applicationAnswers: { "Why join this team?": "A saved motivation paragraph." } };
+    const html = `<form><p>Do not use AI to write your answer.</p>
+      <label>Why join this team? <textarea name="motivation" required></textarea></label>
+      <button type="submit">Submit Application</button></form>`;
+    const result = await browserRun(browser, html, {}, undefined, undefined, saved);
+    assert.equal(result.status, "needs_input");
+    assert.equal(result.requirements[0].kind, "missing_answer");
+    assert.equal(result.requirements[0].fields[0], "motivation");
+    const singleLine = await browserRun(browser,
+      `<form><label>Why join this team? <input name="motivation" required></label>
+        <button type="submit">Submit Application</button></form>`,
+      {}, undefined, undefined, saved);
+    assert.equal(singleLine.status, "needs_input");
+    assert.equal(singleLine.requirements[0].fields[0], "motivation");
+  } finally { await browser.close(); }
+});
+
 test("draft provider receives only unresolved prose and replay uses the saved draft", async () => {
   const browser = await chromium.launch();
   const html = `<form onsubmit="event.preventDefault();document.body.textContent='Application submitted'">
