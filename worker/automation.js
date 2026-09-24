@@ -377,9 +377,17 @@ export async function inventoryFormStep(page) {
       || element.getAttribute("placeholder") || element.getAttribute("name") || element.id;
     if (!stableLabel || element.matches('.iti__search-input, [id^="iti-"][type="search"]')) return null;
     const rawLabel = stableLabel;
+    const ashbySection = element.closest(".ashby-application-form-section-container");
+    const firstAshbyField = ashbySection?.querySelector(".ashby-application-form-field-entry");
+    const sectionLead = firstAshbyField
+      ? ashbySection.innerText.split(firstAshbyField.innerText)[0].trim() : "";
     const section = element.closest("fieldset")?.querySelector("legend")?.innerText?.trim()
-      .replace(/\s+/g, " ") ?? "";
+      .replace(/\s+/g, " ")
+      ?? ashbySection?.querySelector("h1,h2,h3,h4")?.innerText?.trim() ?? "";
     const tag = element.tagName.toLowerCase();
+    const minimumWords = tag === "textarea"
+      ? Number(sectionLead.match(/(?:no less than|at least|minimum(?: of)?)\s+(\d+)\s+words?/i)?.[1] ?? 0)
+      : 0;
     const type = (element.getAttribute("type") ?? "text").toLowerCase();
     const groupQuestion = ["radio", "checkbox"].includes(type) ? section : "";
     const label = type === "radio" && groupQuestion ? groupQuestion : rawLabel;
@@ -399,7 +407,7 @@ export async function inventoryFormStep(page) {
       options, maxLength: element.maxLength >= 0 ? element.maxLength : null,
       pattern: element.getAttribute("pattern"), autocomplete: element.getAttribute("autocomplete"),
       placeholder: element.getAttribute("placeholder"),
-      section,
+      section, minimumWords,
       formIndex: form ? [...document.forms].indexOf(form) : -1
     };
   }).filter(Boolean));
@@ -485,7 +493,7 @@ async function controlMatches(locator, field, answer, observed) {
 
 function inventoryStamp(fields) {
   return JSON.stringify(fields.map((field) => [field.index, field.formIndex,
-    field.name, field.id, field.label, field.type, field.required]));
+    field.name, field.id, field.label, field.type, field.required, field.minimumWords]));
 }
 
 export async function fillVisibleFields(page, profile, opportunity, answers, preparedAnswers = {}) {
@@ -515,6 +523,18 @@ export async function fillVisibleFields(page, profile, opportunity, answers, pre
   for (const { field, answer } of answerPlan.entries) {
     if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
     const locator = controls.nth(field.index);
+    if (field.minimumWords > 0 && answer?.value !== undefined && answer.value !== "") {
+      const words = String(answer.value).trim().split(/\s+/).filter(Boolean).length;
+      if (words < field.minimumWords) {
+        unresolved.push({ key: field.name || field.id || normalize(field.label),
+          label: field.label, required: field.required, type: field.type, tag: field.tag,
+          section: field.section, minimumWords: field.minimumWords,
+          options: field.options, manualOnly: true,
+          problem: `Answer has ${words} words; this section requires at least ${field.minimumWords}` });
+        fields.push(fieldSummary(field, undefined, await readControl(locator, field)));
+        continue;
+      }
+    }
     if (!answer || answer.value === undefined || answer.value === "") {
       let observed;
       try { observed = await readControl(locator, field); }
@@ -883,7 +903,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
     }
     timings.planFillMs += performance.now() - planStarted;
     timings.fields += inventory.length;
-    const prose = unresolved.filter(eligibleProseField);
+    const prose = unresolved.filter((field) => !field.manualOnly && eligibleProseField(field));
     const humanAuthorshipRestriction = /\b(?:no ai|without ai|human.?written|do not use ai)\b/i.test(
       `${opportunity.description ?? ""} ${await surface.locator("body").innerText().catch(() => "")}`
     );
@@ -907,7 +927,8 @@ export async function automateApplication({ page, profile, opportunity, applicat
         requirements: [{ kind: "prose_claim_review", action: "manual_review",
           message: "Review the answer against verified applicant and employer evidence" }] }, step);
       const questions = prose.map((field) => ({
-        fieldId: field.key, question: field.label, maxLength: field.maxLength
+        fieldId: field.key, question: field.label, maxLength: field.maxLength,
+        minimumWords: field.minimumWords
       }));
       let drafts;
       const draftStarted = performance.now();
@@ -933,6 +954,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
         }
         if (!question || typeof draft.text !== "string" || !draft.text.trim()
           || draft.text.length > 5000 || (question.maxLength && draft.text.length > question.maxLength)
+          || (question.minimumWords > 0 && draft.text.trim().split(/\s+/).length < question.minimumWords)
           || !Array.isArray(draft.evidenceIds)
           || !draft.evidenceIds.length
           || draft.evidenceIds.some((id) => !allowedEvidence.has(id)

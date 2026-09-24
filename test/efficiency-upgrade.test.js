@@ -93,6 +93,30 @@ test("inventory omits accessibility backing inputs and Ashby autofill picker", a
   } finally { await browser.close(); }
 });
 
+test("section word limits hold a short answer before final submission", async () => {
+  const browser = await chromium.launch();
+  try {
+    const html = `<form onsubmit="event.preventDefault();document.body.textContent='Application submitted'">
+      <div class="ashby-application-form-section-container">
+        <h2>Tell us more</h2>
+        <p>Please answer each question in no less than 200 words.</p>
+        <div class="ashby-application-form-field-entry">
+          <label for="project">Describe a technical product</label>
+          <textarea id="project" name="project" required></textarea>
+        </div>
+      </div><button type="submit">Submit Application</button></form>`;
+    const short = await browserRun(browser, html,
+      { answers: { project: "A specific but short project example." }, finalApprovalRequired: true });
+    assert.equal(short.status, "needs_input");
+    assert.ok(short.requirements.some((item) => item.kind === "missing_answer"
+      && /requires at least 200/.test(item.message)));
+    assert.equal(short.requirements.some((item) => item.kind === "final_submission_approval"), false);
+    const long = await browserRun(browser, html,
+      { answers: { project: Array(200).fill("evidence").join(" ") }, finalApprovalRequired: true });
+    assert.equal(long.requirements[0].kind, "final_submission_approval");
+  } finally { await browser.close(); }
+});
+
 test("draft provider receives only unresolved prose and replay uses the saved draft", async () => {
   const browser = await chromium.launch();
   const html = `<form onsubmit="event.preventDefault();document.body.textContent='Application submitted'">
