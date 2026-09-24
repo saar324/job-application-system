@@ -13,6 +13,23 @@ export const ADZUNA_FILTER_FORMATS = Object.freeze({ distance: "^\\d{1,4}$", max
 export const ADZUNA_PAGE_SIZE = 50;
 
 const DEFAULT_FILTERS = Object.freeze({ max_days_old: "7", sort_by: "date" });
+
+// Adzuna reports where a job sits, never how it is worked, so the arrangement has
+// to be read from the advert. The corpus is German, Dutch and Polish as well as
+// English. Hybrid is deliberately not remote: it still requires attendance.
+const REMOTE_ADVERT = /\b(?:fully[- ]remote|remote|work(?:ing)? from home|home[- ]?office|telecommut\w*|telearbeit\w*|ortsunabh\u00e4ngig\w*|mobile[sn]? arbeiten|thuiswerk\w*|op afstand|praca zdalna|zdaln\w+)\b/i;
+const HYBRID_ADVERT = /\b(?:hybrid\w*|hybryd\w*|teilweise home[- ]?office|part(?:ly|ial)[- ]remote)\b/i;
+const ONSITE_ADVERT = /\b(?:no remote|not remote|remote is not|on[- ]?site only|kein(?:e|erlei)? home[- ]?office|keine remote|nicht remote|geen thuiswerk|bez pracy zdalnej)\b/i;
+
+// Returns undefined when the advert says nothing, so an unknown arrangement stays
+// unknown rather than being recorded as on-site.
+function workArrangement(row) {
+  const text = `${row.title ?? ""} ${row.description ?? ""}`;
+  if (ONSITE_ADVERT.test(text)) return { arrangement: "onsite", remote: false };
+  if (HYBRID_ADVERT.test(text)) return { arrangement: "hybrid", remote: false };
+  if (REMOTE_ADVERT.test(text)) return { arrangement: "remote", remote: true };
+  return undefined;
+}
 const CURRENCIES = { at: "EUR", au: "AUD", be: "EUR", br: "BRL", ca: "CAD", ch: "CHF", de: "EUR", es: "EUR",
   fr: "EUR", gb: "GBP", in: "INR", it: "EUR", mx: "MXN", nl: "EUR", nz: "NZD", pl: "PLN", sg: "SGD",
   us: "USD", za: "ZAR" };
@@ -78,6 +95,7 @@ function employmentType(row) {
 
 function normalize(row, country) {
   const url = sanitizedUrl(row.redirect_url);
+  const arrangement = workArrangement(row);
   const minimum = Number(row.salary_min);
   const maximum = Number(row.salary_max);
   const predicted = String(row.salary_is_predicted ?? "0") === "1";
@@ -104,9 +122,13 @@ function normalize(row, country) {
     tags: [row.category?.label].filter(Boolean),
     postedAt: postedAt(row.created),
     searchCountry: country,
+    ...(arrangement ? { remote: arrangement.remote, workArrangement: arrangement.arrangement } : {}),
     ...(pay && !predicted ? { compensation: pay } : {}),
     ...(pay && predicted ? { compensationEstimate: { ...pay, predicted: true, provider: "adzuna" } } : {}),
     uncertainties: ["description_snippet_only", "employer_application_url_unverified",
+      // Read from a truncated snippet, so an advert that mentions the arrangement
+      // only in its full text is still recorded as unknown.
+      ...(arrangement ? ["work_arrangement_inferred_from_advert"] : ["work_arrangement_unknown"]),
       ...(pay && predicted ? ["compensation_predicted"] : [])]
   };
 }
