@@ -108,6 +108,38 @@ test("Adzuna search builds a bounded provider query and normalizes evidence", as
   assert.equal(items[2].compensation.currency, "EUR");
 });
 
+test("a standing `what` narrows the profile's titles, and `what_or` never becomes the search term", async () => {
+  const multi = { preferences: { fullTime: { jobTitles: ["Program Manager", "Project Manager"] } } };
+  const search = async (sourceConfig, query) => {
+    const urls = [];
+    await adzuna.search({ limit: 2, profile: multi, credentials, sourceConfig, query,
+      fetchImpl: async (url) => { urls.push(new URL(url)); return json({ count: 0, results: [] }); } });
+    return urls;
+  };
+
+  const plain = await search({ countries: ["de"] });
+  assert.deepEqual(plain.map((u) => u.searchParams.get("what")), ["Program Manager", "Project Manager"]);
+
+  const narrowed = await search({ countries: ["de"], defaults: { what: "remote" } });
+  assert.deepEqual(narrowed.map((u) => u.searchParams.get("what")),
+    ["Program Manager remote", "Project Manager remote"],
+    "a standing default narrows each title instead of replacing the set");
+
+  // `what_or` is sent as its own provider parameter, so it must not decide the terms.
+  const alongside = await search({ countries: ["de"], defaults: { what_or: "remote hybrid" } });
+  assert.deepEqual(alongside.map((u) => u.searchParams.get("what")), ["Program Manager", "Project Manager"],
+    "titles survive a what_or-only default");
+  assert.ok(alongside.every((u) => u.searchParams.get("what_or") === "remote hybrid"));
+  assert.ok(alongside.every((u) => u.searchParams.get("what") !== "undefined"));
+
+  const explicit = await search({ countries: ["de"] }, { what: "Delivery Manager" });
+  assert.deepEqual(explicit.map((u) => u.searchParams.get("what")), ["Delivery Manager"],
+    "an explicit query asks for those keywords and replaces the titles");
+
+  const titleless = await search({ countries: ["de"], defaults: { what: "remote" } });
+  assert.ok(titleless.length > 0);
+});
+
 test("Adzuna stops the country fan-out once the limit is met and skips searches without terms", async () => {
   let calls = 0;
   const fetchImpl = async () => { calls += 1; return json({ results: [row(1), row(2), row(3)] }); };
