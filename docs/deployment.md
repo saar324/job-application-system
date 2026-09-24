@@ -53,7 +53,7 @@ sudo ./scripts/deploy-systemd.sh
 
 The script normalizes all runtime paths, fixes private-file ownership before migration, copies root-owned code to `/opt/job-application-system`, installs Chromium, generates per-profile vault keys, splits API and worker environments, and starts the worker before the API.
 
-Optional keyed discovery credentials, such as `ADZUNA_APP_ID` and `ADZUNA_APP_KEY`, also go in `/etc/job-application/env`. The script copies them only to the API environment, never to the worker's. For Compose, put them in `.env`. See [discovery adapters](discovery.md#keyed-api-sources) for signup, private `sourceOptions`, and quota. Their request ledger is part of the SQLite database, so back it up and restore it with the rest of the state. Removing a source from `sources` disables it, and the ledger table can stay.
+Optional keyed discovery credentials, such as `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` and `JOBSPIPE_API_KEY`, also go in `/etc/job-application/env`. The script copies them only to the API environment, never to the worker's. For Compose, put them in `.env`. See [discovery adapters](discovery.md#keyed-api-sources) for signup, private `sourceOptions`, and quota. Their request ledger is part of the SQLite database, so back it up and restore it with the rest of the state. Removing a source from `sources` disables it, and the ledger table can stay.
 
 OpenClaw installation is deliberately separate. Provision each applicant only after API authentication and worker health are verified.
 

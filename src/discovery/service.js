@@ -8,8 +8,11 @@ import { greenhouse } from "./sources/greenhouse.js";
 import { ashby } from "./sources/ashby.js";
 import { lever } from "./sources/lever.js";
 import { adzuna, ADZUNA_FILTERS, ADZUNA_FILTER_FORMATS, ADZUNA_FILTER_OPTIONS, adzunaCountries } from "./sources/adzuna.js";
-import { isKeyedSource, missingCredentialMessage, redactSecrets, sourceCredentials } from "./source-credentials.js";
-import { quotaError, quotaLimits, SourceQuota } from "./source-quota.js";
+import { jobspipe, JOBSPIPE_ARRAY_FILTERS, JOBSPIPE_FILTERS, JOBSPIPE_FILTER_FORMATS, JOBSPIPE_FILTER_OPTIONS,
+  jobspipeSettings } from "./sources/jobspipe.js";
+import { credentialFingerprint, isKeyedSource, missingCredentialMessage, redactSecrets,
+  sourceCredentials } from "./source-credentials.js";
+import { PACED_WINDOWS, quotaError, quotaLimits, SourceQuota } from "./source-quota.js";
 import { scoreOpportunity } from "./scoring.js";
 import { telemetry } from "../telemetry.js";
 import { normalizeOpportunity } from "./normalization.js";
@@ -23,7 +26,7 @@ import { fetchVerifiedOfficialAtsRole, officialAtsDestination, officialAtsIdenti
 import { sourceConfigWithLearnedBoards, isLearnedBoardRequest,
   learnedBoardRequestsInLastDay, MAX_LEARNED_BOARD_REQUESTS_PER_DAY } from "./learned-boards.js";
 
-const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever, adzuna]
+const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever, adzuna, jobspipe]
   .map((source) => [source.id, source]));
 const atsBoardKey = (parsed) => parsed ? `${parsed.source}:${parsed.board}` : null;
 const AGGREGATOR_SOURCES = new Set(["himalayas", "jobicy"]);
@@ -46,8 +49,11 @@ export class DiscoveryService {
     this.sourceQuota = sourceQuota ?? new SourceQuota(applicationService?.store);
   }
 
+  // An adapter with its own option-derived allowance (for example a plan's
+  // credits) exports `quotaLimits`; others use the shared defaults.
   #quotaLimits(sourceId) {
-    return quotaLimits(sourceId, this.config.discovery?.sourceOptions?.[sourceId]?.quota);
+    const options = this.config.discovery?.sourceOptions?.[sourceId];
+    return SOURCES.get(sourceId)?.quotaLimits?.(options ?? {}) ?? quotaLimits(sourceId, options?.quota);
   }
 
   #atsBackoffActive(profileId, key) {
@@ -80,6 +86,25 @@ export class DiscoveryService {
       details: { reason, nextAt: new Date(Date.now() + 6 * 60 * 60_000).toISOString() } }));
   }
 
+  // Returns `{ role }` with the official ATS role (carrying the aggregator's
+  // expiry and evidence) or `{ failure }` with an uncertainty code.
+  async #verifiedOfficialCandidate(scored, identity, fetchImpl) {
+    const parsed = officialAtsIdentityFromUrl(scored.officialAtsCandidateUrl);
+    const key = atsBoardKey(parsed);
+    if (!parsed) return { failure: "official_ats_unrecognized" };
+    if (this.#atsBackoffActive(identity.profileId, key)) return { failure: "official_ats_backoff" };
+    let failure = "verification_failed";
+    const verified = await fetchVerifiedOfficialAtsRole(scored.officialAtsCandidateUrl,
+      this.config.discovery?.sourceOptions ?? {}, fetchImpl, (reason) => { failure = reason; });
+    if (["http_403", "http_429"].includes(failure)) await this.#recordAtsBackoff(identity, key, failure);
+    if (!verified) return { failure: `official_ats_${failure}` };
+    return { role: { ...verified,
+      ...(scored.validThrough ? { validThrough: scored.validThrough } : {}),
+      ...(scored.postingEvidence ? { postingEvidence: scored.postingEvidence } : {}),
+      provenance: { discoveredVia: scored.source, discoveryExternalId: scored.externalId,
+        discoveryListingUrl: scored.listingUrl, officialAtsVerified: true } } };
+  }
+
   async describeSources(identity, mode) {
     const profile = await this.profiles.get(identity.profileId);
     const selectedMode = mode ?? profile?.defaultMode ?? this.config.defaultMode;
@@ -102,7 +127,11 @@ export class DiscoveryService {
       greenhouse: { kind: "official_feed", filters: { board: "configured", title: "local", location: "local" } },
       ashby: { kind: "official_feed", filters: { board: "configured", title: "local", location: "local" } },
       adzuna: { kind: "keyed_api", filters: Object.fromEntries(ADZUNA_FILTERS.map((key) => [key, "provider"])),
-        filterFormats: ADZUNA_FILTER_FORMATS, maxResultsPerPage: 50, attribution: "Jobs by Adzuna" }
+        filterFormats: ADZUNA_FILTER_FORMATS, maxResultsPerPage: 50, attribution: "Jobs by Adzuna" },
+      jobspipe: { kind: "keyed_api", filters: Object.fromEntries(JOBSPIPE_FILTERS.map((key) => [key, "provider"])),
+        filterFormats: JOBSPIPE_FILTER_FORMATS, arrayFilters: JOBSPIPE_ARRAY_FILTERS,
+        maxResultsPerPage: jobspipeSettings(this.config.discovery?.sourceOptions?.jobspipe).pageSize,
+        applicationFlow: "verify_official_ats_before_prepare" }
     };
     const sourceOptions = this.config.discovery?.sourceOptions ?? {};
     return { mode: selectedMode, sources: await Promise.all(enabled.filter((id) => SOURCES.has(id)).map(async (id) => ({
@@ -112,7 +141,7 @@ export class DiscoveryService {
         seniority: ["Entry-level", "Mid-level", "Senior", "Manager", "Director", "Executive"],
         employment_type: ["Full Time", "Part Time", "Contractor", "Temporary", "Intern", "Volunteer", "Other"]
       } : id === "adzuna" ? { ...ADZUNA_FILTER_OPTIONS, country: adzunaCountries(sourceOptions.adzuna) }
-        : sourceOptions[id]?.filterValues ?? {},
+        : id === "jobspipe" ? JOBSPIPE_FILTER_OPTIONS : sourceOptions[id]?.filterValues ?? {},
       configuredBoards: (() => {
         const options = sourceConfigWithLearnedBoards(snapshot, identity.profileId, id,
           sourceOptions[id] ?? {},
@@ -150,11 +179,12 @@ export class DiscoveryService {
           || (key === "board" && !source.configuredBoards.includes(value))
           || !(typeof value === "string" || Array.isArray(value) && value.length <= 10
             && value.every((item) => typeof item === "string"))
-          || (source.id !== "lever" && Array.isArray(value))
+          || (source.id !== "lever" && Array.isArray(value) && !source.arrayFilters?.includes(key))
           || (["worldwide", "exclude_worldwide"].includes(key) && !["true", "false"].includes(value))
           || (source.filterOptions?.[key] && !(Array.isArray(value) ? value : [value])
             .every((item) => source.filterOptions[key].includes(item)))
-          || (source.filterFormats?.[key] && !new RegExp(source.filterFormats[key]).test(value))
+          || (source.filterFormats?.[key] && !(Array.isArray(value) ? value : [value])
+            .every((item) => new RegExp(source.filterFormats[key]).test(item)))
           || JSON.stringify(value).length > 500) {
           throw Object.assign(new Error(`unsupported filter: ${key}`), { status: 400 });
         }
@@ -806,15 +836,24 @@ export class DiscoveryService {
     for (const [sourceId, value] of credentials) {
       if (!value) internalErrors.push({ source: sourceId, code: "source_not_configured",
         error: missingCredentialMessage(sourceId) });
+      else await this.sourceQuota.releaseStaleKeyHold(sourceId, credentialFingerprint(value));
     }
     // Keyed providers draw on the durable ledger before any request leaves the
     // server; the in-memory cache key may hold credentials and is never logged.
+    // A full per-second window is waited out rather than refused.
     const keyedFetch = async (url, options, sourceId) => {
-      const reservation = await this.sourceQuota.reserve(sourceId, this.#quotaLimits(sourceId));
+      let reservation;
+      for (let attempt = 0; ; attempt += 1) {
+        reservation = await this.sourceQuota.reserve(sourceId, this.#quotaLimits(sourceId));
+        const wait = !reservation.reserved && PACED_WINDOWS.includes(reservation.window)
+          ? Date.parse(reservation.resetAt) - this.sourceQuota.now() : -1;
+        if (reservation.reserved || wait < 0 || wait > 2_000 || attempt >= 10) break;
+        await new Promise((resolve) => setTimeout(resolve, wait + 5));
+      }
       if (!reservation.reserved) {
         requestCount -= 1;
         requestsBySource.set(sourceId, requestsBySource.get(sourceId) - 1);
-        throw quotaError(sourceId, reservation);
+        throw Object.assign(quotaError(sourceId, reservation), { notSent: true });
       }
       const response = await this.fetchImpl(url, options);
       if (response.status === 429) await this.sourceQuota.hold(sourceId, "rate_limited");
@@ -825,12 +864,18 @@ export class DiscoveryService {
     const pacedOriginQueues = new Map();
     const pacedPendingByUrl = new Map();
     const blockedOfficialOrigins = new Map();
+    // Requests with a body are distinct per method and body; a body that is
+    // not a string is never shared.
+    const cacheKey = (url, options) => options?.body === undefined || options?.body === null ? String(url)
+      : typeof options.body === "string" ? `${options.method ?? "GET"} ${url}\n${options.body}` : Symbol("uncached");
     const cachedFetch = async (url, options, sourceId) => {
-      const key = String(url);
+      const key = cacheKey(url, options);
       if (!fetchCache.has(key)) {
-        if (requestCount >= maxRequests) throw new Error("discovery request budget exhausted");
+        if (requestCount >= maxRequests) {
+          throw Object.assign(new Error("discovery request budget exhausted"), { notSent: true });
+        }
         if (sourceId && (requestsBySource.get(sourceId) ?? 0) >= maxRequestsPerSource) {
-          throw new Error("source request budget exhausted");
+          throw Object.assign(new Error("source request budget exhausted"), { notSent: true });
         }
         // Claim the in-memory request slot before the durable board reservation
         // yields, so concurrent ATS origins cannot overshoot source/global caps.
@@ -856,7 +901,9 @@ export class DiscoveryService {
           if (sourceId) requestsBySource.set(sourceId, requestsBySource.get(sourceId) - 1);
           throw error;
         }
-        requestStartedAtByOrigin.set(new URL(key).origin, Date.now());
+        // `key` carries the method and body for keyed POST sources, so the origin
+        // comes from the URL itself rather than from the cache key.
+        requestStartedAtByOrigin.set(new URL(String(url)).origin, Date.now());
         if (learnedBoardKey) learnedBoardRequests.set(learnedBoardKey,
           (learnedBoardRequests.get(learnedBoardKey) ?? 0) + 1);
         fetchCache.set(key, credentials.has(sourceId) ? keyedFetch(url, options, sourceId)
@@ -906,7 +953,9 @@ export class DiscoveryService {
       searchCycle: sourceCycles[source.id] ?? 0,
       isHandled,
       sourceConfig: sourceConfigs.get(source.id),
-      ...(credentials.has(source.id) ? { credentials: credentials.get(source.id) } : {}),
+      ...(credentials.has(source.id) ? { credentials: credentials.get(source.id),
+        quota: this.sourceQuota.forSource(source.id, this.#quotaLimits(source.id),
+          { fingerprint: credentialFingerprint(credentials.get(source.id)) }) } : {}),
       onError: (error) => internalErrors.push({ source: source.id, ...error }),
       onStats: (stats) => {
         const previous = providerStats.get(source.id) ?? { rawRows: 0,
@@ -1218,7 +1267,28 @@ export class DiscoveryService {
         if (sourceYield.has(sourceId)) sourceYield.get(sourceId).excluded += 1;
         continue;
       }
-      if (scored.applicationDestinationPending) {
+      if (scored.officialAtsCandidateUrl) {
+        // An aggregator result that points at an official ATS is replaced by
+        // the fresh official role, then screened again on the official data.
+        const destinationStarted = performance.now();
+        const official = await this.#verifiedOfficialCandidate(scored, identity,
+          (url, options) => cachedFetch(url, options));
+        destinationMs += performance.now() - destinationStarted;
+        if (official.role) {
+          const fresh = normalizeOpportunity({ ...official.role, mode }, { source: official.role.source });
+          const rescored = scoreOpportunity(fresh, profile, mode, { version: scorerVersion });
+          if (rescored.scoreDetails.hardExclusion || rescored.score < modeConfig.minimumScore) {
+            excluded += 1;
+            if (sourceYield.has(raw.source)) {
+              const row = sourceYield.get(raw.source);
+              row.excluded += 1;
+              row.exclusionCounts[rescored.scoreDetails.hardExclusion ? "hardExclusion" : "belowScore"] += 1;
+            }
+            continue;
+          }
+          scored = { ...fresh, mode, ...rescored };
+        } else scored = { ...scored, uncertainties: [...new Set([...scored.uncertainties, official.failure])] };
+      } else if (scored.applicationDestinationPending) {
         const destinationStarted = performance.now();
         try { scored = await resolveEmployerApplicationUrl(scored, cachedFetch); }
         catch (error) {
