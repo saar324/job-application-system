@@ -9,3 +9,4 @@ This service is the durable system of record for multiple applicants. Keep chat 
 - Add provider-specific scraping or browser behavior behind adapters.
 - Add a regression test for every state-machine, deduplication, authorization, or confirmation-policy change.
 - Do not commit resumes, cookies, tokens, local profile files, or application state.
+- Use a GitHub no-reply or example author identity for commits. Rebase-merge reviewed commits to preserve their authors; a squash merge can replace the author with the merger's account. Verify the private privacy gate on `main` after merging.
