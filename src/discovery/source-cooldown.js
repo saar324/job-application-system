@@ -1,8 +1,8 @@
-const DURATIONS_MS = {
+export const SOURCE_COOLDOWN_MS = Object.freeze({
   challenge: 24 * 60 * 60_000,
   rate_limited: 6 * 60 * 60_000,
   timed_out: 30 * 60_000
-};
+});
 
 // Audit events are durable across campaigns. A completed attempt replaces an
 // older result; a cooldown skip is only coverage and must not extend the hold.
@@ -27,7 +27,7 @@ export function sourceCooldowns(audit, profileId, sourceIds, at = Date.now()) {
     if (!reason) return [];
     const started = Date.parse(event.at);
     if (!Number.isFinite(started)) return [];
-    const until = started + DURATIONS_MS[reason];
+    const until = started + SOURCE_COOLDOWN_MS[reason];
     return until > at ? [[sourceId, { reason, until: new Date(until).toISOString(),
       observedAt: event.at }]] : [];
   }));

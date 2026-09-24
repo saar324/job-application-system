@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateAdzunaOptions } from "./discovery/sources/adzuna.js";
+import { validateQuotaOverrides } from "./discovery/source-quota.js";
 
 function deepMerge(base, override) {
   if (!override || typeof override !== "object" || Array.isArray(override)) return base;
@@ -56,6 +58,11 @@ export async function loadConfig(env = process.env) {
     || Object.entries(broadenedSources).some(([source, enabled]) =>
       !/^[a-z][a-z0-9_-]{0,79}$/.test(source) || typeof enabled !== "boolean")) {
     throw new Error("discovery.broadenedSources must map source IDs to booleans");
+  }
+  const sourceOptions = config.discovery?.sourceOptions ?? {};
+  if (sourceOptions.adzuna !== undefined) validateAdzunaOptions(sourceOptions.adzuna);
+  for (const [sourceId, options] of Object.entries(sourceOptions)) {
+    if (options?.quota !== undefined) validateQuotaOverrides(sourceId, options.quota);
   }
   for (const [mode, settings] of Object.entries(config.modes)) {
     if (!Number.isFinite(settings.minimumScore) || settings.minimumScore < 0 || settings.minimumScore > 100) {

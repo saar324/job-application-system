@@ -110,6 +110,19 @@ export class SqliteStore {
         completed_at TEXT,
         PRIMARY KEY(profile_id, action, idempotency_key)
       );
+      CREATE TABLE IF NOT EXISTS source_quota_usage (
+        source_id TEXT NOT NULL,
+        quota_window TEXT NOT NULL,
+        window_start TEXT NOT NULL,
+        used INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(source_id, quota_window, window_start)
+      );
+      CREATE TABLE IF NOT EXISTS source_quota_holds (
+        source_id TEXT PRIMARY KEY,
+        reason TEXT NOT NULL,
+        until TEXT NOT NULL
+      );
     `);
     this.#db.prepare(
       "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)"
@@ -117,6 +130,9 @@ export class SqliteStore {
     this.#db.prepare(
       "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)"
     ).run(2, new Date().toISOString());
+    this.#db.prepare(
+      "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)"
+    ).run(3, new Date().toISOString());
     this.#db.prepare("INSERT OR IGNORE INTO runtime_metadata(key, value) VALUES ('state_revision', '0')").run();
     const integrity = this.#db.prepare("PRAGMA integrity_check").get();
     if (integrity.integrity_check !== "ok") throw new Error(`SQLite integrity check failed: ${integrity.integrity_check}`);
@@ -206,6 +222,62 @@ export class SqliteStore {
       WHERE profile_id = ? AND action = ? AND idempotency_key = ?
         AND request_hash = ? AND status = 'pending'
     `).run(profileId, action, key, requestHash);
+  }
+
+  // Deployment-wide provider request ledger. BEGIN IMMEDIATE serializes the
+  // check-and-increment across connections and processes.
+  reserveSourceQuota({ sourceId, windows, cost = 1, at = new Date().toISOString() }) {
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      this.#db.prepare("DELETE FROM source_quota_holds WHERE until <= ?").run(at);
+      const hold = this.#db.prepare("SELECT reason, until FROM source_quota_holds WHERE source_id = ?").get(sourceId);
+      if (hold) {
+        this.#db.exec("COMMIT");
+        return { reserved: false, hold: { reason: hold.reason, until: hold.until } };
+      }
+      const prune = this.#db.prepare(
+        "DELETE FROM source_quota_usage WHERE source_id = ? AND quota_window = ? AND window_start <> ?");
+      const read = this.#db.prepare(
+        "SELECT used FROM source_quota_usage WHERE source_id = ? AND quota_window = ? AND window_start = ?");
+      for (const window of windows) prune.run(sourceId, window.window, window.start);
+      for (const window of windows) {
+        const used = Number(read.get(sourceId, window.window, window.start)?.used ?? 0);
+        if (used + cost > window.limit) {
+          this.#db.exec("COMMIT");
+          return { reserved: false, window: window.window, used };
+        }
+      }
+      const increment = this.#db.prepare(`
+        INSERT INTO source_quota_usage(source_id, quota_window, window_start, used, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(source_id, quota_window, window_start)
+        DO UPDATE SET used = used + excluded.used, updated_at = excluded.updated_at
+      `);
+      for (const window of windows) increment.run(sourceId, window.window, window.start, cost, at);
+      this.#db.exec("COMMIT");
+      return { reserved: true };
+    } catch (error) {
+      try { this.#db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
+  holdSourceQuota({ sourceId, reason, until }) {
+    this.#db.prepare(`
+      INSERT INTO source_quota_holds(source_id, reason, until) VALUES (?, ?, ?)
+      ON CONFLICT(source_id) DO UPDATE SET reason = excluded.reason, until = excluded.until
+      WHERE excluded.until > source_quota_holds.until
+    `).run(sourceId, reason, until);
+  }
+
+  sourceQuotaUsage({ sourceId, windows, at = new Date().toISOString() }) {
+    const read = this.#db.prepare(
+      "SELECT used FROM source_quota_usage WHERE source_id = ? AND quota_window = ? AND window_start = ?");
+    const hold = this.#db.prepare("SELECT reason, until FROM source_quota_holds WHERE source_id = ? AND until > ?")
+      .get(sourceId, at);
+    return { used: Object.fromEntries(windows.map((window) => [window.window,
+      Number(read.get(sourceId, window.window, window.start)?.used ?? 0)])),
+    hold: hold ? { reason: hold.reason, until: hold.until } : null };
   }
 
   snapshot() {

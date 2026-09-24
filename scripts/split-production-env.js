@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { chmod, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { SOURCE_CREDENTIAL_ENV_NAMES } from "../src/discovery/source-credentials.js";
 
 const source = path.resolve(process.argv[2] ?? "/etc/job-application/env");
 const serverFile = path.resolve(process.argv[3] ?? "/etc/job-application/server.env");
@@ -18,7 +19,8 @@ const serverKeys = [
   "APPLICATION_WEBHOOK_URL", "APPLICATION_WEBHOOK_TOKEN", "JOB_SERVER_DOCUMENT_STAGING",
   "JOB_SERVER_ALLOWED_DOCUMENT_ROOTS", "JOB_SERVER_DOCUMENT_MAX_BYTES", "JOB_SERVER_CREDENTIAL_VAULTS"
   , "JOB_SEMANTIC_ENABLED", "JOB_SEMANTIC_ENDPOINT", "JOB_SEMANTIC_TOKEN", "JOB_SEMANTIC_MODEL",
-  "JOB_SEMANTIC_TIMEOUT_MS", "JOB_SEMANTIC_MAX_CHARACTERS", "JOB_SEMANTIC_VERSION"
+  "JOB_SEMANTIC_TIMEOUT_MS", "JOB_SEMANTIC_MAX_CHARACTERS", "JOB_SEMANTIC_VERSION",
+  ...SOURCE_CREDENTIAL_ENV_NAMES
 ];
 const workerKeys = [
   "WORKER_TOKEN", "WORKER_HOST", "WORKER_PORT", "WORKER_ALLOWED_DOMAINS", "WORKER_ALLOW_HTTP",
