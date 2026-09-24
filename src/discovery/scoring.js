@@ -193,6 +193,38 @@ function qualityExclusions(opportunity, profile, acceptedTypes, allowedLocations
   return exclusions;
 }
 
+// A missing skill-list entry is uncertainty, not proof that an applicant lacks
+// experience. Keep these roles scored and reviewable, but do not infer a
+// specialist qualification from unrelated technologies mentioned in the ad.
+const SECURITY_EXPERIENCE = /\b(?:security engineering|application security|appsec|cloud security|cyber(?: ?security)|penetration testing|threat model(?:ing|ling)|incident response|vulnerability management|detection engineering|security architecture)\b/i;
+const SECURITY_TITLE = /\b(?:security|cybersecurity|appsec)\s+(?:(?:software|platform|cloud|application)\s+)?(?:engineer|developer|architect)\b|\b(?:engineer|developer|architect)[,\s/-]+(?:security|cybersecurity|appsec)\b/i;
+const EXPLICIT_SPECIALIST_REQUIREMENTS = [
+  { label: "penetration testing", pattern: /\bpenetration testing\b/i },
+  { label: "threat modeling", pattern: /\bthreat model(?:ing|ling)\b/i },
+  { label: "incident response", pattern: /\bincident response\b/i },
+  { label: "vulnerability management", pattern: /\bvulnerability management\b/i },
+  { label: "security engineering", pattern: /\bsecurity engineering\b/i }
+];
+
+function advisoryFitReview(opportunity, profile) {
+  const title = String(opportunity.title ?? "");
+  const description = String(opportunity.description ?? "");
+  const verifiedSkills = (profile.skills ?? []).map((skill) => String(skill));
+  if (SECURITY_TITLE.test(title)
+    && !verifiedSkills.some((skill) => SECURITY_EXPERIENCE.test(skill))) {
+    return { reason: "unverified_specialization", requirement: "security engineering" };
+  }
+  for (const requirement of EXPLICIT_SPECIALIST_REQUIREMENTS) {
+    const mustHave = new RegExp(
+      `\\b(?:must[- ]have|requires?|required)\\b[^.!?;\\n]{0,120}${requirement.pattern.source}`, "i");
+    if (mustHave.test(description)
+      && !verifiedSkills.some((skill) => requirement.pattern.test(skill))) {
+      return { reason: "unverified_specialization", requirement: requirement.label };
+    }
+  }
+  return null;
+}
+
 function compensationEvidence(opportunity, profile, mode, modePreferences) {
   const compensation = opportunity.compensation;
   const defaultMinimum = mode === "freelance"
@@ -317,6 +349,7 @@ export function scoreOpportunity(opportunity, profile, mode, { version = "2" } =
     ? Math.max(0, Math.min(10, Math.round((semanticScore > 1 ? semanticScore / 100 : semanticScore) * 10))) : 0;
   const score = exclusions.length ? 0
     : Math.min(100, skillScore + titleScore + locationScore + recencyScore + compensationScore + semanticContribution);
+  const fitReview = exclusions.length ? null : advisoryFitReview(opportunity, profile);
   return {
     score, conflicts,
     scoreDetails: {
@@ -324,6 +357,7 @@ export function scoreOpportunity(opportunity, profile, mode, { version = "2" } =
       hardExclusion: exclusions[0], hardExclusions: exclusions,
       conflicts, matchedSkills, skillEvidence, skillScore, titleScore, titlePriority, rolePriority,
       compensationComparable: pay.comparable === true,
+      fitReview,
       locationScore, recencyScore, compensationScore, semanticContribution,
       uncertainties: opportunity.uncertainties ?? []
     }

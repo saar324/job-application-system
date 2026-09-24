@@ -48,8 +48,12 @@ export function selectFitReviewCandidates(candidates, unverifiedSkillCandidates 
     chosen, perSource, 3);
   spreadSources(low, regularLimit, chosen, perSource, 3);
   spreadSources(regular, regularLimit, chosen, perSource, 3);
-  const hard = [...unverifiedSkillCandidates]
-    .sort((left, right) => right.matchedSkillCount - left.matchedSkillCount
-      || right.score - left.score).slice(0, hardReserve);
+  const specialist = unverifiedSkillCandidates.filter((item) =>
+    item.reason === "unverified_specialization")
+    .sort((left, right) => right.score - left.score).slice(0, Math.min(2, hardReserve));
+  const hard = [...specialist, ...unverifiedSkillCandidates.filter((item) =>
+    !specialist.includes(item)).sort((left, right) =>
+    right.matchedSkillCount - left.matchedSkillCount || right.score - left.score)
+    .slice(0, hardReserve - specialist.length)];
   return [...chosen, ...hard].sort((left, right) => right.score - left.score);
 }

@@ -53,3 +53,13 @@ test("verified skill uncertainty retains a separate capped review reserve", () =
   assert.ok(chosen.length <= 20);
   assert.equal(chosen.filter((item) => item.reason === "unverified_required_skill").length, 5);
 });
+
+test("specialist fit holds remain visible when the review reserve is crowded", () => {
+  const skill = Array.from({ length: 10 }, (_, index) => candidate("source", index, 0,
+    { matchedSkillCount: 10 - index, reason: "unverified_required_skill" }));
+  const specialist = candidate("source", 20, 78,
+    { matchedSkillCount: 2, reason: "unverified_specialization" });
+  const chosen = selectFitReviewCandidates([], [...skill, specialist]);
+  assert.ok(chosen.length <= 5);
+  assert.ok(chosen.some((item) => item.externalId === specialist.externalId));
+});

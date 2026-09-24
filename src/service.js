@@ -316,6 +316,7 @@ export class ApplicationService {
       }
 
       const decision = evaluatePolicy({ opportunity, mode, modeConfig, answers: input.answers });
+      let specialistFitReview = false;
       if (covered) {
         const freshScore = scoreOpportunity(opportunity, profile, mode,
           { version: String(this.config.discovery?.scorerVersion ?? "2") });
@@ -324,6 +325,12 @@ export class ApplicationService {
           decision.reasons.push(freshScore.scoreDetails.hardExclusion ?? "current fit score below minimum");
         }
         decision.autoApply = true;
+        specialistFitReview = Boolean(freshScore.scoreDetails.fitReview);
+        if (specialistFitReview) {
+          decision.autoApply = false;
+          decision.confirmations.push({ kind: "specialist_fit_review",
+            message: `Verify experience with ${freshScore.scoreDetails.fitReview.requirement} for this role before applying.` });
+        }
         decision.confirmations.push(...hardPolicyHolds({ opportunity, mode, answers: input.answers, profile })
           .filter((hold) => !decision.confirmations.some((existing) => existing.kind === hold.kind
             && JSON.stringify(existing.fields ?? []) === JSON.stringify(hold.fields ?? []))));
@@ -365,9 +372,11 @@ export class ApplicationService {
         requestedBy: identity.actorId, answers: input.answers ?? {},
         ...(input.campaignId ? { campaignId: String(input.campaignId) } : {}),
         submissionApproval: relatedRole === "possible_duplicate" || employerFrequencyReview
+          || specialistFitReview
           ? "always" : submissionApproval,
         ...(covered ? { standingPolicyVersion: profile.standingSubmissionPolicy.version } : {}),
         finalApprovalRequired: relatedRole === "possible_duplicate" || employerFrequencyReview
+          || specialistFitReview
           || submissionApproval === "always",
         status: !decision.eligible ? "skipped"
           : decision.confirmations.length || !decision.autoApply ? "waiting_confirmation" : "queued",
@@ -435,6 +444,9 @@ export class ApplicationService {
         if (freshScore.scoreDetails.hardExclusion
           || freshScore.score < this.config.modes[current.mode].minimumScore) {
           reasonCodes.push("current_fit_not_eligible");
+        }
+        if (freshScore.scoreDetails.fitReview && !current.finalApprovalRequired) {
+          reasonCodes.push("specialist_fit_review_required");
         }
       }
       if (current.standingPolicyVersion !== policy?.version) reasonCodes.push("policy_version_changed");
@@ -540,6 +552,10 @@ export class ApplicationService {
       if (!current.finalApprovalRequired
         && recentEmployerReceipts(state, current.profileId, opportunity.company) >= 2) {
         throw new ClientError(409, "recent employer submissions require a fresh review");
+      }
+      if (!current.finalApprovalRequired && profile && scoreOpportunity(opportunity, profile, current.mode,
+        { version: String(this.config.discovery?.scorerVersion ?? "2") }).scoreDetails.fitReview) {
+        throw new ClientError(409, "specialist experience requires a fresh review");
       }
       decision.status = "consumed";
       decision.consumedAt = now();
@@ -851,6 +867,7 @@ export class ApplicationService {
         destinationPending: input.destinationPending ?? 0,
         selected: input.selected, opportunityIds: input.opportunityIds ?? [],
         pendingOpportunityIds: input.pendingOpportunityIds ?? [],
+        fitReviewCandidates: (input.fitReviewCandidates ?? []).slice(0, 10),
         exclusionReasons: input.exclusionReasons ?? [],
         completed: input.completed, pagesVisited: input.pagesVisited, requestsMade: input.requestsMade,
         elapsedMs: input.elapsedMs,
