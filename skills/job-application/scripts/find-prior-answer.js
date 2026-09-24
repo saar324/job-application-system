@@ -43,8 +43,19 @@ try {
 const matches = [];
 for (const app of log.items ?? []) {
   if (app.status !== "submitted" || !employerKeys(app).has(companyKey(company))) continue;
-  for (const item of app.questionsAndAnswers ?? []) {
+  const priorAnswers = [
+    ...(app.questionsAndAnswers ?? []).map((item) => ({ ...item, source: "application log" })),
+    ...(app.submittedFields ?? [])
+      .filter((item) => item.source === "application answer"
+        || String(item.source ?? "").startsWith("approved answer:"))
+      .map((item) => ({ question: item.label, answer: item.value, source: item.source }))
+  ];
+  const seen = new Set();
+  for (const item of priorAnswers) {
     if (typeof item.answer !== "string" || !item.answer.trim()) continue;
+    const identity = `${companyKey(item.question)}:${item.answer}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     const previous = words(item.question);
     const overlap = [...target].filter((word) => previous.has(word)).length;
     if (overlap < 2 || Math.min(target.size, previous.size) < 2) continue;
@@ -53,7 +64,8 @@ for (const app of log.items ?? []) {
     const score = 0.7 * containment + 0.3 * overlap / union;
     if (score < 0.65) continue;
     matches.push({ score: Number(score.toFixed(3)), company: app.company, title: app.title,
-      applicationId: app.applicationId, status: app.status, question: item.question, answer: item.answer });
+      applicationId: app.applicationId, status: app.status, question: item.question,
+      answer: item.answer, source: item.source });
   }
 }
 matches.sort((a, b) => b.score - a.score || b.answer.length - a.answer.length);
