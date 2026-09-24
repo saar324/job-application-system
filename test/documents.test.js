@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -25,6 +25,23 @@ test("document stager copies an approved regular resume to a fixed name", async 
     application: { id: "application-one", profileId: "person-one" },
     profile, opportunity: { applyUrl: "https://example.test" }
   }, staging);
+});
+
+test("document stager grants the worker group read access to private source documents", async () => {
+  const { source, staging, stager } = await fixture();
+  const resume = path.join(source, "private.pdf");
+  await writeFile(resume, "resume", { mode: 0o600 });
+  await chmod(resume, 0o600);
+  const profile = await stager.stage({ id: "application-one" },
+    { id: "person-one", documents: { resume } });
+  const [root, directory, staged] = await Promise.all([
+    stat(staging), stat(path.dirname(profile.documents.resume)), stat(profile.documents.resume)
+  ]);
+  assert.equal(staged.gid, root.gid);
+  assert.equal(staged.mode & 0o777, 0o640);
+  assert.equal(directory.gid, root.gid);
+  assert.equal(directory.mode & 0o7777, 0o2750);
+  assert.equal((await stat(resume)).mode & 0o777, 0o600);
 });
 
 test("document stager rejects escape symlinks, unsupported files, and oversized files", async () => {
@@ -54,3 +71,17 @@ test("worker document policy rejects arbitrary and cross-application paths", asy
   };
   await assert.rejects(validateWorkerPayload(payload, staging), /outside its application boundary/);
 });
+
+test("worker document policy rejects unreadable staged files before browser entry",
+  { skip: process.getuid?.() === 0 }, async () => {
+    const { source, staging, stager } = await fixture();
+    const resume = path.join(source, "candidate.pdf");
+    await writeFile(resume, "resume");
+    const profile = await stager.stage({ id: "application-one" },
+      { id: "person-one", documents: { resume } });
+    await chmod(profile.documents.resume, 0o000);
+    await assert.rejects(validateWorkerPayload({
+      application: { id: "application-one", profileId: "person-one" },
+      profile, opportunity: { applyUrl: "https://example.test" }
+    }, staging), /not readable by the worker/);
+  });
