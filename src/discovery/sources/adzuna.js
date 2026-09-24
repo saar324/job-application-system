@@ -1,5 +1,5 @@
 import { plainText } from "../text.js";
-import { profileSearchTerms } from "../title-preferences.js";
+import { searchTitleQueryPlan } from "../search-title-queries.js";
 import { redactSecrets } from "../source-credentials.js";
 
 export const ADZUNA_COUNTRIES = Object.freeze(["at", "au", "be", "br", "ca", "ch", "de", "es", "fr", "gb",
@@ -167,7 +167,8 @@ function diagnostic(error, country, credentials) {
 
 export const adzuna = {
   id: "adzuna",
-  async search({ limit = 50, fetchImpl = fetch, profile, query = {}, sourceConfig = {}, credentials, onError = () => {} }) {
+  async search({ limit = 50, fetchImpl = fetch, profile, query = {}, sourceConfig = {}, credentials,
+    searchTitles = [], searchCycle = 0, onError = () => {} }) {
     if (!credentials?.appId || !credentials?.appKey) {
       throw Object.assign(new Error("source_not_configured"), { code: "source_not_configured" });
     }
@@ -182,7 +183,8 @@ export const adzuna = {
     // profile's titles rather than replacing them: replacing loses role targeting
     // entirely, while an explicit query asks for those keywords and is honoured.
     const standingWhat = sourceConfig.defaults?.what;
-    const titles = profileSearchTerms(profile);
+    const plan = searchTitleQueryPlan(profile, searchTitles, { maximum: 16, cycle: searchCycle });
+    const titles = plan.queries.map((item) => item.term);
     const terms = query.what ? [query.what]
       : titles.length ? titles.map((title) => standingWhat ? `${title} ${standingWhat}` : title)
         : standingWhat ? [standingWhat] : [];

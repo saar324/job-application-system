@@ -75,10 +75,13 @@ test("Adzuna search builds a bounded provider query and normalizes evidence", as
         row(1003, { redirect_url: "http://www.adzuna.example.test/land/ad/1003" })
       ] });
     } });
-  assert.equal(urls.length, 2, "a short page ends the term in that country and moves to the next");
+  // Three planned terms across two countries; a short page ends that term and moves on.
+  assert.equal(urls.length, 6, "each planned term is searched once per country");
   assert.equal(urls[0].origin + urls[0].pathname, "https://api.adzuna.com/v1/api/jobs/gb/search/1");
-  assert.equal(urls[1].pathname, "/v1/api/jobs/de/search/1");
-  assert.equal(urls[0].searchParams.get("results_per_page"), "50");
+  assert.deepEqual([...new Set(urls.map((u) => u.pathname))],
+    ["/v1/api/jobs/gb/search/1", "/v1/api/jobs/de/search/1"], "both countries are covered");
+  // The limit of 120 is divided across the three planned terms.
+  assert.equal(urls[0].searchParams.get("results_per_page"), "40");
   assert.equal(urls[0].searchParams.get("what"), "Platform Engineer");
   assert.equal(urls[0].searchParams.get("max_days_old"), "7");
   assert.equal(urls[0].searchParams.get("sort_by"), "date");
