@@ -134,6 +134,51 @@ test("a browser listing for another ATS role cannot be promoted", async () => {
   assert.equal(service.list("opportunities", "person").length, 0);
 });
 
+test("an observed non-ATS employer link stays pending until its current role is verified", async () => {
+  const { service, discovery, campaign } = await fixture(async () => {
+    throw new Error("non-ATS links must not receive an automatic official lookup");
+  });
+  const candidate = { title: "Senior Engineer", company: "Example", remote: true,
+    description: "TypeScript Node.js", location: "Remote", employmentType: "full_time",
+    listingUrl: "https://aggregator.example.test/jobs/42",
+    applyUrl: "https://example.jobs.personio.de/job/42",
+    applicationDestinationVerified: true };
+  const first = await discovery.addCampaignSourceResults(campaign.campaignId, {
+    sourceId: "board_one", completed: true, items: [candidate]
+  }, identity);
+  assert.equal(first.sourceCoverage.scans[0].selected, 0);
+  assert.equal(first.sourceCoverage.scans[0].destinationPending, 1);
+  assert.equal(first.sourceCoverage.scans[0].pendingOpportunityIds.length, 1);
+  const pending = service.list("opportunities", "person")[0];
+  assert.equal(pending.applicationDestinationPending, true);
+  assert.equal(pending.applicationDestinationVerified, false);
+  const retry = await discovery.addCampaignSourceResults(campaign.campaignId, {
+    sourceId: "board_two", completed: true, items: [candidate]
+  }, identity);
+  assert.equal(retry.sourceCoverage.scans[1].handledFiltered, 0);
+  assert.equal(retry.sourceCoverage.scans[1].selected, 0);
+  assert.equal(service.list("opportunities", "person").length, 1);
+  assert.equal(service.list("applications", "person").length, 0);
+});
+
+test("a matching official ATS identity upgrades a pending cross-source role", async () => {
+  const { service } = await fixture(async () => new Response(JSON.stringify({ jobs: [job] })));
+  const pending = await service.addOpportunity({ title: job.title, company: "Example",
+    source: "browser_board", externalId: "browser-42",
+    applyUrl: "https://board.example.test/apply/42", listingUrl: job.jobUrl,
+    applicationDestinationPending: true }, identity);
+  const verified = await service.addOpportunity({ title: job.title, company: "Example",
+    source: "ashby", externalId: `example:${roleId}`, applyUrl,
+    listingUrl: job.jobUrl, applicationDestinationPending: false,
+    applicationDestinationVerified: true }, identity, { serverVerifiedDiscovery: true });
+  assert.equal(verified.id, pending.id);
+  assert.equal(verified.applicationDestinationPending, false);
+  assert.equal(verified.source, "ashby");
+  assert.equal(verified.applyUrl, applyUrl);
+  assert.ok(verified.discoveryVerification);
+  assert.equal(service.list("opportunities", "person").length, 1);
+});
+
 test("a live exact ATS role is rescored, deduplicated across browser sources, and policy permitted", async () => {
   let fetches = 0;
   const { service, discovery, campaign } = await fixture(async () => {

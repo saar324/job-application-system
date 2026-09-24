@@ -6,7 +6,7 @@ import { validateWorkerPayload } from "./document-policy.js";
 import { ReceiptStore } from "./receipts.js";
 import { executeInFreshContext } from "./execution.js";
 import { createAdaptiveControllerFromEnv } from "./adaptive.js";
-import { draftProviderFromEnv } from "./draft-provider.js";
+import { claimReviewerFromEnv, draftProviderFromEnv } from "./draft-provider.js";
 import { createValidatedEgressProxy } from "./egress-proxy.js";
 import { browserPathConfig, browserPathFor } from "./browser-path.js";
 
@@ -43,6 +43,7 @@ const headedBrowser = browserPaths.headedOrigins.size
   ? await chromium.launch({ headless: false, args: ["--disable-quic"] }) : null;
 const adaptiveController = createAdaptiveControllerFromEnv();
 const draftProvider = draftProviderFromEnv();
+const claimReviewer = claimReviewerFromEnv();
 const internalUrl = process.env.JOB_SERVER_INTERNAL_URL;
 async function finalGate(pathname, body) {
   if (!internalUrl) throw new Error("JOB_SERVER_INTERNAL_URL is required for standing authorization");
@@ -78,7 +79,7 @@ const server = createServer(async (request, response) => {
       const selected = browserPathFor(payload.opportunity.applyUrl, browserPaths);
       return executeInFreshContext({ browser: selected === "headed" ? headedBrowser : browser,
         payload, urlPolicy, artifactsDirectory,
-        adaptiveController, draftProvider, egressProxy, markFinalActionStarted,
+        adaptiveController, draftProvider, claimReviewer, egressProxy, markFinalActionStarted,
         authorizeFinal: (body) => finalGate("/v1/internal/final-decision", body),
         commitFinal: (body) => finalGate("/v1/internal/final-commit", body) });
     });

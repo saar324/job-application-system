@@ -51,6 +51,9 @@ reserve a cap slot before Submit; unused reservations expire, and consumed attem
 
 The status response includes scan, preparation, approval-wait, submission, and worker-active timing; every ready
 review entry includes the company, role, destination, full presentation, application ID, and preview fingerprint.
+`scan.fitReviewCandidates` lists a bounded set of strong but uncertain roles excluded from automatic selection.
+These have no queued application. Inspect current employer eligibility, salary evidence, and the complete role before
+manually promoting one; a search title or model opinion does not override a verified hard exclusion.
 For entries awaiting exact review, submit only after the owner explicitly approves the exact entries shown:
 
 ```bash

@@ -18,15 +18,21 @@ import { HttpDraftProvider } from "../worker/draft-provider.js";
 const identity = { actorId: "owner", profileId: "owner" };
 const profile = { id: "owner", contact: { firstName: "Ada", lastName: "Lovelace", email: "ada@example.test" },
   links: {}, documents: {} };
+const supportedReview = { async review({ text, evidenceIds }) {
+  return { supported: true, responsive: true, companySpecific: true,
+    claims: [{ text, supported: true, evidenceIds }] };
+} };
 const htmlUrl = (html) => `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 
-async function browserRun(browser, html, application = {}, draftProvider, evidencePacket, profileOverride = profile) {
+async function browserRun(browser, html, application = {}, draftProvider, evidencePacket,
+  profileOverride = profile, claimReviewer) {
   const context = await browser.newContext();
   const page = await context.newPage();
   try {
     return await automateApplication({ page, profile: profileOverride,
       opportunity: { applyUrl: htmlUrl(html), company: "Example", title: "Engineer" },
-      application: { id: "test-application", answers: {}, ...application }, draftProvider, evidencePacket,
+      application: { id: "test-application", answers: {}, ...application }, draftProvider,
+      claimReviewer, evidencePacket,
       artifactsDirectory: await mkdtemp(path.join(os.tmpdir(), "job-efficiency-browser-")) });
   } finally { await context.close(); }
 }
@@ -102,7 +108,8 @@ test("draft provider receives only unresolved prose and replay uses the saved dr
     return [{ fieldId: "motivation", text: "I want to build reliable software.", evidenceIds: ["listing"] }];
   } };
   try {
-    const first = await browserRun(browser, html, {}, provider, { listing: "Build reliable software" });
+    const first = await browserRun(browser, html, {}, provider,
+      { listing: "Build reliable software" }, profile, supportedReview);
     assert.equal(first.status, "needs_input");
     assert.equal(first.requirements[0].kind, "final_submission_approval");
     assert.equal(first.preparedAnswers.motivation, "I want to build reliable software.");
@@ -118,6 +125,43 @@ test("draft provider receives only unresolved prose and replay uses the saved dr
     }, undefined, { listing: "The role description changed" });
     assert.equal(stale.status, "needs_input");
     assert.equal(stale.requirements[0].kind, "missing_answer");
+  } finally { await browser.close(); }
+});
+
+test("optional motivation receives grounded drafting instead of being silently skipped", async () => {
+  const browser = await chromium.launch();
+  const html = `<form><label>Why this company? <textarea name="motivation"></textarea></label>
+    <label>Optional note <textarea name="note"></textarea></label>
+    <button type="submit">Submit Application</button></form>`;
+  const provider = { async draft({ questions, evidencePacket }) {
+    assert.deepEqual(questions.map((item) => item.fieldId), ["motivation"]);
+    assert.match(evidencePacket.listing, /Build reliable software/);
+    return [{ fieldId: "motivation", text: "Your reliable software mission matches my work.",
+      evidenceIds: ["listing"] }];
+  } };
+  try {
+    const result = await browserRun(browser, html, { finalApprovalRequired: true }, provider,
+      { listing: "Build reliable software for teams managing complex customer workflows. "
+        + "The role owns reliable APIs, production observability, and cross-team delivery. ".repeat(4) },
+    profile, supportedReview);
+    assert.equal(result.status, "needs_input");
+    assert.equal(result.requirements[0].kind, "final_submission_approval");
+    assert.equal(result.requirements[0].preview.filled.find((field) => field.key === "motivation")?.source,
+      "drafted prose");
+    assert.equal(result.requirements[0].preview.unfilled.find((field) => field.key === "note")?.required,
+      false);
+  } finally { await browser.close(); }
+});
+
+test("thin company evidence pauses an optional motivation question for research", async () => {
+  const browser = await chromium.launch();
+  try {
+    const result = await browserRun(browser, `<form><label>Why this company?
+      <textarea name="motivation"></textarea></label><button type="submit">Submit</button></form>`,
+    {}, { async draft() { throw new Error("should not be called"); } },
+    { listing: "Build software", research: [] });
+    assert.equal(result.status, "needs_research");
+    assert.equal(result.questions[0].fieldId, "motivation");
   } finally { await browser.close(); }
 });
 
@@ -163,7 +207,7 @@ test("scoped approved answers apply only to their employer", async () => {
   const question = "Why this company?";
   const answer = { id: "motivation-one", question, value: "I like this company's work.",
     approvedAt: new Date().toISOString(), reviewAfter: new Date(Date.now() + 86_400_000).toISOString(),
-    scope: { employer: "Example" }, evidenceFingerprint: answerEvidenceFingerprint(profile),
+    scope: { employer: "Example", role: "Engineer" }, evidenceFingerprint: answerEvidenceFingerprint(profile),
     ownerActorId: "owner" };
   const approved = { ...profile, approvedAnswers: [{ ...answer,
     contentFingerprint: approvedAnswerFingerprint(answer) }] };
@@ -191,7 +235,8 @@ test("draft provider timeout holds the form and leaves the sequential lane free"
   try {
     const result = await browserRun(browser, `<form><label>Describe a technical project
       <textarea name="project" required></textarea></label><button type="submit">Submit</button></form>`,
-    {}, provider, { applicant: { skills: ["TypeScript"] }, listing: "Build reliable software" });
+    {}, provider, { applicant: { skills: ["TypeScript"] }, listing: "Build reliable software" },
+    profile, supportedReview);
     assert.equal(result.status, "needs_human");
     assert.equal(result.requirements[0].kind, "draft_provider_failed");
     assert.equal(result.metrics.draftCalls, 1);
@@ -205,10 +250,30 @@ test("a prose draft citing unknown evidence is held for correction", async () =>
       <textarea name="project" required></textarea></label><button type="submit">Submit</button></form>`,
     {}, { async draft() { return [{ fieldId: "project", text: "I led an unsupported project.",
       evidenceIds: ["invented-source"] }]; } },
-    { applicant: { skills: ["TypeScript"] }, listing: "Build reliable software" });
+    { applicant: { skills: ["TypeScript"] }, listing: "Build reliable software" },
+    profile, supportedReview);
     assert.equal(result.status, "needs_input");
     assert.equal(result.requirements[0].kind, "missing_answer");
     assert.equal(result.preparedAnswers.project, undefined);
+  } finally { await browser.close(); }
+});
+
+test("new prose cannot proceed without an independent supported-claim review", async () => {
+  const browser = await chromium.launch();
+  const html = `<form><label>Describe a technical project
+    <textarea name="project" required></textarea></label><button type="submit">Submit</button></form>`;
+  const provider = { async draft() { return [{ fieldId: "project", text: "I built a platform.",
+    evidenceIds: ["applicant:skills"] }]; } };
+  const packet = { applicant: { skills: ["TypeScript"] }, listing: "Build reliable software" };
+  try {
+    const missing = await browserRun(browser, html, {}, provider, packet);
+    assert.equal(missing.status, "needs_human");
+    assert.equal(missing.requirements[0].kind, "prose_claim_review");
+    const rejected = await browserRun(browser, html, {}, provider, packet, profile,
+      { async review() { return { supported: false, responsive: true, claims: [{
+        text: "I built a platform", supported: false, evidenceIds: ["applicant:skills"] }] }; } });
+    assert.equal(rejected.status, "needs_input");
+    assert.equal(rejected.preparedAnswers.project, undefined);
   } finally { await browser.close(); }
 });
 

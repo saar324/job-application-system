@@ -13,13 +13,15 @@ test("a busy page's short network-idle timeout still allows DOM extraction", asy
   assert.ok(budget.remainingMs() > 0);
 });
 
-test("a real expired source wall deadline still stops settling", async () => {
+test("a source-budget-limited network-idle wait stops before scrolling", async () => {
   let scrolled = 0;
   const page = { waitForLoadState: () => new Promise(() => {}),
     evaluate: async () => { scrolled += 1; } };
-  const budget = new SourceBudget(50);
+  // Keep the budget clock fixed to exercise the boundary where a timer fired
+  // but rounded remainingMs still appears positive under CI scheduling.
+  const budget = new SourceBudget(5, () => 0);
   await assert.rejects(settleSourcePage(page, budget, { idleTimeoutMs: 100,
     postScrollWaitMs: 1 }), SourceTimeoutError);
   assert.equal(scrolled, 0);
-  assert.equal(budget.remainingMs(), 0);
+  assert.equal(budget.remainingMs(), 5);
 });

@@ -3,13 +3,17 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { chromium } from "playwright";
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { extractSourcePage, isBlockingStatus, isChallengePage,
   sourceAutomationPolicy } from "../src/discovery/browser-source.js";
 import { parsePublicFeed, publicFeedUrl } from "../src/discovery/public-feeds.js";
 import { SourceProgress } from "../src/discovery/source-progress.js";
+import { SourceJournal } from "../src/discovery/source-journal.js";
 import { SourceBudget, SourceTimeoutError } from "../src/discovery/source-budget.js";
 import { settleSourcePage } from "../src/discovery/browser-settle.js";
+import { nextQueryPage } from "../src/discovery/query-pagination.js";
+import { searchTitleQueryPlan } from "../src/discovery/search-title-queries.js";
+import { browserListingPlan } from "../src/discovery/browser-listing-plan.js";
 
 const options = argumentsOf(process.argv.slice(2));
 if (!options.campaign || !options.catalog) {
@@ -17,6 +21,8 @@ if (!options.campaign || !options.catalog) {
   process.exit(2);
 }
 const catalog = JSON.parse(await readFile(path.resolve(options.catalog), "utf8"));
+const querySeed = options.queryPlanFile
+  ? JSON.parse(await readFile(path.resolve(options.queryPlanFile), "utf8")) : null;
 const sourceContext = { residenceCountry: catalog.searchPolicy?.residenceCountry };
 const priority = catalog.autonomousDiscovery?.priorityOrder ?? [];
 const sources = [...(catalog.autonomousDiscovery?.visibleBrowserSources ?? [])]
@@ -48,42 +54,66 @@ async function ensureContext() {
 
 try {
   for (const source of sources) {
+    const sourceStarted = performance.now();
     const policy = sourceAutomationPolicy(source, options);
+    const journal = new SourceJournal({ campaignId: options.campaign,
+      sourceId: source.id, directory: options.progressDirectory });
     const totalBudget = new SourceBudget(policy.sourceTimeoutMs);
     const current = await api("GET", `/v1/campaigns/${options.campaign}`,
       undefined, undefined, totalBudget.timeoutMs(5_000));
-    if (!current.sourceCoverage?.fallbackRemaining?.includes(source.id)) continue;
+    if (!current.sourceCoverage?.fallbackRemaining?.includes(source.id)) {
+      await journal.clear();
+      continue;
+    }
     const cooldown = current.sourceCoverage.cooldowns?.[source.id];
     if (cooldown) {
+      const discarded = (await journal.load()).length;
       const recorded = await report(source.id, [], { completed: true, cooldownSkipped: true,
-        pagesVisited: 0, requestsMade: 0, exhausted: false }, totalBudget.timeoutMs(7_000));
+        pagesVisited: 0, requestsMade: 0, exhausted: false,
+        elapsedMs: Math.round(performance.now() - sourceStarted),
+        discardedObservedCandidates: discarded,
+        ...(discarded ? { discardReason: "source_cooldown" } : {}) }, totalBudget.timeoutMs(7_000));
+      await journal.clear();
       progress(source.id, 0, accepted(recorded, source.id), "cooldown", {
         reason: cooldown.reason, until: cooldown.until });
       continue;
     }
     if (policy.manual) {
-      const recorded = await report(source.id, [], { completed: true, exhausted: true, manual: true,
+      const discarded = (await journal.load()).length;
+      const recorded = await report(source.id, [], { completed: true, exhausted: false, manual: true,
+        elapsedMs: Math.round(performance.now() - sourceStarted),
+        discardedObservedCandidates: discarded,
+        ...(discarded ? { discardReason: "manual_source_policy" } : {}),
         errors: [{ error: "source policy requires manual browser search" }] },
       totalBudget.timeoutMs(7_000));
+      await journal.clear();
       progress(source.id, 0, accepted(recorded, source.id), "manual-policy");
       continue;
     }
     await ensureContext();
     const budget = new SourceBudget(Math.max(1_000, totalBudget.remainingMs() - 7_000));
+    const pending = await journal.load();
     const progressState = new SourceProgress({ sourceId: source.id,
       maxAcceptedResults: policy.maxAcceptedResults, maxBatch: Math.min(10, policy.maxCandidates),
+      journal, pending,
       report: (sourceId, items, metadata) => report(sourceId, items, metadata,
         metadata.completed ? totalBudget.timeoutMs(7_000) : budget.timeoutMs(120_000)) });
-    const result = await searchSource(source, policy, progressState, budget);
+    if (pending.length) await progressState.flush();
+    const result = await searchSource(source, policy, progressState, budget,
+      current.sourceCycles?.[source.id] ?? 0);
     if (!result.timedOut && progressState.pending.length && budget.remainingMs() < 2_000) {
       result.timedOut = true;
       result.exhausted = false;
       result.errors.push({ error: "source wall-clock budget exceeded before final batch" });
     }
     const recorded = await progressState.finish({ exhausted: result.exhausted,
+      elapsedMs: Math.round(performance.now() - sourceStarted),
       pagesVisited: result.pagesVisited, requestsMade: result.requestsMade,
       rateLimited: result.rateLimited, challenge: result.challenge, timedOut: result.timedOut,
-      parseDrift: result.parseDrift, errors: result.errors });
+      parseDrift: result.parseDrift, sourceFailure: result.errors.length > 0,
+      stopReason: result.stopReason, partialReasons: result.partialReasons,
+      queryStats: result.queryStats,
+      errors: result.errors });
     progress(source.id, progressState.found, accepted(recorded, source.id),
       result.rateLimited ? "rate-limited" : result.challenge ? "challenge"
         : result.timedOut ? "timed-out" : "complete");
@@ -95,21 +125,42 @@ try {
   }
 }
 
-async function searchSource(source, policy, progressState, budget) {
+async function searchSource(source, policy, progressState, budget, sourceCycle = 0) {
   let page;
   const visitedListings = new Set(); const visitedDetails = new Set(); const errors = [];
-  let nextUrl = source.url; let pagesVisited = 0; let requestsMade = 0;
+  let observedNextPage = false;
+  const listingPlan = browserListingPlan(source, sourceCycle, sourceContext);
+  let nextUrl = listingPlan.url; let pagesVisited = 0; let requestsMade = 0;
   let rateLimited = false; let challenge = false; let parseDrift = false; let timedOut = false;
+  let stopReason = null; let queryStats = [];
   try {
     page = await budget.run(() => context.newPage());
-    const feedQueries = source.id === "jobgether" ? jobgetherQueries(options.query) : [options.query ?? "engineer"];
+    const queryPlan = source.id === "jobgether"
+      ? jobgetherQueryPlan(options.query, policy, sourceCycle) : null;
+    const feedQueries = queryPlan ? queryPlan.queries.map((item) => item.term)
+      : [options.query ?? "engineer"];
+    if (queryPlan) {
+      progress(source.id, 0, 0, "query-plan", { cycle: queryPlan.cycle,
+        queries: queryPlan.queries.map(({ term, origin }) => ({ term, origin })),
+        skippedTerms: queryPlan.skippedTerms,
+        coverageBlocked: queryPlan.coverageBlocked });
+    }
+    if (listingPlan.origin !== "catalog") {
+      progress(source.id, 0, 0, "listing-plan", { cycle: listingPlan.cycle,
+        origin: listingPlan.origin, roleFamily: listingPlan.roleFamily,
+        url: listingPlan.url });
+    }
+    if (!feedQueries.length) {
+      errors.push({ error: "no verified or configured browser search titles" });
+      nextUrl = null;
+      return result(false);
+    }
     const feedUrl = publicFeedUrl(source.id, { query: feedQueries[0], ...sourceContext,
-      limit: source.id === "remotive" || source.id === "weworkremotely" ? 100 : 10 });
+      limit: source.id === "jobgether" ? 25
+        : source.id === "remotive" || source.id === "weworkremotely" ? 100 : 10 });
     if (feedUrl) {
       requestsMade += 1;
-      const response = await budget.run(() => fetch(feedUrl, {
-        headers: { "user-agent": "job-application-system/1.0" },
-        signal: AbortSignal.timeout(budget.timeoutMs(policy.navigationTimeoutMs)) }));
+      const response = await politeFeedFetch(feedUrl, policy, budget);
       pagesVisited += 1;
       if (isBlockingStatus(response.status)) { rateLimited = true; return result(); }
       else if (!response.ok) {
@@ -126,20 +177,37 @@ async function searchSource(source, policy, progressState, budget) {
           return result(!feed.hasMore);
         }
         nextUrl = null;
-        const seeds = new Map(feed.items.map((item) => [item.listingUrl, item]));
-        let hasMore = feedQueries.length === 1 && feed.hasMore;
+        const seeds = new Map();
+        const linksByQuery = feedQueries.map(() => []);
+        queryStats = feedQueries.map((term) => ({ term, pages: 0, rawRows: 0,
+          uniqueRows: 0, detailAttempts: 0, extractedJobs: 0 }));
+        const firstQueryForLink = new Map();
+        const addSeeds = (items, queryIndex) => {
+          queryStats[queryIndex].pages += 1;
+          queryStats[queryIndex].rawRows += items.length;
+          for (const item of items) {
+            if (!seeds.has(item.listingUrl)) {
+              linksByQuery[queryIndex].push(item.listingUrl);
+              firstQueryForLink.set(item.listingUrl, queryIndex);
+              queryStats[queryIndex].uniqueRows += 1;
+            }
+            seeds.set(item.listingUrl, item);
+          }
+        };
+        addSeeds(feed.items, 0);
+        const cursors = feedQueries.map((query, index) => ({ query,
+          page: index === 0 ? 2 : 1,
+          hasMore: index === 0 ? feed.hasMore : true }));
+        let lastQueryIndex = 0;
         while (pagesVisited < policy.maxListingPages && requestsMade < policy.maxRequests
           && !progressState.done) {
           budget.timeoutMs(1);
-          const query = feedQueries[pagesVisited] ?? feedQueries[0];
-          if (!hasMore && pagesVisited >= feedQueries.length) break;
-          const pageNumber = pagesVisited + 1;
-          const pageUrl = publicFeedUrl(source.id, { query, ...sourceContext,
-            page: feedQueries.length === 1 ? pageNumber : 1, limit: feedQueries.length === 1 ? 25 : 10 });
+          const next = nextQueryPage(cursors, lastQueryIndex);
+          if (!next) break;
+          const pageUrl = publicFeedUrl(source.id, { query: next.query, ...sourceContext,
+            page: next.page, limit: 25 });
           requestsMade += 1;
-          const pageResponse = await budget.run(() => fetch(pageUrl, { headers: {
-            "user-agent": "job-application-system/1.0"
-          }, signal: AbortSignal.timeout(budget.timeoutMs(policy.navigationTimeoutMs)) }));
+          const pageResponse = await politeFeedFetch(pageUrl, policy, budget);
           pagesVisited += 1;
           if (isBlockingStatus(pageResponse.status)) { rateLimited = true; break; }
           if (!pageResponse.ok) {
@@ -149,13 +217,24 @@ async function searchSource(source, policy, progressState, budget) {
           const nextText = await budget.run(() => pageResponse.text());
           if (isChallengePage(nextText)) { challenge = true; break; }
           const nextFeed = parsePublicFeed(source.id, nextText);
-          for (const item of nextFeed.items) seeds.set(item.listingUrl, item);
-          hasMore = feedQueries.length === 1 && nextFeed.hasMore;
+          addSeeds(nextFeed.items, next.index);
+          cursors[next.index].page += 1;
+          cursors[next.index].hasMore = nextFeed.hasMore;
+          lastQueryIndex = next.index;
         }
-        const detailQueue = [...seeds.keys()].slice(0, policy.maxDetailPages);
-        while (detailQueue.length && requestsMade < policy.maxRequests && !progressState.done && !challenge) {
+        const detailLinks = [];
+        while (linksByQuery.some((links) => links.length)) {
+          for (const links of linksByQuery) {
+            if (links.length) detailLinks.push(links.shift());
+          }
+        }
+        const detailQueue = detailLinks.slice(0, policy.maxDetailPages);
+        while (detailQueue.length && requestsMade < policy.maxRequests && !progressState.done
+          && !challenge && !rateLimited) {
           budget.timeoutMs(1);
           const link = detailQueue.shift();
+          const queryIndex = firstQueryForLink.get(link);
+          if (queryIndex !== undefined) queryStats[queryIndex].detailAttempts += 1;
           requestsMade += 1;
           const detail = await navigate(page, link, policy, budget);
           if (isBlockingStatus(detail.status)) { rateLimited = true; break; }
@@ -163,6 +242,7 @@ async function searchSource(source, policy, progressState, budget) {
           if (!detail.ok) continue;
           const extracted = extractSourcePage(await budget.run(() => page.content()),
             page.url(), source.id, sourceContext);
+          if (queryIndex !== undefined) queryStats[queryIndex].extractedJobs += extracted.jobs.length;
           if (extracted.jobs.length) {
             await budget.run(() => progressState.add(extracted.jobs.map((job) => ({ ...seeds.get(link), ...job,
               location: job.location || seeds.get(link)?.location,
@@ -170,7 +250,11 @@ async function searchSource(source, policy, progressState, budget) {
           } else if (seeds.has(link)) await budget.run(() => progressState.add([seeds.get(link)]));
           await budget.run(() => progressState.flush());
         }
-        return result(!hasMore && detailQueue.length === 0);
+        progress(source.id, progressState.found, progressState.accepted, "query-yield",
+          { queries: queryStats });
+        if (detailLinks.length > policy.maxDetailPages) stopReason = "detail_page_cap";
+        return result(!cursors.some((cursor) => cursor.hasMore)
+          && detailLinks.length <= policy.maxDetailPages && detailQueue.length === 0);
       }
     }
     while (nextUrl && pagesVisited < policy.maxListingPages && requestsMade < policy.maxRequests
@@ -184,7 +268,7 @@ async function searchSource(source, policy, progressState, budget) {
       if (listing.challenge) { challenge = true; break; }
       if (!listing.ok) { errors.push({ error: `listing returned HTTP ${listing.status}: ${nextUrl}` }); break; }
       if (pagesVisited === 0) await budget.run(() => applyBroadSearch(page,
-        options.query ?? "engineer", options.location ?? catalog.searchPolicy?.residenceCountry ?? "", budget));
+        options.query ?? "engineer", options.location ?? "", budget));
       pagesVisited += 1;
       const extracted = extractSourcePage(await budget.run(() => page.content()),
         page.url(), source.id, sourceContext);
@@ -216,6 +300,7 @@ async function searchSource(source, policy, progressState, budget) {
         }
       }
       if (rateLimited || challenge) break;
+      if (extracted.nextUrl) observedNextPage = true;
       nextUrl = extracted.nextUrl;
     }
   } catch (error) {
@@ -228,7 +313,9 @@ async function searchSource(source, policy, progressState, budget) {
   if (timedOut) errors.push({ error: "source wall-clock budget exceeded" });
   parseDrift = visitedDetails.size > 0 && progressState.found === 0
     && !rateLimited && !challenge && !timedOut;
-  return result(!nextUrl);
+  // A single static browser page with no visible Next control does not prove
+  // the provider's result set is complete (many sites use infinite scroll).
+  return result(observedNextPage && !nextUrl);
 
   function result(exhausted = false) {
     if (budget.remainingMs() <= 0 && !rateLimited && !challenge) {
@@ -237,8 +324,18 @@ async function searchSource(source, policy, progressState, budget) {
         errors.push({ error: "source wall-clock budget exceeded" });
       }
     }
+    const complete = exhausted && !timedOut && !rateLimited && !challenge;
+    stopReason ??= timedOut ? "timeout" : rateLimited ? "rate_limit"
+      : challenge ? "challenge" : parseDrift ? "parse_drift"
+        : complete ? "provider_exhausted" : progressState.done ? "accepted_target"
+          : requestsMade >= policy.maxRequests ? "request_cap"
+            : pagesVisited >= policy.maxListingPages ? "listing_page_cap"
+              : visitedDetails.size >= policy.maxDetailPages ? "detail_page_cap"
+                : errors.length ? "partial_error" : "unknown_partial";
     return { pagesVisited, requestsMade, rateLimited, challenge, timedOut, parseDrift,
-      exhausted: exhausted && !timedOut && !rateLimited && !challenge, errors };
+      exhausted: complete, stopReason,
+      partialReasons: stopReason.endsWith("_cap") ? [stopReason] : [],
+      queryStats, errors };
   }
 }
 
@@ -255,6 +352,18 @@ async function navigate(page, url, policy, budget) {
   const challenge = status >= 200 && status < 400
     && isChallengePage(await budget.run(() => page.content()));
   return { status, challenge, ok: status >= 200 && status < 400 && !challenge };
+}
+
+async function politeFeedFetch(url, policy, budget) {
+  const host = new URL(url).hostname;
+  const elapsed = Date.now() - (hostLastRequest.get(host) ?? 0);
+  const wait = policy.minDelayMs + Math.floor(Math.random() * 500) - elapsed;
+  if (wait > 0) await budget.sleep(wait);
+  const response = await budget.run(() => fetch(url, { headers: {
+    "user-agent": "job-application-system/1.0"
+  }, signal: AbortSignal.timeout(budget.timeoutMs(policy.navigationTimeoutMs)) }));
+  hostLastRequest.set(host, Date.now());
+  return response;
 }
 
 async function applyBroadSearch(page, query, location, budget) {
@@ -297,15 +406,35 @@ async function applyBroadSearch(page, query, location, budget) {
 
 function escapePattern(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
-function jobgetherQueries(query) {
-  if (query && String(query).trim().toLowerCase() !== "engineer") return [String(query).trim()];
-  return ["engineer", "developer", "programmer", "software"];
+function jobgetherQueryPlan(query, policy, sourceCycle = 0) {
+  if (query && String(query).trim().toLowerCase() !== "engineer") {
+    return { queries: [{ term: String(query).trim(), origin: "explicit" }],
+      skippedTerms: [], coverageBlocked: false, cycle: null };
+  }
+  if (querySeed) {
+    const titles = querySeed.verifiedSubmittedTitles ?? [];
+    if (!querySeed.profile || !Array.isArray(titles)
+      || Object.keys(querySeed.profile).some((key) => key !== "preferences")
+      || titles.some((title) => typeof title !== "string")) {
+      throw new Error("query plan file requires preference-only profile and verifiedSubmittedTitles");
+    }
+    const cycle = Number(options.searchCycle ?? querySeed.cycle ?? sourceCycle);
+    if (!Number.isInteger(cycle) || cycle < 0) throw new Error("search-cycle must be nonnegative");
+    return searchTitleQueryPlan(querySeed.profile, titles,
+      { maximum: Math.min(16, policy.maxListingPages), cycle });
+  }
+  return { queries: ["engineer", "developer", "programmer", "software"]
+    .slice(0, policy.maxListingPages).map((term) => ({ term, origin: "default" })),
+  skippedTerms: [], coverageBlocked: false, cycle: null };
 }
 
 async function report(sourceId, items, metadata, timeoutMs = 120_000) {
-  return api("POST", `/v1/campaigns/${options.campaign}/source-results`, {
+  const body = {
     sourceId, items: items.map(compactJob), ...metadata
-  }, `source-${options.campaign}-${sourceId}-${randomUUID()}`, timeoutMs);
+  };
+  const digest = createHash("sha256").update(JSON.stringify(body)).digest("hex");
+  return api("POST", `/v1/campaigns/${options.campaign}/source-results`, body,
+    `source-${options.campaign}-${sourceId}-${digest}`, timeoutMs);
 }
 
 async function api(method, pathname, body, idempotencyKey, timeoutMs = 120_000) {

@@ -83,6 +83,11 @@ test("an explicit unavailable posting is skipped without approval or submission"
   assert.equal(application.receipt, undefined);
   assert.deepEqual(service.list("confirmations", identity.profileId), []);
   assert.equal(service.store.snapshot().attempts[0].workerMetrics.activeMs, 250);
+  const stored = service.list("opportunities", identity.profileId)[0];
+  assert.equal(stored.discoveryState, "closed");
+  assert.equal(stored.closedOrigin, "posting_unavailable");
+  assert.equal(stored.closedRetryCount, 1);
+  assert.ok(Date.parse(stored.closedRetryAfter) > Date.now());
 });
 
 test("full-time is the default and a high-score routine application submits", async () => {

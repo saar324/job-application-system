@@ -1,5 +1,5 @@
 import { plainText } from "../text.js";
-import { preferredTitleGroups } from "../title-preferences.js";
+import { searchTitleQueryPlan } from "../search-title-queries.js";
 import { needsEmployerApplyUrl } from "../application-destination.js";
 
 function candidateCountry(profile) {
@@ -21,32 +21,32 @@ function postedAt(value) {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
 }
 
-function searchQueries(profile) {
-  const groups = preferredTitleGroups(profile);
-  const preferred = groups.primary.length
-    ? groups.primary
-    : profile?.preferences?.jobTitles ?? [];
-  const primaryValues = [...preferred]
-    .filter((value) => typeof value === "string" && value.trim())
-    .map((value) => value.trim());
-  const primary = [...new Map(primaryValues.map((value) => [value.toLowerCase(), value])).values()].slice(0, 8);
-  const secondary = groups.secondary
-    .filter((value) => typeof value === "string" && value.trim())
-    .map((value) => value.trim()).slice(0, 4);
-  return [...new Map([...primary, ...secondary].map((value) => [value.toLowerCase(), value])).values()];
-}
-
 export const himalayas = {
   id: "himalayas",
-  async search({ limit = 50, fetchImpl = fetch, profile, query = {} }) {
+  async search({ limit = 50, fetchImpl = fetch, profile, searchTitles = [],
+    isHandled = () => false, query = {}, onError = () => {}, onStats = () => {}, searchCycle = 0 }) {
     const country = query.country ?? candidateCountry(profile);
-    const queries = query.q ? [query.q] : searchQueries(profile);
+    const plan = query.q ? { queries: [{ term: query.q, origin: "explicit" }],
+      skippedTerms: [], coverageBlocked: false }
+      : searchTitleQueryPlan(profile, searchTitles, { maximum: 16, cycle: searchCycle });
+    const queries = plan.queries.map((item) => item.term);
     if (!queries.length) return [];
-    const perQuery = Math.max(1, Math.ceil(Math.min(limit, 200) / queries.length));
-    const jobs = [];
-    for (const term of queries) {
-      const pages = Math.ceil(perQuery / 20);
-      for (let page = 1; page <= pages; page += 1) {
+    const unique = new Map();
+    const exhausted = new Set();
+    const queryStats = new Map(queries.map((term) => [term,
+      { term, pages: 0, rawRows: 0, uniqueRows: 0 }]));
+    let rawRows = 0; let adapterPrescreenRejected = 0;
+    const maxPagesPerQuery = 10;
+    const maxRequests = Math.min(40, Math.max(2 * queries.length, Math.ceil(limit / 10)));
+    let requests = 0;
+    let fetchFailed = false;
+    let rawPoolCapped = false;
+    // Round-robin prevents the first title variant from consuming the page
+    // budget before other configured variants receive a first page.
+    outer: for (let page = 1; page <= maxPagesPerQuery; page += 1) {
+      for (const term of queries) {
+        if (exhausted.has(term)) continue;
+        if (requests >= maxRequests) break outer;
         const url = new URL("https://himalayas.app/jobs/api/search");
         if (country) url.searchParams.set("country", country.toLowerCase());
         url.searchParams.set("q", term);
@@ -56,20 +56,54 @@ export const himalayas = {
         }
         if (!query.sort) url.searchParams.set("sort", "recent");
         url.searchParams.set("page", String(page));
-        const response = await fetchImpl(url, {
-          headers: { "user-agent": "job-application-server/0.2 (+private personal use)" },
-          signal: AbortSignal.timeout(20_000)
-        });
-        if (!response.ok) throw new Error(`Himalayas returned HTTP ${response.status}`);
-        const body = await response.json();
-        jobs.push(...(body.jobs ?? []));
-        if (!(body.jobs ?? []).length || page * 20 >= perQuery) break;
+        let body;
+        try {
+          requests += 1;
+          const response = await fetchImpl(url, {
+            headers: { "user-agent": "job-application-server/0.2 (+private personal use)" },
+            signal: AbortSignal.timeout(20_000)
+          });
+          if (!response.ok) throw new Error(`Himalayas returned HTTP ${response.status}`);
+          body = await response.json();
+        } catch (error) {
+          if (!unique.size) throw error;
+          onError({ stage: "pagination", term, page,
+            reason: "partial_fetch_failure", error: error.message });
+          fetchFailed = true;
+          break outer;
+        }
+        const batch = body.jobs ?? [];
+        const stats = queryStats.get(term);
+        stats.pages += 1;
+        stats.rawRows += batch.length;
+        rawRows += batch.length;
+        for (const row of batch) {
+          if (!row?.title || !row?.applicationLink) {
+            adapterPrescreenRejected += 1;
+            continue;
+          }
+          const id = String(row.guid ?? row.applicationLink);
+          if (unique.has(id) || isHandled({ source: "himalayas", externalId: id,
+            applyUrl: row.applicationLink, listingUrl: row.applicationLink })) continue;
+          unique.set(id, row);
+          stats.uniqueRows += 1;
+        }
+        if (body.pagination?.hasMore === false || batch.length < 20) exhausted.add(term);
       }
+      if (page >= 2 && unique.size >= limit) { rawPoolCapped = true; break; }
     }
-    const unique = [...new Map(jobs
-      .filter((row) => row?.title && row?.applicationLink)
-      .map((row) => [String(row.guid ?? row.applicationLink), row])).values()];
-    return unique.slice(0, limit).map((row) => ({
+    if (rawPoolCapped && exhausted.size < queries.length) {
+      onError({ stage: "selection", reason: "partial_raw_pool_cap",
+        rawRows: unique.size, requestsMade: requests });
+    } else if (!fetchFailed && requests >= maxRequests && exhausted.size < queries.length) {
+      onError({ stage: "pagination", reason: "partial_request_cap", requestsMade: requests });
+    } else if (!fetchFailed && exhausted.size < queries.length && unique.size < limit) {
+      onError({ stage: "pagination", reason: "partial_page_cap", pagesPerQuery: maxPagesPerQuery });
+    }
+    onStats({ rawRows, adapterPrescreenRejected, pagesVisited: requests,
+      queryStats: [...queryStats.values()], skippedTerms: plan.skippedTerms,
+      coverageBlocked: plan.coverageBlocked });
+    return [...unique.values()].slice(0, limit).map((row) => ({
       source: "himalayas",
       externalId: String(row.guid ?? row.applicationLink),
       title: row.title,

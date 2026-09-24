@@ -80,6 +80,32 @@ test("owner policy covers intake and final permit; revocation before commit bloc
     permit: preparedDecision.permit }), /revoked/);
 });
 
+test("ambiguous same-title opening stays reviewable and cannot receive an automatic final permit", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", { ...policy, dailyCap: 2, campaignCap: 2 }, owner);
+  const first = await service.addOpportunity({ title: "Engineer", company: "Example",
+    applyUrl: "https://example.test/jobs/one", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  await service.requestApplication(first.id, {}, agent);
+  const second = await service.addOpportunity({ title: "Engineer", company: "Example",
+    applyUrl: "https://example.test/jobs/two", score: 100,
+    applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
+  const application = await service.requestApplication(second.id, {}, agent);
+  assert.equal(application.status, "waiting_confirmation");
+  assert.equal(application.finalApprovalRequired, true);
+  assert.ok(application.decision.confirmations.some((item) => item.kind === "possible_duplicate"));
+  await service.store.mutate((state) => {
+    const current = state.applications.find((item) => item.id === application.id);
+    current.status = "submitting";
+    current.claim = { attemptId: "attempt-one" };
+  });
+  const result = await service.prepareFinalSubmission(decisionInput(application, {
+    preview: { ...decisionInput(application).preview, destination: "https://example.test/jobs/two" }
+  }));
+  assert.equal(result.decision, "hold");
+  assert.ok(result.reasonCodes.includes("possible_duplicate_identity_unresolved"));
+});
+
 test("changed form and legal declarations hold independently of mode confirmation filters", async () => {
   const { profiles, service } = await fixture();
   await profiles.setStandingSubmissionPolicy("person", policy, owner);

@@ -87,6 +87,20 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         const body = await jsonBody(request);
         return send(response, 200, await profiles.setApprovedAnswers(identity.profileId, body.answers, identity));
       }
+      if (url.pathname === "/v1/profile/verified-examples") {
+        if (!identity.roles?.includes("owner")) return send(response, 403, { error: "owner authority required" });
+        if (request.method === "GET") {
+          return send(response, 200, { examples: (await profiles.get(identity.profileId))?.verifiedExamples ?? [] });
+        }
+        if (request.method === "PUT") {
+          const body = await jsonBody(request);
+          if (Object.keys(body).some((key) => key !== "examples")) {
+            return send(response, 400, { error: "only examples can be supplied" });
+          }
+          return send(response, 200, await profiles.setVerifiedExamples(identity.profileId, body.examples, identity));
+        }
+        return send(response, 405, { error: "method not allowed" });
+      }
       if (url.pathname === "/v1/standing-submission-policy") {
         if (request.method === "GET") {
           return send(response, 200, { policy: (await profiles.get(identity.profileId))?.standingSubmissionPolicy ?? null });

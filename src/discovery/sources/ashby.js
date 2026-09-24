@@ -1,4 +1,3 @@
-import { discoveryTitleRelevant } from "../title-preferences.js";
 import { normalizeApplicationQuestions } from "../normalization.js";
 
 function configuredBoards(sourceConfig) {
@@ -16,7 +15,7 @@ function locationOf(job) {
 export const ashby = {
   id: "ashby",
   async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, query = {},
-    isHandled = () => false, onError = () => {} }) {
+    isHandled = () => false, onError = () => {}, onStats = () => {} }) {
     const boards = configuredBoards(sourceConfig).filter((board) => !query.board || board.slug === query.board);
     const settled = await Promise.allSettled(boards.map(async (board) => {
       const response = await fetchImpl(`https://api.ashbyhq.com/posting-api/job-board/${board.slug}`, {
@@ -30,17 +29,21 @@ export const ashby = {
     settled.forEach((result, index) => {
       if (result.status === "rejected") onError({ board: boards[index]?.slug, error: result.reason.message });
     });
-    return settled
-      .flatMap((result) => result.status === "fulfilled" ? result.value : [])
+    const rows = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+    const prescreened = rows
       .filter(({ board, job }) => job?.id && job?.title && job?.applyUrl && job.isRemote
-        && job.isListed !== false && discoveryTitleRelevant(job.title, profile)
+        && job.isListed !== false
         && (!query.title || job.title.toLowerCase().includes(query.title.toLowerCase()))
-        && (!query.location || locationOf(job).toLowerCase().includes(query.location.toLowerCase()))
-        && !isHandled({ source: "ashby", externalId: `${board.slug}:${job.id}`,
+        && (!query.location || locationOf(job).toLowerCase().includes(query.location.toLowerCase())));
+    const selected = prescreened.filter(({ board, job }) =>
+      !isHandled({ source: "ashby", externalId: `${board.slug}:${job.id}`,
           applyUrl: job.applyUrl, listingUrl: job.jobUrl }))
-      .sort((left, right) => Date.parse(right.job.publishedAt ?? "") - Date.parse(left.job.publishedAt ?? ""))
-      .slice(0, limit)
-      .map(({ board, job }) => ({
+      .sort((left, right) => Date.parse(right.job.publishedAt ?? "") - Date.parse(left.job.publishedAt ?? ""));
+    onStats({ rawRows: rows.length, adapterPrescreenRejected: rows.length - prescreened.length,
+      pagesVisited: settled.filter((result) => result.status === "fulfilled").length });
+    if (selected.length > limit) onError({ stage: "selection", reason: "partial_response_cap",
+      rawRows: selected.length });
+    return selected.slice(0, limit).map(({ board, job }) => ({
         source: "ashby",
         externalId: `${board.slug}:${job.id}`,
         title: job.title,

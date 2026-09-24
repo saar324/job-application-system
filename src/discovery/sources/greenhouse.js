@@ -1,5 +1,4 @@
 import { plainText } from "../text.js";
-import { discoveryTitleRelevant } from "../title-preferences.js";
 import { normalizeApplicationQuestions } from "../normalization.js";
 import { greenhouseRemoteRole } from "../greenhouse-remote.js";
 
@@ -19,7 +18,7 @@ function descriptionOf(job) {
 export const greenhouse = {
   id: "greenhouse",
   async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, query = {},
-    isHandled = () => false, onError = () => {} }) {
+    isHandled = () => false, onError = () => {}, onStats = () => {} }) {
     const boards = configuredBoards(sourceConfig).filter((board) => !query.board || board.token === query.board);
     const settled = await Promise.allSettled(boards.map(async (board) => {
       const url = new URL(`https://boards-api.greenhouse.io/v1/boards/${board.token}/jobs`);
@@ -36,19 +35,23 @@ export const greenhouse = {
       if (result.status === "rejected") onError({ board: boards[index]?.token, error: result.reason.message });
     });
     const rows = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
-    const selected = rows
+    const prescreened = rows
       .filter(({ board, job }) => job?.id && job?.title && greenhouseRemoteRole(job)
-        && discoveryTitleRelevant(job.title, profile)
         && (!query.title || job.title.toLowerCase().includes(query.title.toLowerCase()))
-        && (!query.location || String(job.location?.name ?? "").toLowerCase().includes(query.location.toLowerCase()))
-        && !isHandled({ source: "greenhouse", externalId: `${board.token}:${job.id}`,
+        && (!query.location || String(job.location?.name ?? "").toLowerCase().includes(query.location.toLowerCase())));
+    const selected = prescreened.filter(({ board, job }) =>
+      !isHandled({ source: "greenhouse", externalId: `${board.token}:${job.id}`,
           applyUrl: `https://job-boards.greenhouse.io/${board.token}/jobs/${job.id}` }))
-      .sort((left, right) => Date.parse(right.job.updated_at ?? "") - Date.parse(left.job.updated_at ?? ""))
-      .slice(0, limit);
+      .sort((left, right) => Date.parse(right.job.updated_at ?? "") - Date.parse(left.job.updated_at ?? ""));
+    onStats({ rawRows: rows.length, adapterPrescreenRejected: rows.length - prescreened.length,
+      pagesVisited: settled.filter((result) => result.status === "fulfilled").length });
+    if (selected.length > limit) onError({ stage: "selection", reason: "partial_response_cap",
+      rawRows: selected.length });
+    const bounded = selected.slice(0, limit);
     // The live form remains authoritative. Detail requests are opt-in so a
     // discovery scan does not fan out one request per candidate by default.
     if (sourceConfig?.fetchQuestions === true) {
-      await Promise.all(selected.map(async ({ board, job }) => {
+      await Promise.all(bounded.map(async ({ board, job }) => {
         try {
           const detailUrl = new URL(`https://boards-api.greenhouse.io/v1/boards/${board.token}/jobs/${job.id}`);
           detailUrl.searchParams.set("questions", "true");
@@ -63,7 +66,7 @@ export const greenhouse = {
         }
       }));
     }
-    return selected
+    return bounded
       .map(({ board, job }) => ({
         source: "greenhouse",
         externalId: `${board.token}:${job.id}`,

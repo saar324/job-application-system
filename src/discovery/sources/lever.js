@@ -1,4 +1,3 @@
-import { discoveryTitleRelevant } from "../title-preferences.js";
 import { normalizeApplicationQuestions } from "../normalization.js";
 
 function configuredSites(sourceConfig) {
@@ -16,7 +15,7 @@ function descriptionOf(job) {
 export const lever = {
   id: "lever",
   async search({ limit = 50, fetchImpl = fetch, profile, sourceConfig, query = {},
-    isHandled = () => false, onError = () => {} }) {
+    isHandled = () => false, onError = () => {}, onStats = () => {} }) {
     const sites = configuredSites(sourceConfig).filter((site) => !query.board || site.slug === query.board);
     const settled = await Promise.allSettled(sites.map(async (site) => {
       const url = new URL(`https://api.lever.co/v0/postings/${site.slug}`);
@@ -37,21 +36,25 @@ export const lever = {
     settled.forEach((result, index) => {
       if (result.status === "rejected") onError({ board: sites[index]?.slug, error: result.reason.message });
     });
-    return settled
-      .flatMap((result) => result.status === "fulfilled" ? result.value : [])
+    const rows = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+    const prescreened = rows
       .filter(({ site, job }) => job?.id && job?.text && job?.applyUrl && job.workplaceType === "remote"
-        && discoveryTitleRelevant(job.text, profile)
         && ["location", "team", "department", "commitment", "level"].every((key) => {
           if (!query[key]) return true;
           const allowed = Array.isArray(query[key]) ? query[key] : [query[key]];
           const actual = key === "location" ? (job.categories?.allLocations ?? [job.categories?.location])
             : [job.categories?.[key]];
           return actual.some((value) => allowed.includes(value));
-        }) && !isHandled({ source: "lever", externalId: `${site.slug}:${job.id}`,
+        }));
+    const selected = prescreened.filter(({ site, job }) =>
+      !isHandled({ source: "lever", externalId: `${site.slug}:${job.id}`,
           applyUrl: job.applyUrl, listingUrl: job.hostedUrl }))
-      .sort((left, right) => Date.parse(right.job.createdAt ?? "") - Date.parse(left.job.createdAt ?? ""))
-      .slice(0, limit)
-      .map(({ site, job }) => ({
+      .sort((left, right) => Date.parse(right.job.createdAt ?? "") - Date.parse(left.job.createdAt ?? ""));
+    onStats({ rawRows: rows.length, adapterPrescreenRejected: rows.length - prescreened.length,
+      pagesVisited: settled.filter((result) => result.status === "fulfilled").length });
+    if (selected.length > limit) onError({ stage: "selection", reason: "partial_response_cap",
+      rawRows: selected.length });
+    return selected.slice(0, limit).map(({ site, job }) => ({
         source: "lever",
         externalId: `${site.slug}:${job.id}`,
         title: job.text,

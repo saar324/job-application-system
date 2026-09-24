@@ -779,7 +779,7 @@ test("worker waits for delayed client-side submission confirmation", async () =>
 
 test("custom validation after Next requests the field even without native required", async () => {
   const result = await run(`<form><div>
-    <label for="motivation">Why this company?</label><textarea id="motivation" name="motivation"></textarea>
+    <label for="motivation">Additional details</label><textarea id="motivation" name="motivation"></textarea>
     <button type="button" onclick="if (!document.querySelector('textarea').value.trim()) {
       if (!document.querySelector('.text-red-500')) this.insertAdjacentHTML('beforebegin',
         '<p class=text-red-500>Please write at least 50 words</p>');

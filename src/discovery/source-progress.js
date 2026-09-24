@@ -1,14 +1,16 @@
 // Browser discovery reports small, distinct batches so server-side screening,
 // handled-role filtering, and the accepted limit decide when a source is done.
 export class SourceProgress {
-  constructor({ sourceId, maxAcceptedResults = 10, maxBatch = 10, report }) {
+  constructor({ sourceId, maxAcceptedResults = 10, maxBatch = 10, report,
+    journal = null, pending = [] }) {
     this.sourceId = sourceId;
     this.maxAcceptedResults = maxAcceptedResults;
     this.maxBatch = maxBatch;
     this.report = report;
-    this.seen = new Set();
-    this.pending = [];
-    this.found = 0;
+    this.seen = new Set(pending.map((job) => String(job.externalId ?? job.listingUrl ?? job.applyUrl)));
+    this.pending = [...pending];
+    this.journal = journal;
+    this.found = pending.length;
     this.accepted = 0;
   }
 
@@ -23,22 +25,29 @@ export class SourceProgress {
       this.seen.add(key);
       this.pending.push(job);
       this.found += 1;
+      // Save each observed candidate before it can be lost to a browser crash.
+      await this.journal?.save(this.pending);
       if (this.pending.length >= this.maxBatch) await this.flush();
     }
   }
 
   async flush() {
     if (!this.pending.length || this.done) { this.pending = []; return; }
-    const items = this.pending.splice(0);
+    const items = [...this.pending];
     const campaign = await this.report(this.sourceId, items, { completed: false });
+    this.pending.splice(0, items.length);
+    await this.journal?.save(this.pending);
     this.accepted = campaign.sourceCoverage?.scans?.filter((scan) => scan.sourceId === this.sourceId)
       .reduce((sum, scan) => sum + Number(scan.selected ?? 0), 0) ?? 0;
   }
 
   async finish(metadata) {
-    if (metadata.timedOut) this.pending = [];
-    else await this.flush();
-    const campaign = await this.report(this.sourceId, [], { ...metadata, completed: true });
+    // The terminal report has its own small timeout reserve. Include the
+    // observed batch even when page navigation consumed the source budget.
+    const items = this.done ? [] : [...this.pending];
+    const campaign = await this.report(this.sourceId, items, { ...metadata, completed: true });
+    this.pending.splice(0, items.length);
+    await this.journal?.save(this.pending);
     this.accepted = campaign.sourceCoverage?.scans?.filter((scan) => scan.sourceId === this.sourceId)
       .reduce((sum, scan) => sum + Number(scan.selected ?? 0), 0) ?? 0;
     return campaign;

@@ -1,4 +1,5 @@
-import { configuredTitlePriority, preferredTitleGroups } from "./title-preferences.js";
+import { configuredTitlePriority, preferredTitleGroups,
+  unrelatedOccupationTitle } from "./title-preferences.js";
 import { matchSkills } from "./skills.js";
 
 function words(value) {
@@ -96,11 +97,24 @@ function locationExclusion(opportunity, allowedLocations) {
   return `location restriction ${location} does not match allowed locations`;
 }
 
-function excludedLocationReason(opportunity, excludedLocations) {
+function excludedLocationReason(opportunity, excludedLocations, allowedLocations) {
   const location = String(opportunity.location ?? "").toLowerCase();
   if (!location) return null;
   const excluded = excludedLocations.find((value) => includesPhrase(location, value));
-  return excluded ? `location ${opportunity.location} matches excluded location ${excluded}` : null;
+  if (!excluded) return null;
+  // A comma-separated remote location is a set of hiring alternatives. An
+  // excluded country in one alternative must not reject an accepted one.
+  if (opportunity.remote && /[,;/|]|\s+or\s+/i.test(location)) {
+    const alternatives = location.split(/[,;/|]|\s+or\s+/i).map((part) => part.trim());
+    const namedAllowed = (allowedLocations ?? []).map((value) => String(value).toLowerCase())
+      .filter((value) => value && !/^(remote|worldwide|anywhere|global|all countries)$/.test(value));
+    const hasAllowedAlternative = alternatives.some((part) =>
+      !includesPhrase(part, excluded) && namedAllowed.some((value) =>
+        includesPhrase(part, value)
+        || (COUNTRY_CODES.get(value) && part.toUpperCase() === COUNTRY_CODES.get(value))));
+    if (hasAllowedAlternative) return null;
+  }
+  return `location ${opportunity.location} matches excluded location ${excluded}`;
 }
 
 function qualityExclusions(opportunity, profile, acceptedTypes, allowedLocations) {
@@ -239,13 +253,16 @@ export function scoreOpportunity(opportunity, profile, mode, { version = "2" } =
   const excludedTitle = (modePreferences.excludedTitles ?? [])
     .find((title) => includesPhrase(String(opportunity.title ?? "").toLowerCase(), title));
   if (excludedTitle) exclusions.push(`excluded title: ${excludedTitle}`);
+  if (mode === "full_time" && unrelatedOccupationTitle(opportunity.title)) {
+    exclusions.push("title identifies an unrelated occupation");
+  }
   if (modePreferences.remoteOnly === true && opportunity.remote !== true) exclusions.push("profile requires a remote role");
 
   const allowedLocations = modePreferences.allowedLocations
     ?? profile.preferences?.allowedLocations ?? profile.preferences?.locations ?? [];
   const excludedLocations = modePreferences.excludedLocations
     ?? profile.preferences?.excludedLocations ?? [];
-  const excludedLocation = excludedLocationReason(opportunity, excludedLocations);
+  const excludedLocation = excludedLocationReason(opportunity, excludedLocations, allowedLocations);
   if (excludedLocation) exclusions.push(excludedLocation);
   const locationReason = locationExclusion(opportunity, allowedLocations);
   if (locationReason) exclusions.push(locationReason);
