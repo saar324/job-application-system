@@ -23,7 +23,10 @@ const token = process.env.JOB_SERVER_TOKEN
 const routes = {
   health: ["GET", "/health"], me: ["GET", "/v1/me"], opportunities: ["GET", "/v1/opportunities"],
   profile: ["GET", "/v1/profile/status"], "profile-update": ["PATCH", "/v1/profile"],
+  "fit-context": ["GET", `/v1/profile/fit-context${id ? `?mode=${encodeURIComponent(id)}` : ""}`],
   scan: ["POST", "/v1/discovery/scan"],
+  consider: ["POST", "/v1/discovery/consider"],
+  filter: ["POST", "/v1/discovery/filter"],
   sources: ["GET", "/v1/discovery/sources"], query: ["POST", "/v1/discovery/query"],
   "campaign-start": ["POST", "/v1/campaigns"], "campaigns": ["GET", "/v1/campaigns"],
   "campaign-status": ["GET", `/v1/campaigns/${id}`],
@@ -43,7 +46,7 @@ const routes = {
   confirm: ["POST", `/v1/confirmations/${id}`], reject: ["POST", `/v1/confirmations/${id}`]
 };
 if ((!routes[command] && command !== "callback") || (["apply", "campaign-status", "campaign-report", "campaign-approve", "campaign-add-source", "research", "refresh-preview", "record-submission", "record-employer-status", "confirm", "reject", "callback"].includes(command) && !id)) {
-  console.error("usage: jobctl <health|me|profile|profile-update|sources|scan|query|campaign-start|campaigns|campaign-status ID|campaign-report ID|campaign-approve ID|campaign-add-source ID|direct|opportunities|applications|application-log|application-metrics|inbox|approve-batch|research ID|refresh-preview ID|add|apply ID|record-submission ID|record-employer-status ID|confirm ID|reject ID|callback DATA>");
+  console.error("usage: jobctl <health|me|profile|fit-context|profile-update|sources|scan|filter|consider|query|campaign-start|campaigns|campaign-status ID|campaign-report ID|campaign-approve ID|campaign-add-source ID|direct|opportunities|applications|application-log|application-metrics|inbox|approve-batch|research ID|refresh-preview ID|add|apply ID|record-submission ID|record-employer-status ID|confirm ID|reject ID|callback DATA>");
   process.exit(2);
 }
 

@@ -17,7 +17,9 @@ async function fixture() {
     minimumScore: 75, autoApply: true, dailyApplicationCap: 8, requireConfirmationFor: []
   } } };
   const service = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
-  const profiles = { async get(profileId) { return { id: profileId }; },
+  const profiles = { async get(profileId) { return { id: profileId,
+    contact: { email: "private@example.test", country: "Testland" },
+    documents: { resume: "/private/resume.pdf" }, skills: ["TypeScript"] }; },
     async status() { return { readyToApply: true, missingForApplications: [] }; } };
   const campaignId = "11111111-1111-4111-8111-111111111111";
   const discovery = {
@@ -40,8 +42,41 @@ async function fixture() {
     ? { actorId: "agent-one", profileId: "profile-one" } : null;
   const server = createHttpServer({ service, discovery, profiles, authenticate, config });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { server, service, campaignId, base: `http://127.0.0.1:${server.address().port}` };
+  return { server, service, discovery, campaignId, base: `http://127.0.0.1:${server.address().port}` };
 }
+
+test("agent-review routes are authenticated, profile-bound, and idempotent", async () => {
+  const { server, discovery, base } = await fixture();
+  let considered = 0;
+  discovery.filterCandidates = (body, identity) => ({ items: body.items,
+    profileId: identity.profileId });
+  discovery.considerCandidate = async (_body, identity) => {
+    considered += 1;
+    return { status: "ready", profileId: identity.profileId };
+  };
+  try {
+    assert.equal((await fetch(`${base}/v1/profile/fit-context`)).status, 401);
+    const context = await (await fetch(`${base}/v1/profile/fit-context`, {
+      headers: { authorization: "Bearer profile-one-token" }
+    })).json();
+    assert.deepEqual(context.skills, ["TypeScript"]);
+    assert.equal(JSON.stringify(context).includes("private@example.test"), false);
+    assert.equal(JSON.stringify(context).includes("/private/resume.pdf"), false);
+    const filtered = await (await fetch(`${base}/v1/discovery/filter`, {
+      method: "POST", headers: { authorization: "Bearer profile-one-token",
+        "content-type": "application/json" }, body: JSON.stringify({ items: [] })
+    })).json();
+    assert.equal(filtered.profileId, "profile-one");
+    const request = () => fetch(`${base}/v1/discovery/consider`, {
+      method: "POST", headers: { authorization: "Bearer profile-one-token",
+        "content-type": "application/json", "idempotency-key": "fit-review-example-1" },
+      body: JSON.stringify({ candidate: {}, fit: {}, profileId: "profile-two" })
+    });
+    assert.equal((await request()).status, 200);
+    assert.equal((await request()).status, 200);
+    assert.equal(considered, 1);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
 
 test("HTTP authentication fixes profile identity and mutation retries are idempotent", async () => {
   const { server, service, base } = await fixture();

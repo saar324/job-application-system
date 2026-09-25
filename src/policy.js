@@ -1,3 +1,5 @@
+import { acceptedFit } from "./discovery/fit-assessment.js";
+
 const CONFLICT_FIELDS = {
   full_time: ["compensation_conflict", "location_conflict"],
   freelance: ["rate_conflict", "scope_conflict"]
@@ -7,10 +9,13 @@ export function evaluatePolicy({ opportunity, mode, modeConfig, answers = {} }) 
   const reasons = [];
   const confirmations = [];
   const score = Number(opportunity.score ?? 0);
-  if (opportunity.userRequested !== true && score < modeConfig.minimumScore) {
+  if (opportunity.userRequested !== true && !acceptedFit(opportunity)
+    && score < modeConfig.minimumScore) {
     reasons.push(`score ${score} is below ${modeConfig.minimumScore}`);
   }
-  if (opportunity.scoreDetails?.hardExclusion) reasons.push(opportunity.scoreDetails.hardExclusion);
+  if (!acceptedFit(opportunity) && opportunity.scoreDetails?.hardExclusion) {
+    reasons.push(opportunity.scoreDetails.hardExclusion);
+  }
 
   const missing = (opportunity.requiredQuestions ?? []).filter(
     (question) => answers[question.key] === undefined || answers[question.key] === ""

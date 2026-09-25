@@ -1,5 +1,7 @@
 # Agent-First Job Application System
 
+For new job searches, use the [agent-led discovery workflow](docs/agent-led-workflow.md): deterministic source retrieval and known-role filtering, one agent fit decision, then verified destination and application preparation. The older score-first campaign path remains available for in-flight work and historical reports.
+
 An agents-first, self-hosted system for job discovery, application tracking, browser-assisted submission, confirmations, and auditable receipts. Multiple applicants can use one deployment without sharing profiles, credentials, or application history.
 
 Agents are the primary operators. The API exposes durable, machine-readable work queues, idempotent actions, profile-bound identity, confirmation items, and verified receipts so an agent can discover, evaluate, apply, pause for a person, and resume safely. People remain the authority for unknown facts, legal attestations, sensitive answers, and final approval.
