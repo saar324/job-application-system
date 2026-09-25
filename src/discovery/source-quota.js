@@ -125,9 +125,9 @@ export class SourceQuota {
     }
   }
 
-  async hold(sourceId, reason = "rate_limited", durationMs = SOURCE_COOLDOWN_MS[reason]) {
+  async hold(sourceId, reason = "rate_limited", durationMs = SOURCE_COOLDOWN_MS[reason], at = this.now()) {
     if (!this.available) return null;
-    const until = new Date(this.now() + durationMs).toISOString();
+    const until = new Date(at + durationMs).toISOString();
     await this.store.holdSourceQuota({ sourceId, reason, until });
     return { reason: holdCode(reason), until };
   }
@@ -148,7 +148,7 @@ export class SourceQuota {
         const durationMs = window ? Date.parse(QUOTA_WINDOWS[window](at).resetAt) - at
           : reason === "key_rejected" ? KEY_REJECTED_HOLD_MS : SOURCE_COOLDOWN_MS[reason];
         return this.hold(sourceId, reason === "key_rejected" && fingerprint ? `key_rejected:${fingerprint}` : reason,
-          durationMs);
+          durationMs, at);
       }
     });
   }
