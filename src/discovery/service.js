@@ -17,10 +17,12 @@ import { scoreOpportunity } from "./scoring.js";
 import { telemetry } from "../telemetry.js";
 import { normalizeOpportunity } from "./normalization.js";
 import { runIdempotent } from "../idempotency.js";
-import { isHandledRole, knownRoleIndex, roleKeys } from "./handled-roles.js";
+import { isHandledRole, irrelevantReviewIndex, knownRoleIndex, roleKeys,
+  unchangedIrrelevantRole } from "./handled-roles.js";
 import { leadRetryDecision, matchingStoredLead } from "./candidate-state.js";
 import { selectSemanticCandidateIndexes } from "./semantic-candidate-selection.js";
 import { selectFitReviewCandidates } from "./fit-review-selection.js";
+import { postingFingerprint, reviewedEligibility } from "./fit-assessment.js";
 import { legacyDiscoveryTitleRelevant } from "./title-preferences.js";
 import { fetchVerifiedOfficialAtsRole, officialAtsDestination, officialAtsIdentityFromUrl } from "./official-ats.js";
 import { sourceConfigWithLearnedBoards, isLearnedBoardRequest,
@@ -193,9 +195,164 @@ export class DiscoveryService {
     });
     const key = `${input.scanCycleId}:${input.idempotencyKey}`;
     return runIdempotent({ store: this.applicationService.store, profileId: identity.profileId,
-      action: "discovery.query", key, input: { source: source.id, mode: descriptor.mode, queries },
+      action: "discovery.query", key, input: { source: source.id, mode: descriptor.mode,
+        reviewOnly: input.reviewOnly === true, queries },
       execute: () => this.scan({ mode: descriptor.mode, sources: [source.id], queryPlan: queries,
-        limitPerSource: Math.max(...queries.map((query) => query.limit)) }, identity) });
+        limitPerSource: Math.max(...queries.map((query) => query.limit)),
+        reviewOnly: input.reviewOnly === true }, identity) });
+  }
+
+  // The agent reviews public listing evidence before any expensive destination
+  // lookup or application. The server still owns dedup, verification and the
+  // final submission policy. A fit verdict never creates owner authority.
+  async considerCandidate(input, identity) {
+    const candidate = input?.candidate;
+    const fit = input?.fit;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)
+      || !fit || typeof fit !== "object" || Array.isArray(fit)
+      || !["relevant", "irrelevant", "uncertain"].includes(fit.decision)
+      || typeof fit.reason !== "string" || !fit.reason.trim() || fit.reason.length > 1000
+      || typeof candidate.title !== "string" || !candidate.title.trim() || candidate.title.length > 300
+      || typeof candidate.company !== "string" || !candidate.company.trim() || candidate.company.length > 300
+      || typeof candidate.source !== "string" || !/^[a-z][a-z0-9_-]{0,79}$/.test(candidate.source)
+      || typeof candidate.applyUrl !== "string" || candidate.applyUrl.length > 2000
+      || typeof candidate.description !== "string" || candidate.description.length > 100_000) {
+      throw Object.assign(new Error("candidate and a bounded fit verdict are required"), { status: 400 });
+    }
+    let url;
+    try { url = new URL(candidate.applyUrl); } catch { /* invalid URL */ }
+    if (!url || url.protocol !== "https:" || url.username || url.password) {
+      throw Object.assign(new Error("candidate needs a public HTTPS application URL"), { status: 400 });
+    }
+    const profile = await this.profiles.get(identity.profileId);
+    const mode = input.mode ?? profile?.defaultMode ?? this.config.defaultMode;
+    if (!this.config.modes[mode]) {
+      throw Object.assign(new Error("unknown mode"), { status: 400 });
+    }
+    const snapshot = this.applicationService.store.snapshot();
+    const known = knownRoleIndex(snapshot, identity.profileId, { includeIrrelevant: false });
+    if (isHandledRole(candidate, known)) return { status: "already_handled" };
+    if (fit.decision === "uncertain") return { status: "needs_fit_review" };
+    // Browser listings are evidence, not policy or submission authority.
+    const listing = Object.fromEntries(["source", "externalId", "title", "company", "description",
+      "applyUrl", "listingUrl", "location", "remote", "workArrangement", "employmentType",
+      "postedAt", "tags", "compensation", "uncertainties"].filter((key) =>
+      Object.hasOwn(candidate, key)).map((key) => [key, candidate[key]]));
+    const base = normalizeOpportunity({ ...listing, mode,
+      applicationDestinationPending: true, applicationDestinationVerified: false },
+    { source: candidate.source });
+    if (unchangedIrrelevantRole(base, irrelevantReviewIndex(snapshot, identity.profileId))) {
+      return { status: "already_handled" };
+    }
+    const assessment = (role) => ({ decision: fit.decision, reason: fit.reason.trim(),
+      fingerprint: postingFingerprint(role), reviewedAt: new Date().toISOString() });
+    if (fit.decision === "irrelevant") {
+      const opportunity = await this.applicationService.addOpportunity({ ...base,
+        fitAssessment: assessment(base) }, identity, { reviewedDiscovery: true });
+      return { status: "skipped", opportunityId: opportunity.id };
+    }
+
+    let officialUrl = candidate.applyUrl;
+    if (!officialAtsIdentityFromUrl(officialUrl) && AGGREGATOR_SOURCES.has(candidate.source)) {
+      const resolved = await officialAtsUrlFromAggregator(base, this.fetchImpl);
+      officialUrl = resolved.url;
+    } else if (!officialAtsIdentityFromUrl(officialUrl)
+      && ["arbeitnow", "remoteok"].includes(candidate.source)) {
+      officialUrl = (await resolveEmployerApplicationUrl(base, this.fetchImpl)).applyUrl;
+    }
+    if (!officialAtsIdentityFromUrl(officialUrl)) {
+      const opportunity = await this.applicationService.addOpportunity({ ...base,
+        fitAssessment: assessment(base) }, identity, { reviewedDiscovery: true });
+      return { status: "destination_pending", opportunityId: opportunity.id };
+    }
+    let failure = "verification_failed";
+    const verified = await fetchVerifiedOfficialAtsRole(officialUrl,
+      this.config.discovery?.sourceOptions ?? {}, this.fetchImpl,
+      (reason) => { failure = reason; });
+    if (!verified) return { status: "destination_unverified", reason: failure };
+    const fresh = normalizeOpportunity({ ...verified, mode,
+      discoverySource: candidate.source,
+      provenance: { discoveredVia: candidate.source,
+        discoveryListingUrl: candidate.listingUrl ?? candidate.applyUrl,
+        officialAtsVerified: true } }, { source: verified.source });
+    const reviewedDescription = candidate.description.trim().replace(/\s+/g, " ");
+    const officialDescription = fresh.description.trim().replace(/\s+/g, " ");
+    if (exactRoleText(fresh.title) !== exactRoleText(candidate.title)
+      || exactRoleText(fresh.company) !== exactRoleText(candidate.company)
+      || !reviewedDescription || !officialDescription.startsWith(reviewedDescription)) {
+      return { status: "review_official_posting", candidate: {
+        source: fresh.source, externalId: fresh.externalId, title: fresh.title,
+        company: fresh.company, description: fresh.description.slice(0, 8000),
+        location: fresh.location, remote: fresh.remote, applyUrl: fresh.applyUrl,
+        listingUrl: fresh.listingUrl } };
+    }
+    const deterministicMismatch = reviewedEligibility(fresh, profile, mode);
+    if (deterministicMismatch.length) {
+      return { status: "deterministic_filter", reasons: deterministicMismatch };
+    }
+    const score = scoreOpportunity(fresh, profile, mode,
+      { version: String(this.config.discovery?.scorerVersion ?? "2") });
+    const opportunity = await this.applicationService.addOpportunity({ ...fresh, ...score,
+      fitAssessment: assessment(fresh) }, identity,
+    { serverVerifiedDiscovery: true, reviewedDiscovery: true });
+    if (input.apply === false) return { status: "ready", opportunityId: opportunity.id };
+    try {
+      const application = await this.applicationService.requestApplication(opportunity.id, {}, identity);
+      return { status: application.status, opportunityId: opportunity.id,
+        applicationId: application.id };
+    } catch (error) {
+      if (error.status !== 409) throw error;
+      const application = this.applicationService.list("applications", identity.profileId)
+        .find((item) => item.opportunityId === opportunity.id);
+      return { status: application?.status ?? "already_handled", opportunityId: opportunity.id,
+        ...(application ? { applicationId: application.id } : {}) };
+    }
+  }
+
+  // Browser sources can remove known roles before sending any listing text to
+  // the model. This operation is local and makes no employer-site requests.
+  async filterCandidates(input, identity) {
+    if (!Array.isArray(input?.items) || input.items.length > 200) {
+      throw Object.assign(new Error("items must contain at most 200 candidates"), { status: 400 });
+    }
+    const snapshot = this.applicationService.store.snapshot();
+    const known = knownRoleIndex(snapshot, identity.profileId, { includeIrrelevant: false });
+    const irrelevant = irrelevantReviewIndex(snapshot, identity.profileId);
+    const profile = await this.profiles.get(identity.profileId);
+    const mode = input.mode ?? profile?.defaultMode ?? this.config.defaultMode;
+    if (!this.config.modes[mode]) {
+      throw Object.assign(new Error("unknown mode"), { status: 400 });
+    }
+    const seen = new Set();
+    const items = [];
+    let handledFiltered = 0;
+    let duplicatesFiltered = 0;
+    let preferenceFiltered = 0;
+    for (const item of input.items) {
+      if (!item || typeof item !== "object" || Array.isArray(item)
+        || typeof item.title !== "string" || !item.title.trim()
+        || typeof item.company !== "string" || !item.company.trim()
+        || typeof item.applyUrl !== "string") {
+        throw Object.assign(new Error("every candidate needs title, company, and applyUrl"),
+          { status: 400 });
+      }
+      let url;
+      try { url = new URL(item.applyUrl); } catch { /* invalid URL */ }
+      if (!url || url.protocol !== "https:" || url.username || url.password) {
+        throw Object.assign(new Error("every candidate needs a public HTTPS URL"), { status: 400 });
+      }
+      const keys = roleKeys(item);
+      if ([...keys].some((key) => known.has(key))) { handledFiltered += 1; continue; }
+      const normalized = normalizeOpportunity(item, { source: item.source ?? "browser" });
+      if (unchangedIrrelevantRole(normalized, irrelevant)) {
+        handledFiltered += 1; continue;
+      }
+      if ([...keys].some((key) => seen.has(key))) { duplicatesFiltered += 1; continue; }
+      if (reviewedEligibility(item, profile, mode).length) { preferenceFiltered += 1; continue; }
+      for (const key of keys) seen.add(key);
+      items.push(item);
+    }
+    return { items, handledFiltered, duplicatesFiltered, preferenceFiltered };
   }
 
   async startCampaign(input, identity) {
@@ -801,7 +958,10 @@ export class DiscoveryService {
           { sourceId, board: String(board.slug ?? board.token),
             seedProvenance: board.seedProvenance, seedVerifiedAt: board.seedVerifiedAt }])));
     const learnedBoardRequests = new Map();
-    const handledKeys = knownRoleIndex(snapshot, identity.profileId);
+    const handledKeys = knownRoleIndex(snapshot, identity.profileId,
+      { includeIrrelevant: input.reviewOnly !== true });
+    const irrelevant = input.reviewOnly === true
+      ? irrelevantReviewIndex(snapshot, identity.profileId) : new Map();
     const titlesByOpportunity = new Map(snapshot.opportunities
       .filter((item) => item.profileId === identity.profileId)
       .map((item) => [item.id, item.title]));
@@ -1021,9 +1181,52 @@ export class DiscoveryService {
       row.exhausted = false;
     }
 
-    const unhandledFound = found.filter((raw) => !isHandled(raw));
+    const unhandledFound = found.filter((raw) => {
+      if (isHandled(raw)) return false;
+      if (input.reviewOnly !== true) return true;
+      const normalized = normalizeOpportunity(raw, { source: raw.source });
+      const unchanged = unchangedIrrelevantRole(normalized, irrelevant);
+      if (unchanged) handledMatches.add([...roleKeys(normalized)][0] ?? raw.applyUrl);
+      return !unchanged;
+    });
     const uniqueFound = [...new Map(unhandledFound
       .map((raw) => [`${raw.source}:${raw.externalId ?? raw.applyUrl}`, raw])).values()];
+    if (input.reviewOnly === true) {
+      const perSource = new Map();
+      const seenKeys = new Set();
+      const candidates = [];
+      for (const raw of uniqueFound) {
+        const keys = roleKeys(raw);
+        if ([...keys].some((key) => seenKeys.has(key))) continue;
+        const count = perSource.get(raw.source) ?? 0;
+        if (count >= requestedLimit) continue;
+        const role = normalizeOpportunity(raw, { source: raw.source });
+        const mismatches = reviewedEligibility(role, profile, mode);
+        if (mismatches.length) {
+          const row = sourceYield.get(raw.source);
+          if (row) { row.excluded += 1; row.exclusionCounts.hardExclusion += 1; }
+          continue;
+        }
+        for (const key of keys) seenKeys.add(key);
+        perSource.set(raw.source, count + 1);
+        candidates.push({ source: role.source, externalId: role.externalId,
+          title: role.title, company: role.company, description: role.description.slice(0, 8000),
+          location: role.location, remote: role.remote, employmentType: role.employmentType,
+          postedAt: role.postedAt, applyUrl: role.applyUrl, listingUrl: role.listingUrl,
+          tags: role.tags, compensation: role.compensation,
+          uncertainties: role.uncertainties });
+      }
+      for (const row of sourceYield.values()) {
+        row.found = uniqueFound.filter((item) => item.source === row.sourceId).length;
+        row.handledFiltered = handledBySource.get(row.sourceId)?.size ?? 0;
+        row.selected = perSource.get(row.sourceId) ?? 0;
+      }
+      return { mode, sources: requestedSources, found: uniqueFound.length,
+        handledFiltered: handledMatches.size, requestsMade: requestCount,
+        candidates, sourceYield: [...sourceYield.values()],
+        errors: errors.map((item) => redactedError(item, [...credentials.values()])),
+        durations: { fetchMs, totalMs: performance.now() - scanStarted } };
+    }
     for (const row of sourceYield.values()) {
       row.dedupFiltered = unhandledFound.filter((item) => item.source === row.sourceId).length
         - uniqueFound.filter((item) => item.source === row.sourceId).length;

@@ -3,6 +3,7 @@ import { ClientError } from "./service.js";
 import { telemetry } from "./telemetry.js";
 import { handleMcpRequest } from "./mcp.js";
 import { runIdempotent } from "./idempotency.js";
+import { fitReviewContext } from "./discovery/fit-context.js";
 
 async function jsonBody(request) {
   const chunks = [];
@@ -79,6 +80,12 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "GET" && url.pathname === "/v1/profile/status") {
         return send(response, 200, await profiles.status(identity.profileId, undefined, config.defaultMode));
       }
+      if (request.method === "GET" && url.pathname === "/v1/profile/fit-context") {
+        const profile = await profiles.get(identity.profileId);
+        const mode = url.searchParams.get("mode") ?? profile?.defaultMode ?? config.defaultMode;
+        if (!config.modes[mode]) return send(response, 400, { error: "unknown mode" });
+        return send(response, 200, fitReviewContext(profile, mode));
+      }
       if (request.method === "PATCH" && url.pathname === "/v1/profile") {
         return send(response, 200, await profiles.patch(identity.profileId, await jsonBody(request)));
       }
@@ -119,6 +126,15 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       }
       if (request.method === "POST" && url.pathname === "/v1/discovery/scan") {
         return send(response, 200, await discovery.scan(await jsonBody(request), identity));
+      }
+      if (request.method === "POST" && url.pathname === "/v1/discovery/consider") {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "discovery_consider", body,
+          async () => ({ status: 200, body: await discovery.considerCandidate(body, identity) }));
+        return send(response, saved.status, saved.body);
+      }
+      if (request.method === "POST" && url.pathname === "/v1/discovery/filter") {
+        return send(response, 200, await discovery.filterCandidates(await jsonBody(request), identity));
       }
       if (request.method === "POST" && url.pathname === "/v1/discovery/reserve/refresh") {
         const body = await jsonBody(request);

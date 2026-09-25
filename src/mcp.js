@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod/v4";
 import { runIdempotent } from "./idempotency.js";
+import { fitReviewContext } from "./discovery/fit-context.js";
 
 function result(value) {
   return { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value };
@@ -28,17 +29,28 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
     inputSchema: {}, annotations: { readOnlyHint: true, openWorldHint: false }
   }, async () => result(await profiles.status(identity.profileId, undefined, config.defaultMode)));
 
+  server.registerTool("fit_review_context", {
+    description: "Read the authenticated applicant's job-fit context without contact details or document paths.",
+    inputSchema: { mode: z.enum(["full_time", "freelance"]).optional() },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  }, async ({ mode }) => {
+    const profile = await profiles.get(identity.profileId);
+    return result(fitReviewContext(profile, mode ?? profile?.defaultMode ?? config.defaultMode));
+  });
+
   server.registerTool("scan_jobs", {
     description: "Scan configured public job sources for the authenticated profile.",
     inputSchema: {
       mode: z.enum(["full_time", "freelance"]).optional(),
       sources: z.array(z.string()).max(20).optional(),
       limitPerSource: z.number().int().min(1).max(200).optional(),
+      reviewOnly: z.boolean().optional(),
       idempotencyKey: z.string().min(8).max(200)
     }, annotations: { openWorldHint: true }
   }, async ({ idempotencyKey, ...input }) => result(await idempotent(
     service, identity, "scan_jobs", idempotencyKey, input, async () => {
       const scan = await discovery.scan(input, identity);
+      if (input.reviewOnly === true) return scan;
       return {
         mode: scan.mode, sources: scan.sources, found: scan.found, qualifying: scan.qualifying,
         excluded: scan.excluded, errors: scan.errors,
@@ -46,6 +58,35 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
       };
     }
   )));
+
+  server.registerTool("consider_job_candidate", {
+    description: "Record an agent's evidence-based fit decision after reviewing a listing. Relevant official ATS roles are freshly verified and then prepared through normal policy; irrelevant roles are skipped for this profile.",
+    inputSchema: {
+      candidate: z.object({
+        source: z.string(), externalId: z.string().optional(), title: z.string(),
+        company: z.string(), description: z.string(), applyUrl: z.string().url(),
+        listingUrl: z.string().url().optional(), location: z.string().optional(),
+        remote: z.boolean().optional(), employmentType: z.string().optional(),
+        postedAt: z.string().optional(), tags: z.array(z.string()).optional()
+      }).passthrough(),
+      fit: z.object({ decision: z.enum(["relevant", "irrelevant", "uncertain"]),
+        reason: z.string().min(1).max(1000) }),
+      mode: z.enum(["full_time", "freelance"]).optional(),
+      apply: z.boolean().optional(), idempotencyKey: z.string().min(8).max(200)
+    }, annotations: { openWorldHint: true, destructiveHint: false }
+  }, async ({ idempotencyKey, ...input }) => result(await idempotent(
+    service, identity, "consider_candidate", idempotencyKey, input,
+    async () => discovery.considerCandidate(input, identity)
+  )));
+
+  server.registerTool("filter_known_job_candidates", {
+    description: "Remove known or duplicate browser-source roles before model fit review; no network request or application is made.",
+    inputSchema: { mode: z.enum(["full_time", "freelance"]).optional(),
+      items: z.array(z.object({ title: z.string(), company: z.string(),
+      applyUrl: z.string().url(), listingUrl: z.string().url().optional(),
+      source: z.string().optional(), externalId: z.string().optional() }).passthrough()).max(200) },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  }, async (input) => result(await discovery.filterCandidates(input, identity)));
 
   server.registerTool("add_campaign_source_results", {
     description: "Add verified browser-source candidates to a campaign and record deterministic source coverage.",
@@ -86,6 +127,7 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
       queries: z.array(z.object({ filters: z.record(z.string(), z.union([z.string(), z.array(z.string())])),
         limit: z.number().int().min(1).max(200).optional() })).min(1).max(8),
       scanCycleId: z.string().min(1).max(100),
+      reviewOnly: z.boolean().optional(),
       idempotencyKey: z.string().min(8).max(200)
     }, annotations: { openWorldHint: true }
   }, async (input) => result(await discovery.query(input, identity)));

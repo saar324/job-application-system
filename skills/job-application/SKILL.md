@@ -14,7 +14,7 @@ Treat each scheduled or continuous invocation as one bounded cycle, not as a per
 
 1. Check `health` and `profile`, then inspect `applications` and `inbox` before discovering new work.
 2. Surface new confirmations or failures that need the owner. Do not repeat notifications for unchanged items.
-3. Scan configured sources, evaluate results from listing and profile evidence, and request eligible applications within policy limits. For a comprehensive campaign, use the all-source pool below.
+3. Collect unseen candidates from configured sources, review fit with the agent using listing and profile evidence, and pass relevant roles through `jobctl consider`. Use the agent-led flow below.
 4. Observe newly queued applications for a bounded period. Never repeat an apply request because polling ended or a transport call timed out.
 5. Report new verified submissions and actionable blocks, then yield. Leave queued, blocked, and waiting-confirmation work on the server for the next cycle.
 
@@ -23,8 +23,8 @@ Do not overlap cycles for the same profile or start a new application sub-agent 
 ## Workflow
 
 1. Run `jobctl profile`. Ask only for fields listed as missing, then store supplied facts with `jobctl profile-update`. Use `full_time` unless the user or stored opportunity selects `freelance`. Before calling an application unfinished or asking the owner to repeat an answer, check its application log, prior confirmed answers and conversation, and any earlier browser receipt for the same role. If a prior success page proves a manual submission while the server was offline, reconcile it with `record-submission`; do not reopen or resubmit the form. A stale pending confirmation does not override a verified receipt.
-2. For job discovery or source selection, read [references/sources.json](references/sources.json). When its autonomous source lists are empty, use the public starter at [references/public-sources.json](references/public-sources.json). Run `jobctl sources` to see enabled source filters, then use bounded `jobctl query` plans where useful. Search and score opportunities using only evidence from the listing and the profile. Do not invent skills, dates, work authorization, compensation, rates, or identity facts.
-3. When the owner sends an application URL, immediately pass it to `jobctl direct` with the requested mode. Do not require them to provide title, company, or score. For discovered jobs, add qualifying opportunities and request application normally.
+2. For job discovery or source selection, read [references/sources.json](references/sources.json). When its autonomous source lists are empty, use the public starter at [references/public-sources.json](references/public-sources.json). Run `jobctl fit-context` for the profile-bound facts used in model fit review and `jobctl sources` for enabled source filters. Search broadly enough to find a useful pool. Use `jobctl scan` with `reviewOnly:true` for server adapters and `jobctl filter` for browser-source results; these remove known roles before model review. Do not invent skills, dates, work authorization, compensation, rates, or identity facts.
+3. When the owner sends an application URL, immediately pass it to `jobctl direct` with the requested mode. For discovered jobs, read the complete listing and saved profile, then call `jobctl consider` with `relevant`, `irrelevant`, or `uncertain` and a short evidence-based reason. A relevant decision verifies the current official ATS posting and queues application preparation; a skipped role is filtered on future searches. If the official employer posting differs, review its returned content and decide again. Do not label an agent-selected role as `userRequested`.
 4. A successful application request normally returns `queued`. Use `jobctl applications` to observe its later `submitted` or `waiting_confirmation` state; never repeat the apply request because a client stopped waiting.
 5. If the state is `submitted`, report the receipt. If it is `waiting_research`, obtain bounded official company context for the recorded question, then attach its URL and excerpt with `jobctl research ID`. If it is `waiting_confirmation`, run `jobctl inbox`. In Telegram DMs, send every text block in the confirmation's `presentation` through the `message` tool and then its buttons. The final-approval presentation must show every filled and unfilled field and every non-secret answer in full.
 6. Before asking for an application answer, run `node {baseDir}/scripts/find-prior-answer.js "Company" "Question"` and review its same-employer candidates from the application log. Also check the saved profile, resume, portfolio, and prior owner messages. Compare the meaning of each candidate; a high text-similarity score is a lead, not approval. Reuse an exact previously submitted answer only when the owner has authorized that reuse and its facts and role scope still fit. Store reusable short facts in `applicationAnswers` with `jobctl profile-update`; keep prose in the current application's answer or an owner-approved, employer-scoped answer record. Do not put motivation, project, cover-letter, or other narrative prose in generic `applicationAnswers`. If no clear, verified answer exists, ask the owner the question as written and do not submit while it is unresolved. If the employer prohibits AI-written answers, use only wording known to be written by the owner; a prior submission alone does not establish authorship.
@@ -39,26 +39,17 @@ For an `account_credentials` custom answer, check the encrypted profile vault fo
 
 Never handle another profile by changing a request parameter. Profile identity comes exclusively from `JOB_SERVER_TOKEN`. Never expose tokens, passwords, CV contents, or one profile's history in another chat.
 
-## All-source campaign pool
+## Agent-led discovery and application
 
-When the owner asks for a comprehensive search or a measured application batch, create one campaign containing every
-configured `serverAdapters` source and every `visibleBrowserSources` source from the private catalog, or from the public starter when no private sources are configured. The campaign must
-collect candidates before it opens application forms:
+For a measured batch, read every configured server adapter and visible browser source in the private catalog, or the public starter when there is no private catalog. Keep one agent and one application worker.
 
-1. Ask each source for at most 10 new eligible roles. A server adapter uses `limitPerSource: 10`. A browser source follows
-   pagination until it has 10 accepted roles, reaches the real end, or reaches the source safety budget.
-2. Exclude every canonical role already present in opportunities or applications, including submitted, skipped, rejected,
-   failed, and still-active records. Deduplicate again after an aggregator resolves to an employer ATS URL.
-3. Search browser sources one at a time. Default safety limits are five result pages, 35 detail pages, 45 navigations, and
-   at least 1.5 seconds between navigations to the same host. Stop that source on HTTP 403, 429, or a challenge page and record the outcome.
-   Do not bypass login, CAPTCHA, access controls, or a catalog instruction that requires manual use.
-4. Send each browser source result through `jobctl campaign-add-source CAMPAIGN_ID`, including pages visited, requests made,
-   exhaustion, and rate-limit state. Mark a source complete only after its pagination work is finished or a recorded policy,
-   access, or rate-limit outcome prevents further work.
-5. Finish every planned source. The server keeps at most 10 candidates per source, ranks the combined pool globally, and only
-   then prepares the campaign target plus reserve sequentially. Early sources cannot consume the application quota.
+1. For each server adapter, request a bounded pool with `jobctl scan` and `reviewOnly:true`. Start with up to 100 unseen raw results per source, then paginate or use another query when the source exposes more. The returned candidates have not passed a fit score; no form is opened.
+2. For each browser source, follow its real pagination until enough potentially relevant unseen roles are collected, the source ends, or its safety budget is reached. Use `jobctl filter` on a page's extracted candidates before sending listing text to the model. Default safety limits are five result pages, 35 detail pages, 45 navigations, and at least 1.5 seconds between navigations to the same host. Stop on HTTP 403, 429, or a challenge. Respect manual-only catalog entries and never bypass access controls.
+3. Review candidate batches as an LLM using the saved profile and job evidence; open the full listing when the returned excerpt is incomplete. Decide whether each role is relevant, irrelevant, or uncertain. Consider actual responsibilities, skills, seniority, location/work authorization, compensation, and employer quality. Titles and numeric scores can help prioritize what to read, but cannot make the fit decision. Keep up to 10 relevant roles per source for the application pool; continue searching if fewer than 10 qualify.
+4. Send every decided role through `jobctl consider`; it stores irrelevant decisions for future deduplication. A relevant role gets official destination verification after fit review. An unresolved destination stays pending, and a changed official role comes back for another review. Never use `jobctl direct` to promote an agent-found role.
+5. Work through relevant verified roles sequentially. The browser worker fills known fields, holds unknown facts, checks the complete form, and uses the existing final permit/receipt path. Nikita's “Review and Submit Application” action is final, even when its label also contains “Review.” Count only verified new receipts in timing and quality reports.
 
-Use one browser context and one application worker. Never create one agent per source or per application.
+The old score-first `campaign-start` path remains for compatibility and historical reports, but it is not the default for a new application batch. Its low yield does not prove there are no suitable jobs.
 
 ## Visible browser handoff
 

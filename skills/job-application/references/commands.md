@@ -12,7 +12,11 @@ Common operations:
 $JOBCLI health
 $JOBCLI me
 $JOBCLI profile
+$JOBCLI fit-context
+$JOBCLI fit-context freelance
 $JOBCLI scan
+$JOBCLI filter
+$JOBCLI consider
 $JOBCLI sources
 $JOBCLI opportunities
 $JOBCLI applications
@@ -22,7 +26,28 @@ $JOBCLI campaigns
 $JOBCLI inbox
 ```
 
-Start one timed campaign from a fresh scan. It deterministically excludes handled roles and listings without an
+For the primary agent-led workflow, collect unseen raw candidates from a bounded server-adapter scan. Review
+their fit with the agent before opening any form. Repeat per source and increase the pool or use a query when needed:
+
+```bash
+printf '%s' '{"sources":["ashby"],"reviewOnly":true,"limitPerSource":100}' | $JOBCLI scan
+```
+
+For a visible-browser source, pass its extracted page candidates to `filter` before model review:
+
+```bash
+printf '%s' '{"items":[{"source":"sample_board","title":"Platform Developer","company":"Sample Company","description":"Build an API service","applyUrl":"https://jobs.ashbyhq.com/demo/11111111-1111-4111-8111-111111111111/application"}]}' | $JOBCLI filter
+```
+
+After reading the role and profile, send one fit verdict. `relevant` verifies the current official ATS posting and
+queues a normal application unless `apply:false`; `irrelevant` durably skips the role; `uncertain` does neither.
+When the official posting differs, review the returned official candidate and decide again:
+
+```bash
+printf '%s' '{"candidate":{"source":"ashby","title":"Platform Developer","company":"Sample Company","description":"Build an API service","applyUrl":"https://jobs.ashbyhq.com/demo/11111111-1111-4111-8111-111111111111/application"},"fit":{"decision":"relevant","reason":"Responsibilities and required skills match the verified profile."},"apply":true,"idempotencyKey":"fit-demo-11111111"}' | $JOBCLI consider
+```
+
+The older score-first campaign command is retained for historical reports and compatibility. It deterministically excludes handled roles and listings without an
 employer application destination, then prepares the target plus reserve sequentially. Covered official ATS roles follow
 the owner standing policy; uncovered roles wait for exact final-preview review:
 

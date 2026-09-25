@@ -5,6 +5,7 @@ import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailab
 import { telemetry as defaultTelemetry } from "./telemetry.js";
 import { relatedApplicationRole, roleKeys } from "./discovery/handled-roles.js";
 import { scoreOpportunity } from "./discovery/scoring.js";
+import { acceptedFit, fitPassesGate, reviewedEligibility } from "./discovery/fit-assessment.js";
 import { officialAtsDestination, revalidateOfficialAtsRole } from "./discovery/official-ats.js";
 import { summarizeSourceHealth } from "./discovery/source-health.js";
 import { sourceCooldowns } from "./discovery/source-cooldown.js";
@@ -116,13 +117,14 @@ export class ApplicationService {
   }
 
   async addOpportunity(input, identity, { serverVerifiedDiscovery = false,
-    advisoryDiscovery = null } = {}) {
+    reviewedDiscovery = false, advisoryDiscovery = null } = {}) {
     if (!input.title || !input.company || !input.applyUrl) {
       throw new ClientError(400, "title, company, and applyUrl are required");
     }
     // Client-supplied score/source/provenance is useful for review but cannot
     // establish authorization for an automatic final action.
     const candidate = { ...input };
+    if (!reviewedDiscovery) delete candidate.fitAssessment;
     for (const field of ["discoveryVerification", "discoveryState", "destinationFirstObservedAt",
       "discoveryRelease",
       "destinationRetryAfter", "destinationExpiresAt", "destinationRetryCount",
@@ -216,6 +218,17 @@ export class ApplicationService {
           audit(state, identity, "opportunity.direct_intent_recorded", existing.id, {
             priorSource: existing.source, normalizedUrl: applicationUrl
           });
+        }
+        if (reviewedDiscovery && candidate.fitAssessment && !priorApplications.length) {
+          if (serverVerifiedDiscovery && sameOfficialRole
+            && candidate.applicationDestinationVerified === true
+            && candidate.applicationDestinationPending !== true) {
+            Object.assign(existing, candidate, { discoveryState: "ready",
+              discoveryVerification: { sourceId: candidate.source ?? "agent",
+                verifiedAt: now(), score: Number(candidate.score ?? 0) } });
+          }
+          existing.fitAssessment = candidate.fitAssessment;
+          existing.updatedAt = now();
         }
         return existing;
       }
@@ -332,16 +345,23 @@ export class ApplicationService {
       }
 
       const decision = evaluatePolicy({ opportunity, mode, modeConfig, answers: input.answers });
+      if (acceptedFit(opportunity)) {
+        const mismatches = reviewedEligibility(opportunity, profile, mode);
+        decision.reasons.push(...mismatches);
+        if (mismatches.length) decision.eligible = false;
+      }
       let specialistFitReview = false;
       if (covered) {
         const freshScore = scoreOpportunity(opportunity, profile, mode,
           { version: String(this.config.discovery?.scorerVersion ?? "2") });
-        if (freshScore.scoreDetails.hardExclusion || freshScore.score < modeConfig.minimumScore) {
+        if (!fitPassesGate(opportunity, freshScore, modeConfig.minimumScore, profile, mode)) {
           decision.eligible = false;
-          decision.reasons.push(freshScore.scoreDetails.hardExclusion ?? "current fit score below minimum");
+          if (!acceptedFit(opportunity)) {
+            decision.reasons.push(freshScore.scoreDetails.hardExclusion ?? "current fit score below minimum");
+          }
         }
         decision.autoApply = true;
-        specialistFitReview = Boolean(freshScore.scoreDetails.fitReview);
+        specialistFitReview = !acceptedFit(opportunity) && Boolean(freshScore.scoreDetails.fitReview);
         if (specialistFitReview) {
           decision.autoApply = false;
           const review = freshScore.scoreDetails.fitReview;
@@ -470,11 +490,12 @@ export class ApplicationService {
       if (profile && opportunity) {
         const freshScore = scoreOpportunity(opportunity, profile, current.mode,
           { version: String(this.config.discovery?.scorerVersion ?? "2") });
-        if (freshScore.scoreDetails.hardExclusion
-          || freshScore.score < this.config.modes[current.mode].minimumScore) {
+        if (!fitPassesGate(opportunity, freshScore,
+          this.config.modes[current.mode].minimumScore, profile, current.mode)) {
           reasonCodes.push("current_fit_not_eligible");
         }
-        if (freshScore.scoreDetails.fitReview && !current.finalApprovalRequired) {
+        if (!acceptedFit(opportunity) && freshScore.scoreDetails.fitReview
+          && !current.finalApprovalRequired) {
           reasonCodes.push(freshScore.scoreDetails.fitReview.reason === "unverified_employer_identity"
             ? "employer_identity_review_required" : "specialist_fit_review_required");
         }
@@ -586,7 +607,8 @@ export class ApplicationService {
         && recentEmployerReceipts(state, current.profileId, opportunity.company) >= 2) {
         throw new ClientError(409, "recent employer submissions require a fresh review");
       }
-      if (!current.finalApprovalRequired && profile && scoreOpportunity(opportunity, profile, current.mode,
+      if (!current.finalApprovalRequired && !acceptedFit(opportunity) && profile
+        && scoreOpportunity(opportunity, profile, current.mode,
         { version: String(this.config.discovery?.scorerVersion ?? "2") }).scoreDetails.fitReview) {
         throw new ClientError(409, "specialist experience requires a fresh review");
       }

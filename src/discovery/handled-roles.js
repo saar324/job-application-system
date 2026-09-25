@@ -1,5 +1,6 @@
 // A role may enter the system through a board feed, a direct application URL,
 // or an indexed listing. Match stable ATS IDs before falling back to URLs.
+import { postingFingerprint } from "./fit-assessment.js";
 // Company and title are useful review hints, but are not role identities.
 const TRACKING_PARAMETER = /^(utm_|ref$|refid$|trackingid$|source$|gh_src$|lever-source$)/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -115,7 +116,7 @@ export function handledRoleIndex(state, profileId) {
   return keys;
 }
 
-export function knownRoleIndex(state, profileId) {
+export function knownRoleIndex(state, profileId, { includeIrrelevant = true } = {}) {
   const keys = new Set();
   const applicationsByOpportunity = new Map();
   for (const application of state.applications ?? []) {
@@ -126,9 +127,12 @@ export function knownRoleIndex(state, profileId) {
   for (const opportunity of state.opportunities ?? []) {
     if (opportunity.profileId !== profileId) continue;
     const applications = applicationsByOpportunity.get(opportunity.id) ?? [];
+    if (!includeIrrelevant && opportunity.fitAssessment?.decision === "irrelevant"
+      && !applications.length) continue;
     // An unresolved board listing is observed, not handled. Revisit it so a
     // later scan can resolve its employer destination or update its evidence.
-    if ((opportunity.applicationDestinationPending === true
+    if (opportunity.fitAssessment?.decision !== "irrelevant"
+      && (opportunity.applicationDestinationPending === true
       || opportunity.applicationDestinationVerified !== true)
       && !applications.length) continue;
     // A confirmed unavailable posting may reopen later. Its skipped attempt
@@ -150,4 +154,22 @@ export function knownRoleIndex(state, profileId) {
 
 export function isHandledRole(role, handledKeys) {
   return [...roleKeys(role)].some((key) => handledKeys.has(key));
+}
+
+export function irrelevantReviewIndex(state, profileId) {
+  const index = new Map();
+  for (const item of state.opportunities ?? []) {
+    if (item.profileId !== profileId || item.fitAssessment?.decision !== "irrelevant") continue;
+    for (const key of roleKeys(item)) {
+      const fingerprints = index.get(key) ?? new Set();
+      fingerprints.add(item.fitAssessment.fingerprint);
+      index.set(key, fingerprints);
+    }
+  }
+  return index;
+}
+
+export function unchangedIrrelevantRole(role, index) {
+  const fingerprint = postingFingerprint(role);
+  return [...roleKeys(role)].some((key) => index.get(key)?.has(fingerprint));
 }
