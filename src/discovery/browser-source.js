@@ -9,8 +9,9 @@ const ATS_HOST = /(?:ashbyhq\.com|greenhouse\.io|lever\.co|workable\.com|smartre
 export function extractSourcePage(html, pageUrl, sourceId, { residenceCountry } = {}) {
   const visible = visibleText(html);
   const currentText = visible.split(/\n(?:similar|recommended|related) jobs?\b/i)[0];
-  const currentLocation = isDetailPage(pageUrl) ? currentPostingLocation(html, sourceId) : null;
-  const compatibleLocation = isDetailPage(pageUrl)
+  const detailPage = isDetailPage(pageUrl, sourceId);
+  const currentLocation = detailPage ? currentPostingLocation(html, sourceId) : null;
+  const compatibleLocation = detailPage
     ? explicitRemoteLocation(currentText, residenceCountry) : null;
   const structured = parseJobPostingsJsonLd(html, { source: sourceId, pageUrl })
     .filter((job) => meaningful(job.title) && meaningful(job.company) && /^https:\/\//i.test(job.applyUrl ?? ""));
@@ -44,13 +45,14 @@ export function extractSourcePage(html, pageUrl, sourceId, { residenceCountry } 
   const textNext = anchors.find((item) => NEXT_TEXT.test(item.text));
   const nextUrl = explicitNext?.href ?? textNext?.href;
   const normalizedPage = absoluteUrl(pageUrl, pageUrl);
-  const applyLink = isDetailPage(pageUrl) ? anchors.find((item) => /^apply(?:\s+(?:now|for|to))?\b/i.test(item.text)
+  const applyLink = detailPage ? anchors.find((item) => /^apply(?:\s+(?:now|for|to))?\b/i.test(item.text)
     && item.href !== normalizedPage && new URL(item.href).protocol === "https:"
     && new URL(item.href).hostname.replace(/^www\./, "") !== pageHost) : null;
   if (applyLink) jobs = jobs.map((job) => ({ ...job, listingUrl: pageUrl,
     applyUrl: applyLink.href, applicationDestinationVerified: true }));
   jobLinks = jobLinks.filter((url) => url !== nextUrl && url !== normalizedPage);
-  return { jobs: uniqueJobs(jobs), jobLinks, nextUrl };
+  return { jobs: uniqueJobs(jobs), jobLinks, nextUrl,
+    ...(applyLink ? { observedApplyUrl: applyLink.href } : {}) };
 }
 
 export function sourceAutomationPolicy(source, overrides = {}) {
@@ -121,9 +123,11 @@ function visibleText(html) {
     .replace(/<style\b[\s\S]*?<\/style>/gi, " ").replace(/<\/(?:p|div|li|section|h[1-6]|main|article)>/gi, "\n"));
 }
 
-function isDetailPage(pageUrl) {
+function isDetailPage(pageUrl, sourceId) {
   try {
     const path = new URL(pageUrl).pathname;
+    if (sourceId === "remotive") return /^\/remote-jobs\/[^/]+\/[^/]+\/?$/i.test(path);
+    if (sourceId === "weworkremotely") return /^\/remote-jobs\/[^/]+\/?$/i.test(path);
     if (/\/remote-jobs\//i.test(path)) return false;
     return /\/(?:job|jobs|offer|offers|position|positions|vacancy|vacancies)\/[^/?#]+/i.test(path);
   }

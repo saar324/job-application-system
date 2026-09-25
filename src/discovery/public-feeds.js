@@ -70,7 +70,7 @@ function parseRemotive(payload) {
     ...(parseSalary(job.salary) ? { compensation: parseSalary(job.salary) } : {}),
     uncertainties: ["employer_application_url_unverified"]
   })).filter(valid);
-  return { items, detailLinks: [], hasMore: false };
+  return { items, detailLinks: items.map((item) => item.listingUrl), hasMore: false };
 }
 
 function parseWeWorkRemotely(payload) {
@@ -90,7 +90,16 @@ function parseWeWorkRemotely(payload) {
       uncertainties: ["employer_application_url_unverified"]
     };
   }).filter(valid);
-  return { items, detailLinks: [], hasMore: false };
+  return { items, detailLinks: items.map((item) => item.listingUrl), hasMore: false };
+}
+
+// An off-board Apply link is still only a URL hint. The server must fetch the
+// matching official ATS role before it can enter the application lane.
+export function feedItemWithObservedDestination(item, extracted) {
+  return extracted?.observedApplyUrl
+    ? { ...item, applyUrl: extracted.observedApplyUrl,
+      applicationDestinationVerified: true }
+    : item;
 }
 
 function parseSalary(value) {

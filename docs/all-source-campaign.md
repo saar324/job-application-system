@@ -13,6 +13,9 @@ ineligible, and compensation-conflicting records.
 3. The browser runner visits each visible source sequentially. It uses the source's listing URL, searches a title from the private profile when a visible search box exists, reads schema.org `JobPosting` data, follows likely job links, and follows explicit
    next-page controls. It reports small candidate batches after each page or detail. The server returns the count that passed
    eligibility, destination, and handled-role gates; the runner continues until 10 have been accepted or the source budget ends.
+   Remotive and We Work Remotely start from their public feeds, then check role detail pages within the same request and
+   time limits for an off-board Apply link. Feed rows still enter the pending lane when detail checks cannot verify a
+   destination. A detail-page link is only a hint until the server fetches a matching official ATS role.
 4. The server records paging and request telemetry, filters known roles before storage, scores the listing from profile and
    listing evidence, and keeps the best 10 accepted roles from that source. When a browser result links to an official
    Ashby, Greenhouse, or Lever role, the server independently fetches that exact board and role. It uses the ATS title,

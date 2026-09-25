@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DiscoveryService } from "../src/discovery/service.js";
+import { extractSourcePage } from "../src/discovery/browser-source.js";
+import { feedItemWithObservedDestination, parsePublicFeed } from "../src/discovery/public-feeds.js";
 import { fetchVerifiedOfficialAtsRole } from "../src/discovery/official-ats.js";
 import { ProfileStore } from "../src/profile-store.js";
 import { ApplicationService } from "../src/service.js";
@@ -253,6 +255,26 @@ test("a live exact ATS role is rescored, deduplicated across browser sources, an
     preview: { destination: applyUrl, company: "Example", title: "Senior Engineer",
       filled: [{ label: "Email", value: "ada@example.test", source: "profile" }], unfilled: [] } });
   assert.equal(decision.decision, "permit", decision.reasonCodes?.join(", "));
+});
+
+test("a public-feed detail Apply link enters the ready lane only after official ATS verification", async () => {
+  const listingUrl = "https://remotive.com/remote-jobs/software-development/senior-engineer-123";
+  const feed = parsePublicFeed("remotive", { jobs: [{ id: 123, title: "Senior Engineer",
+    company_name: "Example", description: "TypeScript and Node.js", candidate_required_location: "Europe",
+    job_type: "full_time", url: listingUrl }] });
+  const detail = extractSourcePage(`<html><body><a href="${applyUrl}">Apply for this position</a></body></html>`,
+    listingUrl, "remotive");
+  const candidate = feedItemWithObservedDestination(feed.items[0], detail);
+  const { service, discovery, campaign } = await fixture(async () =>
+    new Response(JSON.stringify({ jobs: [job] })));
+  const result = await discovery.addCampaignSourceResults(campaign.campaignId, {
+    sourceId: "board_one", items: [candidate], completed: true
+  }, identity);
+  assert.equal(result.sourceCoverage.scans[0].selected, 1);
+  const stored = service.list("opportunities", "person")[0];
+  assert.equal(stored.applyUrl, applyUrl);
+  assert.equal(stored.source, "ashby");
+  assert.ok(stored.discoveryVerification);
 });
 
 test("one browser import reuses a bounded Ashby board lookup for multiple roles", async () => {

@@ -6,7 +6,7 @@ import { chromium } from "playwright";
 import { createHash } from "node:crypto";
 import { extractSourcePage, isBlockingStatus, isChallengePage,
   sourceAutomationPolicy } from "../src/discovery/browser-source.js";
-import { jobgetherGeographyScope, parsePublicFeed,
+import { feedItemWithObservedDestination, jobgetherGeographyScope, parsePublicFeed,
   publicFeedUrl } from "../src/discovery/public-feeds.js";
 import { SourceProgress } from "../src/discovery/source-progress.js";
 import { SourceJournal } from "../src/discovery/source-journal.js";
@@ -188,9 +188,39 @@ async function searchSource(source, policy, progressState, budget, sourceCycle =
         if (isChallengePage(feedText)) { challenge = true; return result(); }
         const feed = parsePublicFeed(source.id, feedText);
         if (source.id !== "jobgether") {
-          await budget.run(() => progressState.add(feed.items));
+          let nextItem = 0;
+          let detailsAttempted = 0;
+          for (; nextItem < feed.items.length && !progressState.done; nextItem += 1) {
+            const seed = feed.items[nextItem];
+            let candidate = seed;
+            if (nextItem < policy.maxDetailPages && requestsMade < policy.maxRequests
+              && budget.remainingMs() > 5_000) {
+              requestsMade += 1;
+              detailsAttempted += 1;
+              const detail = await navigate(page, seed.listingUrl, policy, budget);
+              if (isBlockingStatus(detail.status)) rateLimited = true;
+              else if (detail.challenge) challenge = true;
+              else if (detail.ok) {
+                const extracted = extractSourcePage(await budget.run(() => page.content()),
+                  page.url(), source.id, sourceContext);
+                candidate = feedItemWithObservedDestination(seed, extracted);
+              }
+            }
+            await budget.run(() => progressState.add([candidate]));
+            if (rateLimited || challenge) { nextItem += 1; break; }
+          }
+          // Keep all feed leads observable even if the bounded detail checks
+          // stop early or a provider blocks detail navigation.
+          if (!progressState.done && nextItem < feed.items.length) {
+            await budget.run(() => progressState.add(feed.items.slice(nextItem)));
+          }
           await budget.run(() => progressState.flush());
-          return result(!feed.hasMore);
+          if (!rateLimited && !challenge && detailsAttempted < feed.items.length) {
+            stopReason = detailsAttempted >= policy.maxDetailPages
+              ? "detail_page_cap" : "detail_verification_budget";
+          }
+          return result(!feed.hasMore && !rateLimited && !challenge
+            && detailsAttempted === feed.items.length);
         }
         nextUrl = null;
         const seeds = new Map();
