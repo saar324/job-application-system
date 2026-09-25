@@ -3,6 +3,7 @@
 - [x] 1.1 Create `src/discovery/sources/workable.js` with `id: "workable"`. Read `sourceConfig.boards[]` as `{slug, company}`, drop entries whose slug fails `^[a-z0-9_-]{1,100}$`, and honour `query.board`
 - [x] 1.2 Fetch `https://www.workable.com/api/accounts/{slug}?details=true` per account with `Promise.allSettled`, the user agent `job-application-system/0.2`, a 20-second timeout and a payload size cap. Throw `Workable {slug} returned HTTP {status}` on non-2xx responses, and `invalid_official_response` on a non-JSON body or a missing `jobs` array
 - [x] 1.3 Normalize each job as the spec and design D2/D6 describe. That covers the external ID, canonical listing and apply URLs, `telecommuting`-only remote, visible locations, employment type, `published_on`, plain-text description, tags and labelled-salary compensation
+- [x] 1.3a Merge feed rows that repeat one shortcode per location into a single role listing every visible location (found in the live test against a real account)
 - [x] 1.4 Apply the shared title and location pre-screen and `isHandled`, sort by posted date, and emit `onStats` and the `partial_response_cap` error in the same way as `greenhouse.js`
 - [x] 1.5 Move the salary extractor to `labeled-compensation.js` as the provider-neutral `labeledAnnualSalary`, and update the Greenhouse and official-ATS call sites
 
@@ -51,4 +52,4 @@
 ## 6. Verification
 
 - [x] 6.1 Run `npm run check` (syntax, privacy and tests) and confirm it passes
-- [ ] 6.2 With a private config listing one real account, run a single simulated scan limited to `workable`. Confirm that normalized roles appear with canonical URLs, no role is queued automatically, and source health shows the roles under `ats_submission_unsupported`
+- [x] 6.2 With a private config listing one real account, run a single simulated scan limited to `workable`. Confirm that normalized roles appear with canonical URLs, no role is queued automatically, and source health shows the roles under `ats_submission_unsupported`

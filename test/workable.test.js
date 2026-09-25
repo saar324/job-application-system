@@ -75,6 +75,21 @@ test("Workable remote status comes only from telecommuting", async () => {
   assert.deepEqual(stats, [{ rawRows: 2, adapterPrescreenRejected: 1, pagesVisited: 1 }]);
 });
 
+test("Workable merges a job repeated once per location into one role", async () => {
+  const repeated = (country) => ({ title: "Senior Data Engineer", shortcode: "FAD6715D76",
+    employment_type: "Full-time", telecommuting: true, published_on: "2026-09-22",
+    locations: [{ country, countryCode: "", city: "", region: null, hidden: false }],
+    description: "<p>Data platform.</p>" });
+  const stats = [];
+  const rows = await workable.search({ sourceConfig: { boards: [{ slug: "example-co" }] },
+    fetchImpl: async () => json({ name: "Example Co", jobs: [repeated("Romania"), repeated("Greece"),
+      repeated("Romania")] }), onStats: (value) => stats.push(value) });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].externalId, "example-co:FAD6715D76");
+  assert.equal(rows[0].location, "Romania; Greece");
+  assert.deepEqual(stats, [{ rawRows: 3, adapterPrescreenRejected: 0, pagesVisited: 1 }]);
+});
+
 test("Workable reads only configured, valid account slugs", async () => {
   let fetches = 0;
   const fetchImpl = async () => { fetches += 1; return json(account); };

@@ -45,6 +45,21 @@ async function readAccount(board, fetchImpl) {
     shortcode: workableShortcode(job?.shortcode) }));
 }
 
+// The feed repeats a multi-location job once per location under one
+// shortcode. Keep one role and join every visible location as alternatives.
+function mergeLocations(rows) {
+  const merged = new Map();
+  for (const row of rows) {
+    const key = row.shortcode ? `${row.board.slug}:${row.shortcode}` : Symbol("unidentified");
+    const previous = merged.get(key);
+    if (!previous) { merged.set(key, { ...row, location: locationOf(row.job) }); continue; }
+    const parts = new Set([previous.location, locationOf(row.job)].flatMap((value) => value.split("; ")).filter(Boolean));
+    previous.location = [...parts].join("; ");
+    previous.job = { ...previous.job, telecommuting: previous.job.telecommuting === true && row.job?.telecommuting === true };
+  }
+  return [...merged.values()];
+}
+
 export const workable = {
   id: "workable",
   async search({ limit = 50, fetchImpl = fetch, sourceConfig, query = {},
@@ -56,20 +71,21 @@ export const workable = {
       if (result.status === "rejected") onError({ board: boards[index]?.slug, error: result.reason.message });
     });
     const rows = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+    const roles = mergeLocations(rows);
     // Workable's telecommuting flag is the only remote evidence. Location text
     // such as "Remote" on an office-based job does not make it remote.
-    const prescreened = rows.filter(({ job, shortcode }) => shortcode
+    const prescreened = roles.filter(({ job, shortcode, location }) => shortcode
       && typeof job?.title === "string" && job.title.trim() && job.telecommuting === true
       && (!query.title || job.title.toLowerCase().includes(query.title.toLowerCase()))
-      && (!query.location || locationOf(job).toLowerCase().includes(query.location.toLowerCase())));
+      && (!query.location || location.toLowerCase().includes(query.location.toLowerCase())));
     const selected = prescreened.filter(({ board, shortcode }) => !isHandled({ source: "workable",
       externalId: `${board.slug}:${shortcode}`, ...workableRoleUrls(board.slug, shortcode) }))
       .sort((left, right) => Date.parse(right.job.published_on ?? "") - Date.parse(left.job.published_on ?? ""));
-    onStats({ rawRows: rows.length, adapterPrescreenRejected: rows.length - prescreened.length,
+    onStats({ rawRows: rows.length, adapterPrescreenRejected: roles.length - prescreened.length,
       pagesVisited: settled.filter((result) => result.status === "fulfilled").length });
     if (selected.length > limit) onError({ stage: "selection", reason: "partial_response_cap",
       rawRows: selected.length });
-    return selected.slice(0, limit).map(({ board, job, shortcode }) => ({
+    return selected.slice(0, limit).map(({ board, job, shortcode, location }) => ({
       source: "workable",
       externalId: `${board.slug}:${shortcode}`,
       title: job.title.trim(),
@@ -79,7 +95,7 @@ export const workable = {
       compensation: labeledAnnualSalary(job.description ?? ""),
       tags: [...new Set([job.department, job.function, job.industry]
         .filter((tag) => typeof tag === "string" && tag.trim()))],
-      location: locationOf(job),
+      location,
       remote: true,
       employmentType: job.employment_type || undefined,
       postedAt: job.published_on || job.created_at,

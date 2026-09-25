@@ -36,7 +36,7 @@ Each published Workable job SHALL be normalized as follows:
 - The configured company name, falling back to the account name returned by Workable and then the slug.
 - The listing URL `https://apply.workable.com/{slug}/j/{shortcode}/`, and the apply URL `https://apply.workable.com/{slug}/j/{shortcode}/apply/`.
 - The job's title, department, employment type, `published_on` as the posted date, and the description as plain text.
-- A location built only from entries in `locations` that are not marked `hidden`.
+- A location built only from entries in `locations` that are not marked `hidden`. Workable repeats a multi-location job once per location under the same shortcode; those rows SHALL be merged into one opportunity whose location lists every visible location.
 
 `remote` SHALL be `true` only when Workable's `telecommuting` flag is `true`. A job with no title or shortcode SHALL be dropped. Compensation SHALL remain unknown unless the description contains a clearly labelled annual salary with an ISO currency.
 
@@ -47,6 +47,10 @@ Each published Workable job SHALL be normalized as follows:
 #### Scenario: An office-based job is listed
 - **WHEN** a job has `telecommuting: false`, even if its location text contains "Remote"
 - **THEN** the adapter pre-screens it out, like the other official ATS adapters, which read only remote roles
+
+#### Scenario: A job is repeated once per location
+- **WHEN** the feed lists shortcode `FAD6715D76` twice, once with location Romania and once with Greece
+- **THEN** one opportunity is produced, with the location `Romania; Greece`, so each country is treated as an alternative
 
 #### Scenario: A location entry is hidden
 - **WHEN** a job has one visible location and one location marked `hidden: true`
