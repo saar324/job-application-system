@@ -128,6 +128,25 @@ test("a visible Apply link becomes the verified application destination", () => 
   assert.equal(result.jobs[0].applicationDestinationVerified, true);
 });
 
+test("public feed role pages expose employer Apply links without promoting category pages", () => {
+  const html = `<html><head><title>Remote roles</title></head><body>
+    <a href="https://jobs.ashbyhq.com/example/11111111-1111-4111-8111-111111111111/application">
+      Apply for this position</a></body></html>`;
+  const remotive = extractSourcePage(html,
+    "https://remotive.com/remote-jobs/software-development/senior-engineer-123", "remotive");
+  const wwr = extractSourcePage(html,
+    "https://weworkremotely.com/remote-jobs/example-senior-engineer", "weworkremotely");
+  assert.equal(remotive.observedApplyUrl,
+    "https://jobs.ashbyhq.com/example/11111111-1111-4111-8111-111111111111/application");
+  assert.equal(wwr.observedApplyUrl, remotive.observedApplyUrl);
+  assert.equal(extractSourcePage(html,
+    "https://remotive.com/remote-jobs/software-development", "remotive").observedApplyUrl,
+  undefined);
+  assert.equal(extractSourcePage(html,
+    "https://weworkremotely.com/remote-jobs", "weworkremotely").observedApplyUrl,
+  undefined);
+});
+
 test("same-board Apply links remain unverified and challenge pages stop extraction", () => {
   const html = `<!doctype html><html><head><title>Platform Developer at Acme</title></head><body>
     <h1>Platform Developer</h1><p>Remote, Europe</p>

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { jobgetherGeographyScope, parsePublicFeed,
+import { feedItemWithObservedDestination, jobgetherGeographyScope, parsePublicFeed,
   publicFeedUrl } from "../src/discovery/public-feeds.js";
 
 test("Jobgether official API query is bounded and normalized", () => {
@@ -49,6 +49,7 @@ test("Remotive and We Work Remotely feeds preserve eligibility evidence", () => 
   assert.deepEqual(remotive.items[0].compensation,
     { minimum: 70000, maximum: 90000, currency: "EUR", period: "year" });
   assert.equal(remotive.items[0].applicationDestinationVerified, undefined);
+  assert.deepEqual(remotive.detailLinks, [remotive.items[0].listingUrl]);
   const rss = `<rss><channel><item><title>Acme: Platform Developer</title>
     <region>Anywhere in the World</region><description>&lt;p&gt;Node.js and PostgreSQL&lt;/p&gt;</description>
     <link>https://weworkremotely.com/remote-jobs/acme-backend</link></item></channel></rss>`;
@@ -58,4 +59,11 @@ test("Remotive and We Work Remotely feeds preserve eligibility evidence", () => 
   assert.equal(wwr.items[0].location, "Worldwide");
   assert.match(wwr.items[0].description, /Node\.js/);
   assert.equal(wwr.items[0].applicationDestinationVerified, undefined);
+  assert.deepEqual(wwr.detailLinks, [wwr.items[0].listingUrl]);
+  const employerUrl = "https://jobs.ashbyhq.com/example/11111111-1111-4111-8111-111111111111/application";
+  const observed = feedItemWithObservedDestination(wwr.items[0], { observedApplyUrl: employerUrl });
+  assert.equal(observed.applyUrl, employerUrl);
+  assert.equal(observed.listingUrl, wwr.items[0].listingUrl);
+  assert.equal(observed.applicationDestinationVerified, true);
+  assert.deepEqual(feedItemWithObservedDestination(wwr.items[0], {}), wwr.items[0]);
 });
