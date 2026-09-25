@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "purpose": "Public starter sources only. Choose applicant preferences, regions, and employer boards in private configuration.",
+  "searchPolicy": {
+    "residenceCountry": "",
+    "preferredSeniority": [],
+    "excludedSeniority": [],
+    "preferredRemoteScopes": [],
+    "targetEmployerRegions": [],
+    "priorityEmployerCountries": [],
+    "acceptableEngagements": [],
+    "screeningRules": []
+  },
+  "autonomousDiscovery": {
+    "priorityOrder": [],
+    "serverAdapters": [
+      { "id": "remoteok", "name": "Remote OK", "url": "https://remoteok.com/" },
+      { "id": "arbeitnow", "name": "Arbeitnow", "url": "https://www.arbeitnow.com/" },
+      { "id": "jobicy", "name": "Jobicy", "url": "https://jobicy.com/" },
+      { "id": "himalayas", "name": "Himalayas", "url": "https://himalayas.app/jobs" },
+      { "id": "ashby", "name": "Ashby", "url": "https://jobs.ashbyhq.com/" },
+      { "id": "greenhouse", "name": "Greenhouse", "url": "https://job-boards.greenhouse.io/" },
+      { "id": "lever", "name": "Lever", "url": "https://jobs.lever.co/" }
+    ],
+    "visibleBrowserSources": [
+      { "id": "jobgether", "name": "Jobgether", "url": "https://jobgether.com/" },
+      { "id": "remotive", "name": "Remotive", "url": "https://remotive.com/remote-jobs" },
+      { "id": "weworkremotely", "name": "We Work Remotely", "url": "https://weworkremotely.com/remote-jobs" },
+      { "id": "workingnomads", "name": "Working Nomads", "url": "https://www.workingnomads.com/" },
+      { "id": "wellfound", "name": "Wellfound", "url": "https://wellfound.com/jobs" },
+      { "id": "ycombinator", "name": "Y Combinator Work at a Startup", "url": "https://www.ycombinator.com/jobs/role/all" }
+    ]
+  },
+  "userControlled": []
+}

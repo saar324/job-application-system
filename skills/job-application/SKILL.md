@@ -23,7 +23,7 @@ Do not overlap cycles for the same profile or start a new application sub-agent 
 ## Workflow
 
 1. Run `jobctl profile`. Ask only for fields listed as missing, then store supplied facts with `jobctl profile-update`. Use `full_time` unless the user or stored opportunity selects `freelance`. Before calling an application unfinished or asking the owner to repeat an answer, check its application log, prior confirmed answers and conversation, and any earlier browser receipt for the same role. If a prior success page proves a manual submission while the server was offline, reconcile it with `record-submission`; do not reopen or resubmit the form. A stale pending confirmation does not override a verified receipt.
-2. For job discovery or source selection, read [references/sources.json](references/sources.json). Run `jobctl sources` to see enabled source filters, then use bounded `jobctl query` plans where useful. Search and score opportunities using only evidence from the listing and the profile. Do not invent skills, dates, work authorization, compensation, rates, or identity facts.
+2. For job discovery or source selection, read [references/sources.json](references/sources.json). When its autonomous source lists are empty, use the public starter at [references/public-sources.json](references/public-sources.json). Run `jobctl sources` to see enabled source filters, then use bounded `jobctl query` plans where useful. Search and score opportunities using only evidence from the listing and the profile. Do not invent skills, dates, work authorization, compensation, rates, or identity facts.
 3. When the owner sends an application URL, immediately pass it to `jobctl direct` with the requested mode. Do not require them to provide title, company, or score. For discovered jobs, add qualifying opportunities and request application normally.
 4. A successful application request normally returns `queued`. Use `jobctl applications` to observe its later `submitted` or `waiting_confirmation` state; never repeat the apply request because a client stopped waiting.
 5. If the state is `submitted`, report the receipt. If it is `waiting_research`, obtain bounded official company context for the recorded question, then attach its URL and excerpt with `jobctl research ID`. If it is `waiting_confirmation`, run `jobctl inbox`. In Telegram DMs, send every text block in the confirmation's `presentation` through the `message` tool and then its buttons. The final-approval presentation must show every filled and unfilled field and every non-secret answer in full.
@@ -42,7 +42,7 @@ Never handle another profile by changing a request parameter. Profile identity c
 ## All-source campaign pool
 
 When the owner asks for a comprehensive search or a measured application batch, create one campaign containing every
-configured `serverAdapters` source and every `visibleBrowserSources` source from the private catalog. The campaign must
+configured `serverAdapters` source and every `visibleBrowserSources` source from the private catalog, or from the public starter when no private sources are configured. The campaign must
 collect candidates before it opens application forms:
 
 1. Ask each source for at most 10 new eligible roles. A server adapter uses `limitPerSource: 10`. A browser source follows

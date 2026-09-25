@@ -133,6 +133,19 @@ for (const [mode, settings] of Object.entries(defaults.modes ?? {})) {
     failures.push(`config/default.json: ${mode} enables automatic application`);
   }
 }
+
+const starterConfig = JSON.parse(await readFile(path.join(root, "config/discovery.example.json"), "utf8"));
+const publicFeedIds = ["remoteok", "arbeitnow", "jobicy", "himalayas"];
+const expectedStarterConfig = {
+  execution: { adapter: "simulation" },
+  modes: Object.fromEntries(["full_time", "freelance"].map((mode) => [mode, {
+    sources: publicFeedIds, autoApply: false, autoApplyDiscovered: false,
+    submissionApproval: "always"
+  }]))
+};
+if (!isDeepStrictEqual(starterConfig, expectedStarterConfig)) {
+  failures.push("config/discovery.example.json: starter must contain only neutral public feeds and simulation settings");
+}
 for (const [provider, settings] of Object.entries(defaults.discovery?.sourceOptions ?? {})) {
   for (const [key, value] of Object.entries(settings)) {
     if (Array.isArray(value) && value.length) {
@@ -253,6 +266,39 @@ for (const field of ["fields", "seniority"]) {
   if ((catalog.tagDefinitions?.[field] ?? []).length) {
     failures.push(`skills/job-application/references/sources.json: tagDefinitions.${field} is personalized`);
   }
+}
+
+const publicCatalog = JSON.parse(await readFile(
+  path.join(root, "skills/job-application/references/public-sources.json"), "utf8"
+));
+const expectedPublicCatalog = {
+  version: 1,
+  purpose: "Public starter sources only. Choose applicant preferences, regions, and employer boards in private configuration.",
+  searchPolicy: expectedCatalog.searchPolicy,
+  autonomousDiscovery: {
+    priorityOrder: [],
+    serverAdapters: [
+      ["remoteok", "Remote OK", "https://remoteok.com/"],
+      ["arbeitnow", "Arbeitnow", "https://www.arbeitnow.com/"],
+      ["jobicy", "Jobicy", "https://jobicy.com/"],
+      ["himalayas", "Himalayas", "https://himalayas.app/jobs"],
+      ["ashby", "Ashby", "https://jobs.ashbyhq.com/"],
+      ["greenhouse", "Greenhouse", "https://job-boards.greenhouse.io/"],
+      ["lever", "Lever", "https://jobs.lever.co/"]
+    ].map(([id, name, url]) => ({ id, name, url })),
+    visibleBrowserSources: [
+      ["jobgether", "Jobgether", "https://jobgether.com/"],
+      ["remotive", "Remotive", "https://remotive.com/remote-jobs"],
+      ["weworkremotely", "We Work Remotely", "https://weworkremotely.com/remote-jobs"],
+      ["workingnomads", "Working Nomads", "https://www.workingnomads.com/"],
+      ["wellfound", "Wellfound", "https://wellfound.com/jobs"],
+      ["ycombinator", "Y Combinator Work at a Startup", "https://www.ycombinator.com/jobs/role/all"]
+    ].map(([id, name, url]) => ({ id, name, url }))
+  },
+  userControlled: []
+};
+if (!isDeepStrictEqual(publicCatalog, expectedPublicCatalog)) {
+  failures.push("skills/job-application/references/public-sources.json: only reviewed public source definitions are allowed");
 }
 
 const writingStyle = JSON.parse(await readFile(

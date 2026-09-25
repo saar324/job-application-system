@@ -8,10 +8,9 @@ ineligible, and compensation-conflicting records.
 
 ## Flow
 
-1. `run-all-source-campaign.js` reads the private source catalog and creates one campaign.
+1. `run-all-source-campaign.js` reads the public starter catalog by default, or a private catalog supplied with `--catalog`, and creates one campaign.
 2. The seven server adapters search their official or public feeds with a limit of 10 per source.
-3. The browser runner visits each visible source sequentially. It uses the source's prefiltered URL, applies a broad job
-   query when a visible search box exists, reads schema.org `JobPosting` data, follows likely job links, and follows explicit
+3. The browser runner visits each visible source sequentially. It uses the source's listing URL, searches a title from the private profile when a visible search box exists, reads schema.org `JobPosting` data, follows likely job links, and follows explicit
    next-page controls. It reports small candidate batches after each page or detail. The server returns the count that passed
    eligibility, destination, and handled-role gates; the runner continues until 10 have been accepted or the source budget ends.
 4. The server records paging and request telemetry, filters known roles before storage, scores the listing from profile and
@@ -55,7 +54,7 @@ reserve, and verified official ATS roles are rechecked when their discovery evid
 
 The repository has opt-in systemd timer templates for official refresh and daily browser reserve scans. The deployment
 script does not install or enable them. The official timer covers only enabled server adapters; it cannot maintain the
-full browser catalog. The browser timer needs its own private source catalog and working browser runtime. Until both
+full browser catalog. The browser timer needs a reviewed source catalog and working browser runtime. Until both
 are provisioned and validated, the system does not have a maintained all-source reserve. Even when enabled, a daily
 browser scan measures bounded acquisition, not continuous coverage of every source.
 
@@ -65,16 +64,22 @@ Run against a non-production server first:
 
 ```bash
 npm run campaign:all-sources -- \
-  --catalog /private/path/sources.json \
   --server http://127.0.0.1:4310 \
   --token-file /private/path/token \
-  --target 10 --reserve 10 --query engineer
+  --target 10 --reserve 10
 ```
 
-Use `node scripts/run-all-source-campaign.js --reserve-only --catalog /private/path/sources.json
---server http://127.0.0.1:4310 --token-file /private/path/token --target 100 --reserve 0` for a no-submit browser
-reserve scan. `node scripts/refresh-candidate-reserve.js --server http://127.0.0.1:4310 --token-file
-/private/path/token` refreshes the official feeds. Test both commands manually before scheduling them.
+Add `--catalog /private/path/sources.json` for applicant-specific sources. The public starter contains no applicant filters or employer boards. Browser search terms come from the private profile or an explicit `--query`; without a title seed, Jobgether is skipped rather than searched for a hardcoded occupation.
+
+For a no-submit browser reserve scan:
+
+```bash
+node scripts/run-all-source-campaign.js --reserve-only \
+  --server http://127.0.0.1:4310 --token-file /private/path/token \
+  --target 100 --reserve 0
+```
+
+`node scripts/refresh-candidate-reserve.js` refreshes the enabled official feeds. Test both commands manually before scheduling them.
 
 For an authenticated dedicated Chrome profile, add `--headed --user-data-dir /private/path/browser-profile`. The runner
 prints one JSON progress line per source and a final campaign summary with coverage, pool size, application count, and

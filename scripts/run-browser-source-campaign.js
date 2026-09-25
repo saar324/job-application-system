@@ -13,22 +13,25 @@ import { SourceJournal } from "../src/discovery/source-journal.js";
 import { SourceBudget, SourceTimeoutError } from "../src/discovery/source-budget.js";
 import { settleSourcePage } from "../src/discovery/browser-settle.js";
 import { nextQueryPage } from "../src/discovery/query-pagination.js";
-import { searchTitleQueryPlan } from "../src/discovery/search-title-queries.js";
+import { browserQueryPlan } from "../src/discovery/browser-query-plan.js";
 import { browserListingPlan } from "../src/discovery/browser-listing-plan.js";
 import { applyBroadSearch } from "../src/discovery/browser-search.js";
 
 const options = argumentsOf(process.argv.slice(2));
-if (!options.campaign || !options.catalog) {
-  console.error("usage: run-browser-source-campaign --campaign ID --catalog FILE [--server URL] [--token-file FILE] [--source-timeout-ms 50000] [--headed]");
+if (!options.campaign) {
+  console.error("usage: run-browser-source-campaign --campaign ID [--catalog FILE] [--server URL] [--token-file FILE] [--source-timeout-ms 50000] [--headed]");
   process.exit(2);
 }
 if (options.location) {
   throw new Error("--location is not source-specific; configure a reviewed regional listing URL instead");
 }
-const catalog = JSON.parse(await readFile(path.resolve(options.catalog), "utf8"));
+const catalogPath = options.catalog ? path.resolve(options.catalog)
+  : new URL("../skills/job-application/references/public-sources.json", import.meta.url);
+const catalog = JSON.parse(await readFile(catalogPath, "utf8"));
 const querySeed = options.queryPlanFile
   ? JSON.parse(await readFile(path.resolve(options.queryPlanFile), "utf8")) : null;
-const sourceContext = { residenceCountry: catalog.searchPolicy?.residenceCountry };
+const sourceContext = { residenceCountry: catalog.searchPolicy?.residenceCountry,
+  targetEmployerRegions: catalog.searchPolicy?.targetEmployerRegions ?? [] };
 const priority = catalog.autonomousDiscovery?.priorityOrder ?? [];
 const sources = [...(catalog.autonomousDiscovery?.visibleBrowserSources ?? [])]
   .sort((left, right) => rank(priority, left.id) - rank(priority, right.id));
@@ -141,11 +144,15 @@ async function searchSource(source, policy, progressState, budget, sourceCycle =
   try {
     page = await budget.run(() => context.newPage());
     const queryPlan = source.id === "jobgether"
-      ? jobgetherQueryPlan(options.query, policy, sourceCycle) : null;
+      ? browserQueryPlan({ explicitQuery: options.query, seed: querySeed, sourceCycle,
+        searchCycle: options.searchCycle, maximum: Math.min(16, policy.maxListingPages) }) : null;
+    const broadQuery = browserQueryPlan({ explicitQuery: options.query, seed: querySeed,
+      sourceCycle, searchCycle: options.searchCycle, maximum: 2 }).queries[0]?.term;
     const feedQueries = queryPlan ? queryPlan.queries.map((item) => item.term)
-      : [options.query ?? "engineer"];
+      : [broadQuery ?? ""];
     const feedScopes = feedQueries.map((_, index) => source.id === "jobgether"
-      ? jobgetherGeographyScope(sourceContext.residenceCountry, index, sourceCycle) : null);
+      ? jobgetherGeographyScope(sourceContext.residenceCountry, index, sourceCycle,
+        sourceContext.targetEmployerRegions) : null);
     if (queryPlan) {
       progress(source.id, 0, 0, "query-plan", { cycle: queryPlan.cycle,
         queries: queryPlan.queries.map(({ term, origin }, index) =>
@@ -278,8 +285,9 @@ async function searchSource(source, policy, progressState, budget, sourceCycle =
       if (isBlockingStatus(listing.status)) { rateLimited = true; break; }
       if (listing.challenge) { challenge = true; break; }
       if (!listing.ok) { errors.push({ error: `listing returned HTTP ${listing.status}: ${nextUrl}` }); break; }
-      if (pagesVisited === 0) await budget.run(() => applyBroadSearch(page,
-        options.query ?? "engineer", budget));
+      if (pagesVisited === 0 && broadQuery) {
+        await budget.run(() => applyBroadSearch(page, broadQuery, budget));
+      }
       pagesVisited += 1;
       const extracted = extractSourcePage(await budget.run(() => page.content()),
         page.url(), source.id, sourceContext);
@@ -375,28 +383,6 @@ async function politeFeedFetch(url, policy, budget) {
   }, signal: AbortSignal.timeout(budget.timeoutMs(policy.navigationTimeoutMs)) }));
   hostLastRequest.set(host, Date.now());
   return response;
-}
-
-function jobgetherQueryPlan(query, policy, sourceCycle = 0) {
-  if (query && String(query).trim().toLowerCase() !== "engineer") {
-    return { queries: [{ term: String(query).trim(), origin: "explicit" }],
-      skippedTerms: [], coverageBlocked: false, cycle: null };
-  }
-  if (querySeed) {
-    const titles = querySeed.verifiedSubmittedTitles ?? [];
-    if (!querySeed.profile || !Array.isArray(titles)
-      || Object.keys(querySeed.profile).some((key) => key !== "preferences")
-      || titles.some((title) => typeof title !== "string")) {
-      throw new Error("query plan file requires preference-only profile and verifiedSubmittedTitles");
-    }
-    const cycle = Number(options.searchCycle ?? querySeed.cycle ?? sourceCycle);
-    if (!Number.isInteger(cycle) || cycle < 0) throw new Error("search-cycle must be nonnegative");
-    return searchTitleQueryPlan(querySeed.profile, titles,
-      { maximum: Math.min(16, policy.maxListingPages), cycle });
-  }
-  return { queries: ["engineer", "developer", "programmer", "software"]
-    .slice(0, policy.maxListingPages).map((term) => ({ term, origin: "default" })),
-  skippedTerms: [], coverageBlocked: false, cycle: null };
 }
 
 async function report(sourceId, items, metadata, timeoutMs = 120_000) {
