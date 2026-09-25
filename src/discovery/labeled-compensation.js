@@ -17,7 +17,7 @@ function symbolMatchesCurrency(value, currency) {
 
 // Only a labeled annual base salary with an explicit ISO currency is usable
 // for the pay-floor gate. Benefits, bonuses, equity and unlabeled money stay unknown.
-export function greenhouseAnnualSalary(content) {
+export function labeledAnnualSalary(content) {
   const text = plainText(content);
   const matches = [...text.matchAll(RANGE)].filter((match) => {
     const annualLabel = Boolean(match[1]);

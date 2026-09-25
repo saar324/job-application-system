@@ -1,7 +1,7 @@
 import { officialAtsIdentityFromUrl } from "./official-ats.js";
 
 const SOURCE_KEYS = { ashby: ["boards", "slug"], greenhouse: ["boards", "token"],
-  lever: ["sites", "slug"] };
+  lever: ["sites", "slug"], workable: ["boards", "slug"] };
 const MAX_LEARNED_BOARDS = 5;
 const MAX_AGE_MS = 30 * 24 * 60 * 60_000;
 const CURATED_MAX_AGE_MS = 7 * 24 * 60 * 60_000;

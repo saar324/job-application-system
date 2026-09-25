@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- A `workable` discovery source that reads configured Workable accounts from Workable's documented public careers-page endpoint. Workable roles deduplicate across the account and short-link URL forms, are revalidated before a manual application is admitted, and are skipped by every automatic lane with `ats_submission_unsupported` until a Workable submission adapter exists.
+
+### Changed
+
+- The labeled annual-salary extractor is now provider-neutral (`src/discovery/labeled-compensation.js`).
+
 ## [0.2.0] - 2026-09-19
 
 ### Added

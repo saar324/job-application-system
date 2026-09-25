@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { greenhouseAnnualSalary } from "../src/discovery/greenhouse-compensation.js";
+import { labeledAnnualSalary } from "../src/discovery/labeled-compensation.js";
 import { greenhouse } from "../src/discovery/sources/greenhouse.js";
 import { fetchVerifiedOfficialAtsRole } from "../src/discovery/official-ats.js";
 import { scoreOpportunity } from "../src/discovery/scoring.js";
@@ -21,17 +21,17 @@ test("Greenhouse feed and fresh official detail expose the same explicit annual 
 });
 
 test("Greenhouse salary parser ignores non-salary money and ambiguous periods", () => {
-  assert.equal(greenhouseAnnualSalary("Travel budget: $80k–$105k USD annually."), undefined);
-  assert.equal(greenhouseAnnualSalary("Bonus: $80k–$105k USD annually."), undefined);
-  assert.equal(greenhouseAnnualSalary("Salary: $80k–$105k USD."), undefined);
-  assert.equal(greenhouseAnnualSalary("Salary: $80k–$105k USD monthly."), undefined);
-  assert.equal(greenhouseAnnualSalary("Annual salary: $80k–$105k USD monthly."), undefined);
-  assert.equal(greenhouseAnnualSalary("Annual salary: €80k–€105k USD."), undefined);
-  assert.equal(greenhouseAnnualSalary("Annual salary: $80k–$105k USD. Annual salary: $90k–$120k USD."), undefined);
+  assert.equal(labeledAnnualSalary("Travel budget: $80k–$105k USD annually."), undefined);
+  assert.equal(labeledAnnualSalary("Bonus: $80k–$105k USD annually."), undefined);
+  assert.equal(labeledAnnualSalary("Salary: $80k–$105k USD."), undefined);
+  assert.equal(labeledAnnualSalary("Salary: $80k–$105k USD monthly."), undefined);
+  assert.equal(labeledAnnualSalary("Annual salary: $80k–$105k USD monthly."), undefined);
+  assert.equal(labeledAnnualSalary("Annual salary: €80k–€105k USD."), undefined);
+  assert.equal(labeledAnnualSalary("Annual salary: $80k–$105k USD. Annual salary: $90k–$120k USD."), undefined);
 });
 
 test("an explicit annual Greenhouse ceiling enters the configured pay-floor gate", () => {
-  const compensation = greenhouseAnnualSalary("Salary: $80,000 to $105,000 USD per year");
+  const compensation = labeledAnnualSalary("Salary: $80,000 to $105,000 USD per year");
   assert.deepEqual(compensation, { minimum: 80_000, maximum: 105_000,
     currency: "USD", period: "year" });
   const base = { title: "Senior Engineer", description: "TypeScript Node.js",
