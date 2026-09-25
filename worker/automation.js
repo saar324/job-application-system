@@ -14,6 +14,7 @@ const SIGNUP_BUTTON = /create account|register|sign up/i;
 const SUCCESS_TEXT = /thank you|application (?:has been |was )?(?:successfully )?submitted|application received|received your application/i;
 const BLOCKED_SUBMISSION_TEXT = /we couldn't submit your application[\s\S]*flagged as possible spam/i;
 const CHALLENGE_TEXT = /captcha|verify you are human|security check|unusual traffic|cloudflare/i;
+const MISSING_POSTING_BODY = /\b(?:Job not found\s*The job you requested was not found|Page not found\s*The page you requested was not found)\b/i;
 const VERIFICATION_FIELD = /\b(otp|one.?time|verification code|security code|authenticator|two.?factor|2fa|mfa|passkey)\b/i;
 const NARRATIVE_QUESTION = /\b(?:why|motivation|cover letter|describe|explain|project|challenge|achievement|accomplishment|story|what interests|tell us about)\b/i;
 const REUSABLE_FACT_QUESTION = /^(?:how did you hear about (?:this|the) (?:job|role)|referral source|current employer|current job title|notice period|start date|how many years of [a-z0-9 ]+ experience|[a-z ]+ language proficiency)$/;
@@ -899,11 +900,14 @@ export async function automateApplication({ page, profile, opportunity, applicat
   // React-based ATS pages can finish DOMContentLoaded before the application
   // controls are mounted. Wait for a real control so the first inspection does
   // not incorrectly classify a supported form as empty.
-  await page.locator("input, textarea, select, button, iframe").first()
-    .waitFor({ state: "attached", timeout: 10_000 }).catch(() => undefined);
+  await page.waitForFunction((missingPostingPattern) =>
+    document.querySelector("input, textarea, select, button, iframe")
+      || new RegExp(missingPostingPattern, "i").test(document.body?.innerText ?? ""),
+  MISSING_POSTING_BODY.source, { timeout: 10_000 }).catch(() => undefined);
   const surfaceDeadline = Date.now() + 10_000;
   while (Date.now() < surfaceDeadline) {
     if (await findAction(page).catch(() => null)) break;
+    if (MISSING_POSTING_BODY.test(await page.locator("body").innerText().catch(() => ""))) break;
     await page.waitForTimeout(200);
   }
   await page.waitForTimeout(150);
@@ -1164,7 +1168,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
         message: "The application site presented a human verification challenge",
         requirements: [{ kind: "human_challenge", action: "manual_review",
           message: "Complete or inspect the browser challenge" }] }, step);
-      if (!inventory.length && /\bJob not found\b\s*The job you requested was not found\./i.test(body)) {
+      if (!inventory.length && MISSING_POSTING_BODY.test(body)) {
         return pause({ status: "posting_unavailable", reasonCode: "posting_not_found",
           message: "The employer application page says the job was not found" }, step);
       }

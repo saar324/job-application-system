@@ -424,6 +424,14 @@ test("an explicit missing employer posting stops without a form review", async (
   assert.equal(result.checkpoint.fields.length, 0);
 });
 
+test("an Ashby missing application page is classified as unavailable", async () => {
+  const result = await run(`<main><h1>Page not found</h1>
+    <p>The page you requested was not found</p></main>`);
+  assert.equal(result.status, "posting_unavailable");
+  assert.equal(result.reasonCode, "posting_not_found");
+  assert.equal(result.checkpoint.fields.length, 0);
+});
+
 test("an expired Greenhouse role redirect is classified as unavailable", () => {
   assert.equal(unavailablePostingUrl("https://job-boards.greenhouse.io/appfire?error=true"), true);
   assert.equal(unavailablePostingUrl("https://job-boards.greenhouse.io/appfire/jobs/123"), false);
