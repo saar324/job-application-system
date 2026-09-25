@@ -4,10 +4,12 @@ export function publicFeedUrl(sourceId, { query = "", page = 1, limit = 25,
     const url = new URL("https://jobgether.com/api/v1/jobs");
     const country = String(residenceCountry ?? "").trim().toLowerCase();
     const location = geographyScope === "residence" && country ? country
-      : geographyScope && geographyScope !== "residence" ? String(geographyScope).toLowerCase()
-        : country || "worldwide";
-    const parameters = new URLSearchParams({ locations: location, remoteType: "full-remote",
+      : geographyScope === "worldwide" ? null
+        : geographyScope && geographyScope !== "residence" ? String(geographyScope).toLowerCase()
+          : country || null;
+    const parameters = new URLSearchParams({ remoteType: "full-remote",
       sort: "relevance", page: String(page), limit: String(Math.min(25, limit)) });
+    if (location) parameters.set("locations", location);
     if (String(query).trim()) parameters.set("keyword", String(query).trim());
     url.search = parameters.toString();
     return url.toString();
