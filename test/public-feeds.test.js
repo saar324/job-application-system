@@ -11,7 +11,7 @@ test("Jobgether official API query is bounded and normalized", () => {
   assert.equal(url.searchParams.get("remoteType"), "full-remote");
   assert.equal(url.searchParams.get("sort"), "relevance");
   assert.equal(url.searchParams.get("limit"), "25");
-  assert.equal(new URL(publicFeedUrl("jobgether")).searchParams.get("locations"), "worldwide");
+  assert.equal(new URL(publicFeedUrl("jobgether")).searchParams.has("locations"), false);
   assert.equal(new URL(publicFeedUrl("jobgether")).searchParams.has("keyword"), false);
   assert.equal(new URL(publicFeedUrl("jobgether")).searchParams.has("contractType"), false);
   assert.deepEqual([0, 1, 2].map((index) => jobgetherGeographyScope("Portugal", index)),
@@ -23,9 +23,9 @@ test("Jobgether official API query is bounded and normalized", () => {
   assert.equal(new URL(publicFeedUrl("jobgether", { residenceCountry: "Portugal",
     geographyScope: "residence" })).searchParams.get("locations"), "portugal");
   assert.equal(new URL(publicFeedUrl("jobgether", { residenceCountry: "Portugal",
-    geographyScope: "worldwide" })).searchParams.get("locations"), "worldwide");
+    geographyScope: "worldwide" })).searchParams.has("locations"), false);
   assert.equal(new URL(publicFeedUrl("jobgether", { residenceCountry: "",
-    geographyScope: "residence" })).searchParams.get("locations"), "worldwide");
+    geographyScope: "residence" })).searchParams.has("locations"), false);
   const parsed = parsePublicFeed("jobgether", { jobs: [{ id: "one", title: "Platform Developer",
     company: "Acme", url: "https://jobgether.com/offer/one", location: "Europe",
     remote: "Full Remote", contractType: "Full time", postedAt: "2026-09-20",
