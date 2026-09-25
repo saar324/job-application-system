@@ -52,7 +52,7 @@ Set `AUTH_DISABLED=false`, `JOB_SERVER_TOKENS_FILE=./data/tokens.json`, and the 
 
 ## 3. Configure discovery
 
-Copy `config/default.json` to ignored `config/local.json`, set `JOB_SERVER_CONFIG=./config/local.json`, and enable only reviewed source IDs. Employer-specific Ashby, Greenhouse, and Lever boards belong under `discovery.sourceOptions` in this private file. The repository intentionally ships with empty source selections.
+Copy `config/discovery.example.json` to ignored `config/local.json` and set `JOB_SERVER_CONFIG=./config/local.json` for four public feeds in simulation. The public browser-source starter is `skills/job-application/references/public-sources.json`. The base `config/default.json` still enables no sources. Employer-specific Ashby, Greenhouse, and Lever boards, source priorities, regions, and search preferences belong in private files.
 
 Keep `autoApply` and `autoApplyDiscovered` false until scoring, location eligibility, compensation policy, and final-approval behavior have been tested with your profile.
 

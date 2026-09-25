@@ -7,11 +7,8 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const options = argumentsOf(process.argv.slice(2));
-if (!options.catalog) {
-  console.error("usage: run-all-source-campaign --catalog FILE [--target 10] [--reserve 10] [--reserve-only] [--source-timeout-ms 50000] [--server URL] [--token-file FILE] [--headed]");
-  process.exit(2);
-}
-const catalogPath = path.resolve(options.catalog);
+const catalogPath = options.catalog ? path.resolve(options.catalog)
+  : fileURLToPath(new URL("../skills/job-application/references/public-sources.json", import.meta.url));
 const catalog = JSON.parse(await readFile(catalogPath, "utf8"));
 const primary = (catalog.autonomousDiscovery?.serverAdapters ?? []).map((source) => source.id);
 const fallback = (catalog.autonomousDiscovery?.visibleBrowserSources ?? []).map((source) => source.id);

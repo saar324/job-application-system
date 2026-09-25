@@ -6,9 +6,9 @@ Agents are the primary operators. The API exposes durable, machine-readable work
 
 Agent-first does not mean tied to a particular agent runtime or to a broader personal operating system. Codex, OpenClaw, a custom agent, or another compatible runtime can drive the same HTTP API. The included `jobctl` program is the reference transport and an operator/debugging fallback—not the intended production orchestrator.
 
-This repository intentionally contains no real applicant profiles, resumes, application records, credentials, preferred employers, source selections, compensation requirements, or writing preferences. The included defaults are safe templates: discovery and automatic application are disabled until a deployment opts in.
+This repository intentionally contains no real applicant profiles, resumes, application records, credentials, preferred employers, applicant-specific source selections, compensation requirements, or writing preferences. The included defaults are safe templates: discovery and automatic application are disabled until a deployment opts in. A separate public starter catalog contains only reusable source names and unfiltered listing URLs.
 
-Start with [Getting started](docs/getting-started.md). It separates a five-minute local simulation from authenticated and production deployment, and lists every private file a new operator must create. The single-agent efficiency upgrade is documented in [Application efficiency upgrade](docs/application-efficiency-upgrade.md), with the [2026-09-21 production rollout record](docs/production-rollout-2026-09-21.md) and [2026-09-22 public-board handoff check](docs/public-board-handoff-2026-09-22.md).
+Start with [Getting started](docs/getting-started.md). It separates a five-minute local simulation from authenticated and production deployment, and lists every private file a new operator must create. [Public starter sources](docs/public-starter-sources.md) explains the reusable catalog and safe discovery config. The single-agent efficiency upgrade is documented in [Application efficiency upgrade](docs/application-efficiency-upgrade.md), with the [2026-09-21 production rollout record](docs/production-rollout-2026-09-21.md) and [2026-09-22 public-board handoff check](docs/public-board-handoff-2026-09-22.md).
 
 ## Capabilities
 
@@ -50,7 +50,7 @@ Keep deployment-specific material outside Git or in the ignored paths shown belo
 | Applicant profiles and answers | `config/profiles.json` or a private absolute path |
 | Runtime state and receipts | `data/` or `/var/lib/job-application/` |
 | Resumes and other documents | a private directory allowed by `JOB_SERVER_ALLOWED_DOCUMENT_ROOTS` |
-| Employer boards and enabled source IDs | `config/local.json` or another private config file |
+| Employer boards and applicant-specific source selections | `config/local.json` or another private config file |
 | Applicant-specific source catalog and writing style | private copies of the skill reference JSON files |
 
 Do not commit any of these files. Run `npm run privacy:check` before every push.
@@ -93,7 +93,7 @@ The API reports missing onboarding fields. Discovery becomes available when sear
 
 ## Configure discovery privately
 
-No source is enabled by default. Copy `config/default.json` to ignored `config/local.json`, set `JOB_SERVER_CONFIG=./config/local.json`, and choose source IDs for each mode. Supported adapters are registered in `src/discovery/service.js`.
+No source is enabled by default. For a safe public-feed starter, copy `config/discovery.example.json` to ignored `config/local.json` and set `JOB_SERVER_CONFIG=./config/local.json`. This enables four public discovery feeds in simulation, with automatic application off. The public source catalog is at `skills/job-application/references/public-sources.json`; `npm run campaign:all-sources` uses it when `--catalog` is omitted. Supply a private catalog with `--catalog` for applicant-specific sources and regions. Supported server adapters are registered in `src/discovery/service.js`.
 
 Ashby, Greenhouse, and Lever require explicit board configuration; the repository does not ship with employer selections:
 

@@ -4,7 +4,7 @@ Configuration is layered: `config/default.json` supplies safe repository default
 
 ## Repository defaults
 
-The shared defaults use simulation, require final approval, disable automatic application, and enable no discovery sources. Keep those properties unless a deployment has been reviewed for live use.
+The shared defaults use simulation, require final approval, disable automatic application, and enable no discovery sources. `config/discovery.example.json` is a separate, optional starter that enables four public feeds while retaining simulation and final approval. Copy it to ignored `config/local.json` to opt in. The public browser-source list is `skills/job-application/references/public-sources.json`; it contains no applicant search policy or employer boards.
 
 ## Private files
 
@@ -68,4 +68,4 @@ Adaptive execution is disabled unless both `WORKER_ADAPTIVE_ENABLED=true` and `W
 
 ## Applicant writing and sources
 
-The repository skill ships neutral, empty reference templates. If a deployment customizes `sources.json` or `writing-style.json`, keep those customized copies out of this shared repository and install them directly into the private applicant workspace.
+The repository skill ships neutral, empty private reference templates and a separate public starter catalog. The starter contains only general source names and unfiltered HTTPS listing URLs; its ATS entries require private employer-board configuration before they can return roles. If a deployment customizes `sources.json` or `writing-style.json`, keep those customized copies out of this shared repository and install them directly into the private applicant workspace. Profile titles, regions, work rights, compensation, priorities, board IDs, and screening rules remain private.

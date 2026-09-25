@@ -1,28 +1,37 @@
-export function publicFeedUrl(sourceId, { query = "engineer", page = 1, limit = 25,
-  residenceCountry, geographyScope = "europe" } = {}) {
+export function publicFeedUrl(sourceId, { query = "", page = 1, limit = 25,
+  residenceCountry, geographyScope } = {}) {
   if (sourceId === "jobgether") {
     const url = new URL("https://jobgether.com/api/v1/jobs");
     const country = String(residenceCountry ?? "").trim().toLowerCase();
     const location = geographyScope === "residence" && country ? country
-      : geographyScope === "worldwide" ? "worldwide" : "europe";
-    url.search = new URLSearchParams({ keyword: query,
-      locations: location,
-      contractType: "full-time", remoteType: "full-remote", sort: "relevance",
-      page: String(page), limit: String(Math.min(25, limit)) }).toString();
+      : geographyScope && geographyScope !== "residence" ? String(geographyScope).toLowerCase()
+        : country || "worldwide";
+    const parameters = new URLSearchParams({ locations: location, remoteType: "full-remote",
+      sort: "relevance", page: String(page), limit: String(Math.min(25, limit)) });
+    if (String(query).trim()) parameters.set("keyword", String(query).trim());
+    url.search = parameters.toString();
     return url.toString();
   }
   if (sourceId === "remotive") {
-    return `https://remotive.com/api/remote-jobs?category=software-dev&limit=${Math.min(100, limit)}`;
+    return `https://remotive.com/api/remote-jobs?limit=${Math.min(100, limit)}`;
   }
   if (sourceId === "weworkremotely") {
-    return "https://weworkremotely.com/categories/remote-programming-jobs.rss";
+    return "https://weworkremotely.com/remote-jobs.rss";
   }
   return null;
 }
 
-export function jobgetherGeographyScope(residenceCountry, queryIndex = 0, sourceCycle = 0) {
-  const scopes = String(residenceCountry ?? "").trim()
-    ? ["europe", "residence", "worldwide"] : ["europe", "worldwide"];
+export function jobgetherGeographyScope(residenceCountry, queryIndex = 0, sourceCycle = 0,
+  preferredRegions = []) {
+  const regions = Array.isArray(preferredRegions) ? preferredRegions
+    .map((value) => {
+      const label = String(value).trim();
+      if (/\b(?:eu|eea|europe|european)\b/i.test(label)) return "europe";
+      if (/\b(?:worldwide|global|anywhere)\b/i.test(label)) return "worldwide";
+      return null;
+    }).filter(Boolean).slice(0, 3) : [];
+  const scopes = [...new Set([...regions,
+    ...(String(residenceCountry ?? "").trim() ? ["residence"] : []), "worldwide"])];
   const cycle = Number.isInteger(sourceCycle) && sourceCycle >= 0 ? sourceCycle : 0;
   return scopes[(queryIndex + cycle) % scopes.length];
 }

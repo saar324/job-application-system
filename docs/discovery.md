@@ -2,7 +2,7 @@
 
 Discovery adapters normalize provider-specific listings into one opportunity model and fail independently, so one unavailable provider does not stop a scan.
 
-The codebase includes adapter implementations for public feeds and configurable ATS boards. No adapter is enabled in the repository defaults, and no employer board is preconfigured. Select source IDs and employer boards only in a private config file.
+The codebase includes adapter implementations for public feeds and configurable ATS boards. No adapter is enabled in the base defaults, and no employer board is preconfigured. An optional `config/discovery.example.json` enables four public feeds in simulation. `skills/job-application/references/public-sources.json` lists broad public browser sources and the seven server adapter types without applicant filters. Select employer boards and personal source priorities only in a private config file.
 
 ## Private configuration
 
@@ -23,7 +23,7 @@ Mode-level `sources` chooses enabled adapter IDs. ATS board selections live unde
 }
 ```
 
-The installed skill's `references/sources.json` is intentionally empty. A deployment can maintain a private copy with its own browser sources, regions, screening rules, and priorities.
+The installed skill's `references/sources.json` remains an empty private template. A fresh installation can use `references/public-sources.json` as a general starter. A deployment can maintain a private `sources.json` with its own browser sources, regions, screening rules, and priorities; the public starter never replaces that private copy.
 
 Additional official ATS boards may be admitted from a profile's recent verified official role or real employer receipt. The owner may also put a reviewed official role URL in the private server configuration for that profile:
 
