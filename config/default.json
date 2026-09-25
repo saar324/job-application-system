@@ -14,7 +14,8 @@
     "sourceOptions": {
       "ashby": { "boards": [] },
       "greenhouse": { "boards": [] },
-      "lever": { "sites": [] }
+      "lever": { "sites": [] },
+      "workable": { "boards": [] }
     }
   },
   "modes": {

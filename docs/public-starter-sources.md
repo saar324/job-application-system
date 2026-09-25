@@ -6,8 +6,9 @@ configuration at `config/discovery.example.json`. Both are independent of any
 applicant. The base `config/default.json` still enables no sources.
 
 The starter lists four public server feeds: Remote OK, Arbeitnow, Jobicy, and
-Himalayas. It also names Ashby, Greenhouse, and Lever as supported adapter
-types; they return no roles until an operator adds employer boards privately.
+Himalayas. It also names Ashby, Greenhouse, Lever, and Workable as supported
+adapter types; they return no roles until an operator adds employer boards
+privately. Workable roles are never applied to automatically.
 The browser catalog has six broad sources: Jobgether, Remotive, We Work
 Remotely, Working Nomads, Wellfound, and Y Combinator. It uses general listing
 pages without occupation, country, compensation, or seniority filters.

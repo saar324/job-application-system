@@ -13,24 +13,26 @@ import { jobspipe, JOBSPIPE_ARRAY_FILTERS, JOBSPIPE_FILTERS, JOBSPIPE_FILTER_FOR
 import { credentialFingerprint, isKeyedSource, missingCredentialMessage, redactSecrets,
   sourceCredentials } from "./source-credentials.js";
 import { PACED_WINDOWS, quotaError, quotaLimits, SourceQuota } from "./source-quota.js";
+import { workable } from "./sources/workable.js";
 import { scoreOpportunity } from "./scoring.js";
 import { telemetry } from "../telemetry.js";
 import { normalizeOpportunity } from "./normalization.js";
 import { runIdempotent } from "../idempotency.js";
-import { isHandledRole, knownRoleIndex, roleKeys } from "./handled-roles.js";
+import { isHandledRole, knownRoleIndex, roleKeys, STABLE_ROLE_KEY } from "./handled-roles.js";
 import { leadRetryDecision, matchingStoredLead } from "./candidate-state.js";
 import { selectSemanticCandidateIndexes } from "./semantic-candidate-selection.js";
 import { selectFitReviewCandidates } from "./fit-review-selection.js";
 import { legacyDiscoveryTitleRelevant } from "./title-preferences.js";
-import { fetchVerifiedOfficialAtsRole, officialAtsDestination, officialAtsIdentityFromUrl } from "./official-ats.js";
+import { ATS_SUBMISSION_UNSUPPORTED, automaticSubmissionUnsupported, employerAtsDestination,
+  fetchVerifiedOfficialAtsRole, officialAtsDestination, officialAtsIdentityFromUrl } from "./official-ats.js";
 import { sourceConfigWithLearnedBoards, isLearnedBoardRequest,
   learnedBoardRequestsInLastDay, MAX_LEARNED_BOARD_REQUESTS_PER_DAY } from "./learned-boards.js";
 
-const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever, adzuna, jobspipe]
-  .map((source) => [source.id, source]));
+const SOURCES = new Map([remoteok, arbeitnow, jobicy, himalayas, greenhouse, ashby, lever, adzuna, jobspipe,
+  workable].map((source) => [source.id, source]));
 const atsBoardKey = (parsed) => parsed ? `${parsed.source}:${parsed.board}` : null;
 const AGGREGATOR_SOURCES = new Set(["himalayas", "jobicy"]);
-const STAGED_ATS_SOURCES = new Set(["ashby", "greenhouse", "lever"]);
+const STAGED_ATS_SOURCES = new Set(["ashby", "greenhouse", "lever", "workable"]);
 const discoverySourceOf = (role) => role.discoverySource ?? role.source;
 const exactRoleText = (value) => String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 
@@ -131,7 +133,9 @@ export class DiscoveryService {
       jobspipe: { kind: "keyed_api", filters: Object.fromEntries(JOBSPIPE_FILTERS.map((key) => [key, "provider"])),
         filterFormats: JOBSPIPE_FILTER_FORMATS, arrayFilters: JOBSPIPE_ARRAY_FILTERS,
         maxResultsPerPage: jobspipeSettings(this.config.discovery?.sourceOptions?.jobspipe).pageSize,
-        applicationFlow: "verify_official_ats_before_prepare" }
+        applicationFlow: "verify_official_ats_before_prepare" },
+      workable: { kind: "official_feed", filters: { board: "configured", title: "local", location: "local" },
+        automaticSubmission: "unsupported" }
     };
     const sourceOptions = this.config.discovery?.sourceOptions ?? {};
     return { mode: selectedMode, sources: await Promise.all(enabled.filter((id) => SOURCES.has(id)).map(async (id) => ({
@@ -237,7 +241,9 @@ export class DiscoveryService {
       const preloaded = input.reserveOnly ? [] : await this.#freshReserveCandidates(identity,
         await this.profiles.get(identity.profileId), mode,
         target + reserve);
+      const unsupported = scan.items.filter((entry) => automaticSubmissionUnsupported(entry.opportunity));
       const ready = [...scan.items, ...preloaded].filter((entry) => !entry.opportunity.applicationDestinationPending
+        && !automaticSubmissionUnsupported(entry.opportunity)
         && entry.opportunity.discoveryRelease?.stage !== "advisory"
         && /^https:\/\//i.test(entry.opportunity.applyUrl ?? ""));
       const ranked = [...ready].sort((left, right) => Number(right.opportunity.score ?? 0) - Number(left.opportunity.score ?? 0)
@@ -262,7 +268,8 @@ export class DiscoveryService {
         sourceYield: scan.sourceYield.map((row) => ({ ...row,
           selected: selected.filter((entry) => discoverySourceOf(entry.opportunity) === row.sourceId).length })),
         durations: scan.durations,
-        destinationPending: scan.items.length - ready.length,
+        destinationPending: scan.items.length - ready.length - unsupported.length,
+        submissionUnsupported: unsupported.length,
         selectedOpportunityIds: selected.map((entry) => entry.opportunity.id),
         applicationIds, errors: scan.errors
       }, identity);
@@ -772,7 +779,7 @@ export class DiscoveryService {
     });
     const sourceYield = new Map(selected.map(({ id }) => [id, {
       sourceId: id, found: 0, qualifying: 0, excluded: 0,
-      handledFiltered: 0, destinationPending: 0, selected: 0, scored: 0,
+      handledFiltered: 0, destinationPending: 0, submissionUnsupported: 0, selected: 0, scored: 0,
       exclusionCounts: { hardExclusion: 0, belowScore: 0,
         opportunisticRequirements: 0, fitReview: 0 }
     }]));
@@ -944,9 +951,9 @@ export class DiscoveryService {
       try { return await source.search({
       // The official feeds can be scored locally without extra provider
       // requests, so inspect a wider bounded pool before the accepted cap.
-      limit: query?.limit ?? (["ashby", "greenhouse", "lever"].includes(source.id) ? 500 : 200),
+      limit: query?.limit ?? (STAGED_ATS_SOURCES.has(source.id) ? 500 : 200),
       query: query?.filters,
-      fetchImpl: (url, options) => ["ashby", "greenhouse", "lever"].includes(source.id)
+      fetchImpl: (url, options) => STAGED_ATS_SOURCES.has(source.id)
         ? pacedOfficialFetch(url, options, source.id) : cachedFetch(url, options, source.id),
       profile,
       searchTitles,
@@ -989,7 +996,7 @@ export class DiscoveryService {
     }
     for (const error of errors) {
       const restricted = /returned HTTP (403|429)\b/i.exec(String(error.error ?? ""));
-      if (restricted && ["ashby", "greenhouse", "lever"].includes(error.source)
+      if (restricted && STAGED_ATS_SOURCES.has(error.source)
         && typeof error.board === "string" && error.board) {
         await this.#recordAtsBackoff(identity, `${error.source}:${error.board}`,
           `http_${restricted[1]}`);
@@ -1160,8 +1167,7 @@ export class DiscoveryService {
           officialResolutionMs += elapsed;
         }
       }
-      const officialKeys = [...roleKeys(candidate)].filter((key) =>
-        /^(ashby|greenhouse|lever):/.test(key));
+      const officialKeys = [...roleKeys(candidate)].filter((key) => STABLE_ROLE_KEY.test(key));
       if (officialKeys.some((key) => seenOfficialKeys.has(key))) {
         if (row) row.dedupFiltered += 1;
         continue;
@@ -1299,7 +1305,9 @@ export class DiscoveryService {
       // This flag is derived from a server-fetched official ATS row and its
       // stable role URL, never from caller-supplied source metadata.
       scored.applicationDestinationVerified = officialAtsDestination(scored);
-      if (!scored.applicationDestinationVerified) scored.applicationDestinationPending = true;
+      // A Workable role read from its own account names the employer's ATS,
+      // but stays unverified so no automatic lane can submit it.
+      if (!employerAtsDestination(scored)) scored.applicationDestinationPending = true;
       if (isHandled(scored)) {
         excluded += 1;
         if (sourceYield.has(discoverySourceOf(raw))) sourceYield.get(discoverySourceOf(raw)).excluded += 1;
@@ -1308,6 +1316,9 @@ export class DiscoveryService {
       if (sourceYield.has(discoverySourceOf(raw))) {
         sourceYield.get(discoverySourceOf(raw)).qualifying += 1;
         if (scored.applicationDestinationPending) sourceYield.get(discoverySourceOf(raw)).destinationPending += 1;
+        else if (automaticSubmissionUnsupported(scored)) {
+          sourceYield.get(discoverySourceOf(raw)).submissionUnsupported += 1;
+        }
       }
       accepted.push(scored);
     }
@@ -1323,7 +1334,8 @@ export class DiscoveryService {
       return true;
     });
     for (const scored of selectedAccepted) {
-      if (sourceYield.has(discoverySourceOf(scored)) && !scored.applicationDestinationPending) {
+      if (sourceYield.has(discoverySourceOf(scored)) && !scored.applicationDestinationPending
+        && !automaticSubmissionUnsupported(scored)) {
         sourceYield.get(discoverySourceOf(scored)).selected += 1;
       }
       const opportunity = await this.applicationService.addOpportunity({
@@ -1338,6 +1350,8 @@ export class DiscoveryService {
       if (autoApplyDiscovered && scored.applicationDestinationPending) {
         entry.applicationBlockedBySource = "employer_application_url_required";
         telemetry.count("discovery.application_destination_pending", 1, { source: scored.source });
+      } else if (autoApplyDiscovered && automaticSubmissionUnsupported(scored)) {
+        entry.applicationBlockedBySource = ATS_SUBMISSION_UNSUPPORTED;
       } else if (autoApplyDiscovered && opportunity.discoveryRelease?.stage === "advisory") {
         entry.applicationBlockedBySource = "advisory_fit_review_required";
       } else if (autoApplyDiscovered && profileStatus.readyToApply) {

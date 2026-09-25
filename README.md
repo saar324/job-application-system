@@ -95,7 +95,7 @@ The API reports missing onboarding fields. Discovery becomes available when sear
 
 No source is enabled by default. For a safe public-feed starter, copy `config/discovery.example.json` to ignored `config/local.json` and set `JOB_SERVER_CONFIG=./config/local.json`. This enables four public discovery feeds in simulation, with automatic application off. The public source catalog is at `skills/job-application/references/public-sources.json`; `npm run campaign:all-sources` uses it when `--catalog` is omitted. Supply a private catalog with `--catalog` for applicant-specific sources and regions. Supported server adapters are registered in `src/discovery/service.js`.
 
-Ashby, Greenhouse, and Lever require explicit board configuration; the repository does not ship with employer selections:
+Ashby, Greenhouse, Lever, and Workable require explicit board configuration; the repository does not ship with employer selections. Workable roles are discovery-only for automation (see [Discovery adapters](docs/discovery.md#workable)):
 
 ```json
 {
@@ -103,7 +103,8 @@ Ashby, Greenhouse, and Lever require explicit board configuration; the repositor
     "sourceOptions": {
       "ashby": { "boards": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] },
       "greenhouse": { "boards": [{ "token": "REPLACE_ME", "company": "REPLACE_ME" }] },
-      "lever": { "sites": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] }
+      "lever": { "sites": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] },
+      "workable": { "boards": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] }
     }
   },
   "modes": {
