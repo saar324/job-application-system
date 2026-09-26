@@ -19,6 +19,18 @@ const VERIFICATION_FIELD = /\b(otp|one.?time|verification code|security code|aut
 const NARRATIVE_QUESTION = /\b(?:why|motivation|cover letter|describe|explain|project|challenge|achievement|accomplishment|story|what interests|tell us about)\b/i;
 const REUSABLE_FACT_QUESTION = /^(?:how did you hear about (?:this|the) (?:job|role)|referral source|current employer|current job title|notice period|start date|how many years of [a-z0-9 ]+ experience|[a-z ]+ language proficiency)$/;
 
+function savedAnnualSalary(field, profile) {
+  const label = normalize(field.label);
+  if (!/\b(?:expect|expected|expectations|desired)\b/.test(label)
+    || !/\b(?:annual|yearly|per year)\b/.test(label)
+    || !/\b(?:salary|compensation|pay)\b/.test(label)
+    || /\b(?:current|previous|past|usd|dollars|gbp|pounds)\b/.test(label)
+    || /[$£]/.test(field.label ?? "")) return undefined;
+  const value = profile.applicationAnswers?.annual_salary_expectation;
+  if (typeof value !== "string" || !value.trim() || /[\r\n]/.test(value)) return undefined;
+  return value.trim();
+}
+
 async function greenhouseEmailCodeChallenge(page, body) {
   let host;
   try { host = new URL(page.url()).hostname; } catch { return false; }
@@ -187,6 +199,7 @@ function flattenProfile(profile, currentUrl) {
 function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, approvedAnswers = [], opportunity = {}, skills = [], profile = {}) {
   const candidates = [...new Set([field.name, field.id, field.label, field.groupQuestion]
     .filter(Boolean).flatMap((value) => [value, withoutRequiredMarker(value)]))];
+  const annualSalary = savedAnnualSalary(field, profile);
   if (field.type === "checkbox" && field.groupQuestion) {
     for (const candidate of [field.name, field.groupQuestion]) {
       const direct = Object.hasOwn(answers, candidate) ? answers[candidate] : answers[normalize(candidate)];
@@ -197,10 +210,15 @@ function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, appr
     }
   }
   for (const candidate of candidates) {
-    if (Object.hasOwn(answers, candidate)) return { value: answers[candidate], source: "application answer" };
+    if (Object.hasOwn(answers, candidate)) return { value: answers[candidate],
+      source: annualSalary !== undefined && answers[candidate] === annualSalary
+        ? "verified profile fact" : "application answer" };
     const key = normalize(candidate);
-    if (Object.hasOwn(answers, key)) return { value: answers[key], source: "application answer" };
+    if (Object.hasOwn(answers, key)) return { value: answers[key],
+      source: annualSalary !== undefined && answers[key] === annualSalary
+        ? "verified profile fact" : "application answer" };
   }
+  if (annualSalary !== undefined) return { value: annualSalary, source: "verified profile fact" };
   for (const candidate of candidates) {
     const key = normalize(candidate);
     if (Object.hasOwn(preparedAnswers, candidate)) return { value: preparedAnswers[candidate], source: "drafted prose" };
