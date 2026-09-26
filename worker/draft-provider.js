@@ -1,6 +1,6 @@
 const SENSITIVE_QUESTION = /authorization|citizen|visa|sponsor|salary|compensation|rate|age|birth|gender|race|ethnic|disabil|veteran|legal|certif|agree|consent|signature|pronoun|address|phone|email|password|referral|how many years/i;
 const COMPANY_QUESTION = /why (?:this |our )?(?:company|organization|team)|why (?:do you want to )?(?:work|join)|what (?:interests|excites|attracts) you/i;
-const HIGH_VALUE_QUESTION = /\b(motivation|why this role|why are you interested|relevant experience|project you (?:built|led)|work you are proud of)\b/i;
+const HIGH_VALUE_QUESTION = /\b(motivation|why this role|why are you interested|why (?:should we|we should) interview you|why (?:should we|we should) (?:hire|consider) you|relevant experience|project you (?:built|led)|work you are proud of)\b/i;
 
 export function highValueOptionalProseField(field) {
   return field.tag === "textarea" && !field.required

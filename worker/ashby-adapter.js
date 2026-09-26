@@ -10,10 +10,13 @@ export async function fillAshbyRequiredControls(surface, profile, answers = {}) 
     const fields = [];
     [...body.querySelectorAll(".ashby-application-form-field-entry")].forEach((entry, index) => {
       const label = question(entry);
-      if (!required(label)) return;
       const type = entry.querySelector('input[role="combobox"]') ? "combobox"
         : entry.querySelector(".ashby-application-form-input-yesno") ? "yesno" : null;
-      if (type) fields.push({ type, index, key: entry.getAttribute("data-field-path") || label.textContent.trim(),
+      const isRequired = required(label);
+      const isLocation = type === "combobox" && /(?:^|\b)(?:location|located)(?:\b|$)/i.test(label?.textContent ?? "");
+      if (!isRequired && !isLocation) return;
+      if (type) fields.push({ type, index, required: isRequired,
+        key: entry.getAttribute("data-field-path") || label.textContent.trim(),
         label: label.textContent.replace(/\s+/g, " ").trim(),
         description: entry.querySelector(".ashby-application-form-question-description")?.textContent?.trim() ?? "" });
     });
@@ -57,7 +60,7 @@ export async function fillAshbyRequiredControls(surface, profile, answers = {}) 
       if (saved !== undefined) { value = saved; source = "verified profile fact"; }
     }
     const summary = { key: field.key, label: field.label, type: "ashby_custom",
-      controlType: field.type, required: true };
+      controlType: field.type, required: field.required !== false };
     try {
       if (value === undefined || value === "") throw new Error("answer required");
       if (field.type === "combobox") {

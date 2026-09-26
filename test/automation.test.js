@@ -362,6 +362,57 @@ test("Ashby custom answers are selected, verified, and shown in final preview", 
   [["Location", "Portugal"], ["Completed degree?", "Yes"], ["How did you hear about us?", "Job board"]]);
 });
 
+test("Ashby optional location combobox uses the verified profile and reaches final review", async () => {
+  const result = await run(`<form>
+    <div class="ashby-application-form-field-entry" data-field-path="location-id">
+      <label class="ashby-application-form-question-title">Location</label>
+      <input role="combobox" aria-expanded="false" oninput="this.setAttribute('aria-expanded','true');choices.hidden=false">
+      <div id="choices" role="listbox" hidden><div role="option"
+        onclick="document.querySelector('[role=combobox]').value='Lisbon, Portugal';document.querySelector('[role=combobox]').setAttribute('aria-expanded','false');choices.hidden=true">Lisbon, Portugal</div></div>
+    </div>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile,
+    contact: { ...profile.contact, city: "Lisbon", country: "Portugal", location: "Lisbon, Portugal" }
+  }, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled
+    .filter((field) => field.type === "ashby_custom")
+    .map((field) => [field.label, field.value, field.required]),
+  [["Location", "Lisbon, Portugal", false]]);
+});
+
+test("optional interview motivation receives a reviewed role-specific draft", async () => {
+  const result = await run(`<form>
+    <label for="motivation">Tell us why we should interview you</label>
+    <textarea id="motivation" name="motivation"></textarea>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, { ...profile, skills: ["React"] }, { finalApprovalRequired: true }, undefined, {
+    evidencePacket: { applicant: { skills: ["React"] }, listing: "This role builds React interfaces." },
+    draftProvider: { draft: async ({ questions }) => questions.map((question) => ({
+      fieldId: question.fieldId, text: "I build React interfaces and would welcome an interview.",
+      evidenceIds: ["applicant:skills"]
+    })) },
+    claimReviewer: { review: async () => ({ supported: true, responsive: true,
+      claims: [{ text: "I build React interfaces", supported: true,
+        evidenceIds: ["applicant:skills"] }] }) }
+  });
+  assert.equal(result.requirements[0].kind, "final_submission_approval", JSON.stringify(result.requirements[0]));
+  assert.equal(result.requirements[0].preview.filled
+    .find((field) => field.key === "motivation")?.source, "drafted prose",
+  JSON.stringify(result.requirements[0].preview));
+});
+
+test("optional interview motivation pauses for an answer when drafting is disabled", async () => {
+  const result = await run(`<form>
+    <label for="motivation">Tell us why we should interview you</label>
+    <textarea id="motivation" name="motivation"></textarea>
+    <button type="submit">Submit Application</button>
+  </form>`, {}, profile, { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "missing_answer");
+  assert.deepEqual(result.requirements[0].fields, ["motivation"]);
+});
+
 test("Ashby location and verified work facts reuse the saved profile", async () => {
   const result = await run(`<form>
     <div class="ashby-application-form-field-entry" data-field-path="location-id">
