@@ -628,6 +628,11 @@ export class ApplicationService {
       (item) => item.id === confirmationId && item.profileId === identity.profileId
     );
     if (!target) throw new ClientError(404, "confirmation not found");
+    const existingApplication = this.store.snapshot().applications.find((item) =>
+      item.id === target.applicationId && item.profileId === identity.profileId);
+    if (existingApplication?.status === "submitted" && existingApplication.receipt?.finalUrl) {
+      throw new ClientError(409, "application is already submitted; do not retry its confirmation");
+    }
     const approvalProfile = target.kind === "final_submission_approval" && input.approved === true
       ? await this.profiles?.get(identity.profileId) : null;
     let requireApprovalOnRetry = false;
@@ -692,12 +697,21 @@ export class ApplicationService {
         delete safeAnswers[controlField];
       }
     }
+    const manualReceipt = target.action === "manual_review" && input.approved === true
+      && input.answers?.submitted === true && input.answers?.finalUrl
+      ? { submittedAt: now(), finalUrl: validateDirectUrl(input.answers.finalUrl),
+        ...(input.answers.externalId !== undefined ? { externalId: input.answers.externalId } : {}),
+        manuallyVerified: true } : null;
     const result = await this.store.mutate(async (state) => {
       const confirmation = state.confirmations.find(
         (item) => item.id === confirmationId && item.profileId === identity.profileId
       );
       if (!confirmation) throw new ClientError(404, "confirmation not found");
       if (confirmation.status !== "pending") throw new ClientError(409, "confirmation is already resolved");
+      const application = state.applications.find((item) => item.id === confirmation.applicationId);
+      if (application.status === "submitted" && application.receipt?.finalUrl) {
+        throw new ClientError(409, "application is already submitted; do not retry its confirmation");
+      }
       const hasManualFieldAnswers = confirmation.action === "manual_review"
         && Array.isArray(confirmation.fields) && confirmation.fields.length > 0
         && confirmation.fields.every((field) => Object.hasOwn(safeAnswers, field)
@@ -714,8 +728,7 @@ export class ApplicationService {
       confirmation.resolvedAt = now();
       confirmation.response = safeAnswers;
       confirmation.resolvedBy = identity.actorId;
-      const application = state.applications.find((item) => item.id === confirmation.applicationId);
-      if (input.approved !== true) {
+      if (input.approved !== true || manualReceipt) {
         for (const sibling of state.confirmations) {
           if (sibling.applicationId === application.id && sibling.id !== confirmation.id
             && sibling.status === "pending") {
@@ -741,18 +754,13 @@ export class ApplicationService {
       } else if (safeAnswers) Object.assign(application.answers, safeAnswers);
       const related = state.confirmations.filter((item) => item.applicationId === application.id
         && item.status !== "superseded");
-      if (related.some((item) => item.status === "rejected")) application.status = "rejected";
+      if (manualReceipt) {
+        application.status = "submitted";
+        application.receipt = manualReceipt;
+      } else if (related.some((item) => item.status === "rejected")) application.status = "rejected";
       else if (related.every((item) => item.status === "approved")) {
-        if (related.some((item) => item.action === "manual_review") && safeAnswers?.submitted === true) {
-          application.status = "submitted";
-          application.receipt = {
-            submittedAt: now(), finalUrl: safeAnswers.finalUrl,
-            externalId: safeAnswers.externalId, manuallyVerified: true
-          };
-        } else {
-          application.status = "queued";
-          application.queuedAt = now();
-        }
+        application.status = "queued";
+        application.queuedAt = now();
       }
       application.updatedAt = now();
       audit(state, identity, "confirmation.resolved", confirmation.id, { status: confirmation.status });
@@ -760,6 +768,10 @@ export class ApplicationService {
         campaignId: application.campaignId, applicationId: application.id,
         outcome: confirmation.status,
         durationMs: Math.max(0, Date.parse(confirmation.resolvedAt) - Date.parse(confirmation.createdAt))
+      });
+      if (manualReceipt) recordWorkflowStage(state, identity, application.id, "receipt", {
+        campaignId: application.campaignId, applicationId: application.id,
+        outcome: "manually_verified"
       });
       if (application.status === "rejected") recordWorkflowStage(state, identity, application.id,
         "terminal_failure", { campaignId: application.campaignId, applicationId: application.id,
@@ -1151,6 +1163,13 @@ export class ApplicationService {
         ...(input.externalId !== undefined ? { externalId: input.externalId } : {}),
         manuallyVerified: true
       };
+      for (const confirmation of state.confirmations) {
+        if (confirmation.applicationId === application.id && confirmation.status === "pending") {
+          confirmation.status = "superseded";
+          confirmation.resolvedAt = now();
+          confirmation.resolvedBy = identity.actorId;
+        }
+      }
       if (questionsAndAnswers.length) {
         application.recordedQuestionAnswers = questionsAndAnswers.map((item) => ({
           ...item,
