@@ -514,6 +514,28 @@ test("verified Portugal work facts and common availability variants are reused",
     ["Can start now.", "Yes", "No", "https://www.linkedin.com/in/example/"]);
 });
 
+test("the saved annual salary is reused only for matching expectation fields and values", async () => {
+  const annualForm = `<form>
+    <label>What are your annual salary expectations for this role?
+      <input name="question_11352296007" required></label>
+    <button type="submit">Submit Application</button></form>`;
+  const salaryProfile = { ...profile, applicationAnswers: {
+    annual_salary_expectation: "EUR 70,000 gross per year"
+  } };
+  for (const answers of [{}, { question_11352296007: "EUR 70,000 gross per year" }]) {
+    const result = await run(annualForm, answers, salaryProfile, { finalApprovalRequired: true });
+    assert.equal(result.requirements[0].kind, "final_submission_approval");
+    assert.equal(result.requirements[0].preview.filled[0].value, "EUR 70,000 gross per year");
+    assert.equal(result.requirements[0].preview.filled[0].source, "verified profile fact");
+  }
+  const changed = await run(annualForm, { question_11352296007: "EUR 90,000 gross per year" },
+    salaryProfile, { finalApprovalRequired: true });
+  assert.equal(changed.requirements[0].preview.filled[0].source, "application answer");
+  const current = await run(annualForm.replace("annual salary expectations", "current annual salary"),
+    {}, salaryProfile, { finalApprovalRequired: true });
+  assert.equal(current.requirements[0].kind, "missing_answer");
+});
+
 test("work authorization is not copied across residence countries", async () => {
   const result = await run(`<form>
     <label>Are you authorized to work in Portugal? <input name="authorized" required></label>
