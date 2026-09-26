@@ -748,6 +748,43 @@ test("manual retry controls are not persisted as application answers", async () 
   assert.deepEqual(application.answers, {});
 });
 
+test("a verified manual-review receipt submits without requeuing the browser", async () => {
+  const service = await fixture();
+  service.adapter.submit = async () => { throw new NeedsInputError("Verify outcome", [{
+    kind: "submission_email_verification", action: "manual_review", message: "Check email"
+  }]); };
+  const job = await opportunity(service);
+  await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const confirmation = service.list("confirmations", identity.profileId)[0];
+  const application = await service.resolveConfirmation(confirmation.id, { approved: true, answers: {
+    submitted: true, finalUrl: "https://example.test/application/confirmation"
+  } }, identity);
+  assert.equal(application.status, "submitted");
+  assert.equal(application.receipt.finalUrl, "https://example.test/application/confirmation");
+  assert.equal(application.receipt.manuallyVerified, true);
+  assert.deepEqual(application.answers, {});
+  assert.equal(service.list("confirmations", identity.profileId)[0].status, "approved");
+});
+
+test("recording an external receipt clears pending prompts and prevents a retry", async () => {
+  const service = await fixture();
+  service.adapter.submit = async () => { throw new NeedsInputError("Verify outcome", [{
+    kind: "submission_email_verification", action: "manual_review", message: "Check email"
+  }]); };
+  const job = await opportunity(service);
+  const application = await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const confirmation = service.list("confirmations", identity.profileId)[0];
+  const logged = await service.recordManualSubmission(application.id, { manuallyVerified: true,
+    finalUrl: "https://example.test/application/confirmation" }, identity);
+  assert.equal(logged.status, "submitted");
+  assert.equal(service.list("confirmations", identity.profileId)[0].status, "superseded");
+  await assert.rejects(service.resolveConfirmation(confirmation.id,
+    { approved: true, answers: { retry: true } }, identity), /already submitted/);
+  assert.equal(service.list("applications", identity.profileId)[0].status, "submitted");
+});
+
 test("ordinary application answers reject credential-like fields", async () => {
   const service = await fixture();
   const job = await opportunity(service);
