@@ -58,13 +58,13 @@ export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSub
     const body = (await page.locator("body").innerText().catch(() => "")).slice(0, 50_000);
     if (BLOCKED_SUBMISSION_TEXT.test(body)) return false;
     if (await greenhouseEmailCodeChallenge(page, body)) return false;
-    if (await ashbyValidationErrors(page).then((errors) => errors.length > 0).catch(() => false)) return false;
     const confirmationUrl = /confirmation|thank|success|submitted/i.test(currentUrl) && currentUrl !== previousUrl;
     const invalidControls = await page.locator("input:invalid, textarea:invalid, select:invalid").count().catch(() => 0);
     const activeForm = await page.locator("form:visible").count().catch(() => 0);
     const newSuccessText = !successAlreadyPresent && SUCCESS_TEXT.test(body)
       && activeForm === 0 && body.length < 2000;
     if ((confirmationUrl || newSuccessText) && activeForm === 0 && invalidControls === 0) return true;
+    if (await ashbyValidationErrors(page).then((errors) => errors.length > 0).catch(() => false)) return false;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return false;
@@ -1262,6 +1262,12 @@ export async function automateApplication({ page, profile, opportunity, applicat
       if (validation.length) return pause({ status: "needs_input",
         message: "The application has field errors before final submission",
         requirements: validation }, step);
+      const ashbyErrors = await ashbyValidationErrors(surface, custom.fields);
+      if (ashbyErrors.length) return pause({ status: "needs_input",
+        message: "The employer form has field errors before final submission",
+        requirements: ashbyErrors.map(({ label, key }) => ({ kind: "missing_answer",
+          fields: [key], message: `${label}: the employer form needs this answer corrected`,
+          recommendation: "custom" })) }, step);
       const greenhouseResumeGroup = /^(?:job-boards|boards)(?:\.eu)?\.greenhouse\.io$/.test(
         new URL(surface.url()).hostname)
         && await surface.locator('.file-upload[role="group"][aria-labelledby="upload-label-resume"]').count();
