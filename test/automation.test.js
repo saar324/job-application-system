@@ -688,6 +688,40 @@ test("Ashby submit waits for the last field save triggered by blur", async () =>
   } finally { await context.close(); }
 });
 
+test("Ashby red radio errors are repaired and the retry obtains a receipt", async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const artifactsDirectory = await mkdtemp(path.join(os.tmpdir(), "job-worker-test-"));
+  await page.route("https://jobs.ashbyhq.com/test/application", (route) => route.fulfill({
+    contentType: "text/html", body: `<fieldset class="ashby-application-form-input-radio-group">
+      <label class="ashby-application-form-question-title _required_a1" for="gender">Gender</label>
+      <label for="male"><input id="male" type="radio" name="gender" onclick="choose('Male')">Male</label>
+      <label for="other"><input id="other" type="radio" name="gender" onclick="choose('Prefer not to say')">Prefer not to say</label>
+    </fieldset><button id="submit" onclick="submitApplication()">Submit Application</button>
+    <script>
+      let changes = 0; let stored = ''; let clicks = 0;
+      function choose(value) {
+        changes++; if (changes > 1) stored = value;
+        if (stored === 'Male') document.querySelector('[role=alert]')?.remove();
+      }
+      function submitApplication() {
+        clicks++;
+        if (stored !== 'Male') {
+          if (!document.querySelector('[role=alert]')) document.body.insertAdjacentHTML('beforeend',
+            '<div role="alert">Your form needs corrections<button>Missing entry for required field: Gender</button></div>');
+        } else document.body.innerHTML = '<h2>Success</h2><p>Your application was successfully submitted.</p>';
+      }
+    </script>`
+  }));
+  try {
+    const result = await automateApplication({ page, profile,
+      opportunity: { applyUrl: "https://jobs.ashbyhq.com/test/application" },
+      application: { id: "application-one", answers: { gender: "Male" } }, artifactsDirectory });
+    assert.equal(result.status, "submitted", JSON.stringify({ result, body: await page.locator("body").innerText() }));
+    assert.equal(await page.evaluate(() => clicks), 2);
+  } finally { await context.close(); }
+});
+
 test("Ashby success wording records a verified receipt", async () => {
   const result = await run(`<form onsubmit="event.preventDefault();document.body.innerHTML='<h2>Success</h2><p>Your application was successfully submitted. We will contact you if there are next steps.</p>'">
     <button type="submit">Submit Application</button></form>`);

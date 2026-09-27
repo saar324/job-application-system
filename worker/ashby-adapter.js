@@ -3,6 +3,51 @@
 const normalize = (value) => String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 const countryKey = (value) => normalize(value).replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 
+export async function ashbyValidationErrors(surface, fields = []) {
+  if (new URL(surface.url()).hostname !== "jobs.ashbyhq.com") return [];
+  const labels = await surface.locator('[role="alert"]').evaluateAll((alerts) => alerts
+    .filter((alert) => /your form needs corrections/i.test(alert.textContent ?? ""))
+    .flatMap((alert) => [...alert.querySelectorAll("button")].map((button) => button.textContent?.trim())
+      .filter(Boolean)));
+  return [...new Set(labels)].map((rawLabel) => {
+    const label = rawLabel.replace(/^missing entry for required field:\s*/i, "").trim();
+    const field = fields.find((item) => normalize(item.label) === normalize(label));
+    return { label, key: field?.key ?? label, field };
+  });
+}
+
+export async function repairAshbyRadioErrors(surface, errors) {
+  if (!errors.length || errors.some((error) => error.field?.controlType !== "radio"
+    || error.field.status !== "filled")) return false;
+  for (const { field } of errors) {
+    const groups = surface.locator(".ashby-application-form-input-radio-group");
+    let group;
+    for (const candidate of await groups.all()) {
+      const label = await candidate.locator(".ashby-application-form-question-title").textContent();
+      if (normalize(label) === normalize(field.label)) { group = candidate; break; }
+    }
+    if (!group) return false;
+    const inputs = group.locator('input[type="radio"]');
+    let selected;
+    for (let index = 0; index < await inputs.count(); index += 1) {
+      const candidate = inputs.nth(index);
+      const label = await group.locator(`label[for="${await candidate.getAttribute("id")}"]`).textContent();
+      if (normalize(label) === normalize(field.value)) { selected = index; break; }
+    }
+    if (selected === undefined) return false;
+    // Ashby can render a checked input while its saved form value is empty.
+    // Move away and back so React receives a real change for the same answer.
+    if (await inputs.nth(selected).isChecked()) {
+      const alternative = selected === 0 ? 1 : 0;
+      if (alternative >= await inputs.count()) return false;
+      await inputs.nth(alternative).click();
+    }
+    await inputs.nth(selected).click();
+    if (!await inputs.nth(selected).isChecked()) return false;
+  }
+  return true;
+}
+
 export async function fillAshbyRequiredControls(surface, profile, answers = {}) {
   const entries = await surface.locator("body").evaluate((body) => {
     const required = (label) => [...(label?.classList ?? [])].some((name) => name.includes("_required_"));

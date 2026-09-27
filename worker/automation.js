@@ -4,7 +4,8 @@ import path from "node:path";
 import { companyQuestion, eligibleProseField, highValueOptionalProseField,
   needsCompanyResearch } from "./draft-provider.js";
 import { draftContextFingerprint, reusableApprovedAnswer } from "../src/approved-answers.js";
-import { fillAshbyRequiredControls, verifyAshbyRequiredControls } from "./ashby-adapter.js";
+import { ashbyValidationErrors, fillAshbyRequiredControls, repairAshbyRadioErrors,
+  verifyAshbyRequiredControls } from "./ashby-adapter.js";
 
 const FINAL_BUTTON = /submit(?: application)?|send application|complete application/i;
 const NEXT_BUTTON = /next|continue|save and continue|review/i;
@@ -57,6 +58,7 @@ export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSub
     const body = (await page.locator("body").innerText().catch(() => "")).slice(0, 50_000);
     if (BLOCKED_SUBMISSION_TEXT.test(body)) return false;
     if (await greenhouseEmailCodeChallenge(page, body)) return false;
+    if (await ashbyValidationErrors(page).then((errors) => errors.length > 0).catch(() => false)) return false;
     const confirmationUrl = /confirmation|thank|success|submitted/i.test(currentUrl) && currentUrl !== previousUrl;
     const invalidControls = await page.locator("input:invalid, textarea:invalid, select:invalid").count().catch(() => 0);
     const activeForm = await page.locator("form:visible").count().catch(() => 0);
@@ -1415,9 +1417,30 @@ export async function automateApplication({ page, profile, opportunity, applicat
       continue;
     }
     await surface.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
-    const verified = await waitForSubmissionEvidence(surface, previousUrl, bodyBeforeSubmit);
+    let verified = await waitForSubmissionEvidence(surface, previousUrl, bodyBeforeSubmit);
+    let validationErrors = verified ? [] : await ashbyValidationErrors(surface, custom.fields);
+    if (validationErrors.length && await repairAshbyRadioErrors(surface, validationErrors)) {
+      await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
+      // A visible field error proves the first click was rejected. Retry once
+      // only after the original answers have been restored and reverified.
+      if (!await ashbyValidationErrors(surface).then((errors) => errors.length)
+        && await verifyAshbyRequiredControls(surface, custom.fields)
+        && await finalLiveState(surface) === reviewedLiveState) {
+        const retryBody = (await surface.locator("body").innerText().catch(() => "")).slice(0, 50_000);
+        await action.locator.click({ noWaitAfter: true });
+        verified = await waitForSubmissionEvidence(surface, previousUrl, retryBody);
+      }
+      validationErrors = verified ? [] : await ashbyValidationErrors(surface, custom.fields);
+    }
     timings.receiptMs += performance.now() - transitionStarted;
     if (!verified) {
+      if (validationErrors.length) {
+        return pause({ status: "needs_input", validationRejected: true,
+          message: "The employer rejected these form fields",
+          requirements: validationErrors.map(({ label, key }) => ({ kind: "missing_answer",
+            fields: [key], message: `${label}: the employer form needs this answer reselected or corrected`,
+            recommendation: "custom" })) }, step);
+      }
       await Promise.allSettled(networkBodies);
       await mkdir(artifactsDirectory, { recursive: true, mode: 0o700 });
       await page.screenshot({ path: path.join(artifactsDirectory, `${application.id}.unverified.png`),

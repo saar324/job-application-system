@@ -79,6 +79,11 @@ export class ReceiptStore {
     if (prior?.phase === "final_action_started") return uncertainFinalAction();
     await this.#writePhase(id, hash, "before_final_action");
     const result = await submit(async () => this.#writePhase(id, hash, "final_action_started"));
+    // A rendered validation banner is affirmative proof that the site rejected
+    // the click and kept the form open. Permit a corrected future attempt.
+    if (result.validationRejected === true && result.phase === "before_final_action") {
+      await this.#writePhase(id, hash, "before_final_action");
+    }
     if (result.status === "submitted") {
       const temporary = `${file}.${process.pid}.tmp`;
       await writeFile(temporary, `${JSON.stringify({ fingerprint: hash, result }, null, 2)}\n`, { mode: 0o600 });
