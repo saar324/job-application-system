@@ -1,5 +1,7 @@
 # Agent-led job discovery
 
+Runs are on demand. When the owner requests a target such as 100 applications, the target means new verified employer receipts. Gather enough additional suitable roles to replace paused or unavailable ones; do not count a listing, queued application, or filled form as submitted. Keep one active browser application at a time and queue only a bounded number ahead of the remaining receipt target. Do not schedule runs unless the owner separately opts in.
+
 The primary path has five steps:
 
 1. Fetch bounded pages from each configured source. Keep source-specific pagination, quotas, and 403/429/challenge stops.
@@ -7,6 +9,8 @@ The primary path has five steps:
 3. Let the agent judge the remaining roles from the actual listing and verified applicant profile. It returns `relevant`, `irrelevant`, or `uncertain`, with a short reason. A numeric score and title vocabulary cannot decide fit in this path. Irrelevant decisions are stored for later duplicate filtering and revisited if the posting text changes.
 4. Only for relevant roles, resolve and freshly verify the official employer ATS posting. If the destination cannot be verified or its title/company differs, hold it for another review. A fit decision is bound to the exact posting text and destination.
 5. Prepare one application at a time. Existing deterministic field aliases, selective prose drafting, complete form review, owner fact holds, final-action permit, and receipt tracking remain in place. The merged final-action classifier stays intact.
+
+If the worker lacks a prose provider and pauses on a written answer that verified evidence can support, the agent drafts it, checks each material claim against the evidence, then resumes the same application through its confirmation under an active owner standing policy. It respects an employer ban on AI-written answers. At a CAPTCHA or missing owner answer, fill and read back every safe known field before pausing. The worker saves a redacted field checkpoint and closes its browser context, then the agent continues with another suitable role. When independent work ends, use `jobctl backlog` and `jobctl handoff ID` to handle applications paused during that request one at a time. In a visible browser, replay saved values only after checking each live field, bring a CAPTCHA into view for the owner, and recheck the form before an authorized submission. A prior final action with no receipt requires outcome reconciliation before any retry. The checkpoint is a replay aid, not a durable browser session or proof of submission.
 
 The old score-first `campaign-start` path remains available for compatibility and historical reports. It is no longer the recommended path for new measured batches. Removing its state machine immediately would risk existing in-flight applications and reports; retire it after the new path has real receipt evidence.
 

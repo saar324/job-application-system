@@ -13,7 +13,7 @@ const AUTH_BUTTON = /sign in|log in|create account|register|sign up/i;
 const SIGNUP_BUTTON = /create account|register|sign up/i;
 const SUCCESS_TEXT = /thank you|application (?:has been |was )?(?:successfully )?submitted|application received|received your application/i;
 const BLOCKED_SUBMISSION_TEXT = /we couldn't submit your application[\s\S]*flagged as possible spam/i;
-const CHALLENGE_TEXT = /captcha|verify you are human|security check|unusual traffic|cloudflare/i;
+const CHALLENGE_TEXT = /(?:complete|solve|enter|check|verify)(?:\s+the|\s+a)?\s+(?:re)?captcha|(?:re)?captcha (?:required|verification)|verify (?:that )?you are (?:a )?human|security check|unusual traffic|cloudflare (?:challenge|verification)/i;
 const MISSING_POSTING_BODY = /\b(?:Job not found\s*The job you requested was not found|Page not found\s*The page you requested was not found)\b/i;
 const VERIFICATION_FIELD = /\b(otp|one.?time|verification code|security code|authenticator|two.?factor|2fa|mfa|passkey)\b/i;
 const NARRATIVE_QUESTION = /\b(?:why|motivation|cover letter|describe|explain|project|challenge|achievement|accomplishment|story|what interests|tell us about)\b/i;
@@ -902,6 +902,42 @@ export function unavailablePostingUrl(value) {
   } catch { return false; }
 }
 
+function checkpointField(field) {
+  const key = String(field.key ?? "").slice(0, 160);
+  const label = String(field.label ?? "").slice(0, 500);
+  const secret = field.type === "password"
+    || /password|passwd|passcode|one.?time|otp|verification code|security code|secret|token|api.?key|access.?key|session|cookie/i
+      .test(`${key} ${label}`);
+  return {
+    step: field.step, key, label, type: field.type,
+    required: field.required === true, status: field.status,
+    ...(field.source ? { source: String(field.source).slice(0, 160) } : {}),
+    ...(field.status === "filled" ? { value: secret ? "[redacted]"
+      : String(field.value ?? "").slice(0, 5000) } : {})
+  };
+}
+
+function checkpointFields(observedFields) {
+  const fields = [];
+  let size = 0;
+  let truncated = false;
+  for (const field of [...observedFields.values()].slice(0, 200)) {
+    const entry = checkpointField(field);
+    let encoded = JSON.stringify(entry);
+    if (size + encoded.length > 56_000 && Object.hasOwn(entry, "value")) {
+      entry.value = "[omitted: checkpoint size limit]";
+      entry.truncated = true;
+      encoded = JSON.stringify(entry);
+      truncated = true;
+    }
+    if (size + encoded.length > 60_000) { truncated = true; break; }
+    fields.push(entry);
+    size += encoded.length;
+  }
+  if (observedFields.size > 200) truncated = true;
+  return { fields, truncated };
+}
+
 export async function automateApplication({ page, profile, opportunity, application, artifactsDirectory,
   evidencePacket, draftProvider, claimReviewer, markFinalActionStarted, authorizeFinal, commitFinal }) {
   const attemptStarted = performance.now();
@@ -942,14 +978,11 @@ export async function automateApplication({ page, profile, opportunity, applicat
     ...result, phase, preparedAnswers,
     metrics: { ...timings, activeMs: performance.now() - attemptStarted },
     checkpoint: {
-      version: 1, applicationId: application.id, step,
+      version: 1, applicationId: application.id, step, phase,
       origin: new URL(surface.url()).origin,
       steps: [...new Map([...observedFields.values()].map((field) => [field.step,
         { index: field.step, signature: field.stepSignature }])).values()],
-      fields: [...observedFields.values()].slice(0, 200).map((field) => ({
-        step: field.step, key: field.key, label: field.label,
-        status: field.status, source: field.source
-      }))
+      ...checkpointFields(observedFields)
     }
   });
   // Account creation plus a multi-page application can legitimately exceed

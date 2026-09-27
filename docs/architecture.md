@@ -19,12 +19,12 @@ public job APIs --------------------------------------|-- discovery + scoring
 
 ## Agent contract
 
-- Agents operate in recurring cycles: recover existing work, handle confirmations, discover or add opportunities, request applications, observe bounded progress, and yield until the next cycle.
-- The agent runtime owns the wake schedule, bounded polling, backoff, and user notification; the server does not require one permanently running chat turn.
+- Agents run on owner request: recover existing work, discover or add opportunities, request applications, observe bounded progress, and handle the review backlog after independent work is done.
+- The agent runtime owns bounded polling, backoff, and user notification. Scheduling is optional and requires an explicit owner request.
 - Every request is authenticated to one profile; an agent cannot select another applicant in its payload.
 - Queue delivery and application creation are idempotent so retries do not duplicate submissions.
 - Unknown facts, legal attestations, CAPTCHAs, sensitive answers, and final approval become durable confirmation items for the person.
-- Agents resume the same application after confirmation and report only verified submission receipts.
+- Agents resume the same application after confirmation or visible-browser handoff and report only verified submission receipts. A paused field checkpoint helps reconstruct a fresh form and does not prove that the employer retained a value.
 - Agent runtimes never need direct access to the state database, credential vault, or unrestricted document storage.
 
 ## Trust boundaries

@@ -295,6 +295,22 @@ test("worker fills safe fields before pausing for an embedded challenge", async 
   assert.equal(result.requirements[0].kind, "human_challenge");
   assert.deepEqual(result.checkpoint.fields.map((field) => [field.key, field.status]),
     [["first_name", "filled"], ["email", "filled"]]);
+  assert.deepEqual(result.checkpoint.fields.map((field) => field.value),
+    ["Ada", "ada@example.test"]);
+  assert.equal(result.checkpoint.phase, "before_final_action");
+});
+
+test("challenge checkpoint keeps safe values and redacts credentials", async () => {
+  const result = await run(`<form>
+    <label>First name <input name="first_name" required></label>
+    <label>Password <input name="password" type="password" required></label>
+    <button type="submit">Submit Application</button>
+  </form><iframe src="data:text/html,recaptcha-challenge"></iframe>`,
+  { password: "private-value" });
+  assert.equal(result.requirements[0].kind, "human_challenge");
+  assert.equal(result.checkpoint.fields.find((field) => field.key === "first_name")?.value, "Ada");
+  assert.equal(result.checkpoint.fields.find((field) => field.key === "password")?.value, "[redacted]");
+  assert.doesNotMatch(JSON.stringify(result.checkpoint), /private-value/);
 });
 
 test("invisible reCAPTCHA badge does not block final review", async () => {
@@ -309,6 +325,15 @@ test("invisible reCAPTCHA badge does not block final review", async () => {
   });
   assert.equal(result.requirements[0].kind, "final_submission_approval");
   assert.equal(result.requirements[0].preview.filled[0].value, "Ada");
+});
+
+test("passive CAPTCHA notice does not hold an otherwise ready form", async () => {
+  const result = await run(`<form>
+    <label>First name <input name="first_name" required></label>
+    <button type="submit">Submit Application</button>
+  </form><p>This site is protected by reCAPTCHA.</p>`,
+  {}, profile, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
 });
 
 test("Ashby custom required controls cannot be omitted from final approval", async () => {

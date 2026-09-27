@@ -386,6 +386,39 @@ async function serviceFixture(adapter) {
   return new ApplicationService({ store, config, adapter });
 }
 
+test("a paused challenge keeps its field log while the next application submits", async () => {
+  const service = await serviceFixture({ name: "challenge-queue-test", async submit({ application, opportunity }) {
+    if (opportunity.title === "Blocked role") {
+      throw new NeedsReviewError("Human challenge", [{ kind: "human_challenge",
+        action: "manual_review", message: "Complete the challenge" }], {
+        checkpoint: { version: 1, applicationId: application.id, step: 0,
+          phase: "before_final_action", origin: "https://example.test", steps: [],
+          fields: [
+            { step: 0, key: "email", label: "Email", type: "email", required: true,
+              status: "filled", source: "profile", value: "ada@example.test" },
+            { step: 0, key: "password", label: "Password", type: "password", required: true,
+              status: "filled", source: "account", value: "private-value" }
+          ] }
+      });
+    }
+    return { submittedAt: new Date().toISOString(), finalUrl: "https://example.test/done" };
+  } });
+  const blocked = await service.addOpportunity({ title: "Blocked role", company: "Example",
+    applyUrl: "https://example.test/blocked", score: 90 }, identity);
+  const ready = await service.addOpportunity({ title: "Ready role", company: "Example",
+    applyUrl: "https://example.test/ready", score: 90 }, identity);
+  const first = await service.requestApplication(blocked.id, {}, identity);
+  const second = await service.requestApplication(ready.id, {}, identity);
+  await service.waitForIdle();
+  const log = service.applicationLog(identity.profileId);
+  const paused = log.find((item) => item.applicationId === first.id);
+  assert.equal(paused.status, "waiting_confirmation");
+  assert.equal(paused.pendingReview[0].kind, "human_challenge");
+  assert.equal(paused.pausedFields[0].value, "ada@example.test");
+  assert.equal(paused.pausedFields[1].value, "[redacted]");
+  assert.equal(log.find((item) => item.applicationId === second.id).status, "submitted");
+});
+
 test("research pause is durable and official evidence requeues the same application", async () => {
   let runs = 0;
   const service = await serviceFixture({ name: "research-test", async submit() {

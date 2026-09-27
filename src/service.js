@@ -1727,7 +1727,23 @@ function validatedCheckpoint(checkpoint, applicationId) {
     || JSON.stringify(checkpoint).length > 64_000) {
     return undefined;
   }
-  return checkpoint;
+  return { version: 1, applicationId, step: checkpoint.step,
+    phase: checkpoint.phase === "final_action_started" ? "final_action_started" : "before_final_action",
+    origin: String(checkpoint.origin ?? "").slice(0, 500),
+    steps: checkpoint.steps.slice(0, 16), truncated: checkpoint.truncated === true,
+    fields: checkpoint.fields.map((field) => {
+    const key = String(field?.key ?? "").slice(0, 160);
+    const label = String(field?.label ?? "").slice(0, 500);
+    const secret = field?.type === "password" || sensitiveFormField(key, label);
+    return { step: field?.step, key, label,
+      type: String(field?.type ?? "").slice(0, 80), required: field?.required === true,
+      status: field?.status === "filled" ? "filled" : "unfilled",
+      ...(field?.source ? { source: String(field.source).slice(0, 160) } : {}),
+      ...(field?.truncated === true ? { truncated: true } : {}),
+      ...(Object.hasOwn(field ?? {}, "value") ? {
+        value: secret ? "[redacted]" : String(field.value ?? "").slice(0, 5000)
+      } : {}) };
+  }) };
 }
 
 function validatedPreparedAnswers(value, previous = {}) {
@@ -1829,6 +1845,10 @@ function campaignStart(state, campaignId, profileId) {
 const CONTROL_ANSWER_KEYS = new Set(["retry", "submitted", "finalUrl", "externalId"]);
 const SENSITIVE_KEY = /(?:^|[_-])(?:password|passwd|passcode|secret|token|api[_-]?key|otp|cookie|session)(?:$|[_-])/i;
 const CREDENTIAL_INPUT_KEY = /(?:^|[_-])(?:password|passwd|passcode|secret|token|api[_-]?key|otp|cookie)(?:$|[_-])/i;
+function sensitiveFormField(key, label) {
+  return /password|passwd|passcode|one.?time|otp|verification code|security code|secret|token|api.?key|access.?key|session|cookie/i
+    .test(`${key} ${label}`);
+}
 
 function assertNoSensitiveAnswerFields(value, label, path = "") {
   if (!value || typeof value !== "object") return;
@@ -1874,6 +1894,8 @@ function buildApplicationLogEntry(application, opportunity = {}, confirmations =
   const finalPreview = confirmations
     .filter((item) => item.kind === "final_submission_approval" && item.preview)
     .at(-1)?.preview;
+  const paused = ["waiting_confirmation", "waiting_research"].includes(application.status);
+  const checkpoint = paused ? application.checkpoint : undefined;
   return {
     applicationId: application.id,
     opportunityId: application.opportunityId,
@@ -1890,6 +1912,23 @@ function buildApplicationLogEntry(application, opportunity = {}, confirmations =
     updatedAt: application.updatedAt,
     submittedAt: application.receipt?.submittedAt,
     questionsAndAnswers: [...answered.values()],
+    ...(paused ? {
+      pause: checkpoint ? { step: checkpoint.step, origin: checkpoint.origin,
+        phase: checkpoint.phase ?? "before_final_action", truncated: checkpoint.truncated === true } : null,
+      ...(application.status === "waiting_research" ? {
+        researchQuestions: application.researchQuestions ?? [] } : {}),
+      pausedFields: (checkpoint?.fields ?? []).map((field) => ({
+        step: field.step, key: field.key, label: field.label,
+        type: field.type, required: field.required, status: field.status,
+        source: field.source,
+        ...(Object.hasOwn(field, "value") ? { value: (sensitiveFormField(field.key, field.label)
+          || field.type === "password") ? "[redacted]" : sanitizeLoggedValue(field.key, field.value) } : {}),
+        ...(field.truncated === true ? { truncated: true } : {})
+      })),
+      pendingReview: confirmations.filter((item) => item.status === "pending")
+        .map((item) => ({ id: item.id, kind: item.kind, message: item.message,
+          fields: item.fields ?? [] }))
+    } : {}),
     submittedFields: (finalPreview?.filled ?? []).map((field) => ({
       label: field.label,
       value: sanitizeLoggedValue(field.label, field.value),

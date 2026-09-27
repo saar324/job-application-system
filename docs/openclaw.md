@@ -40,7 +40,7 @@ The two private reference flags are optional. When omitted during an upgrade, th
 
 ## Agent loop
 
-Configure the OpenClaw agent to run continuously or wake on a recurring schedule. Each invocation is one bounded cycle: recover applications and confirmations first, discover and request new eligible work second, observe newly queued work for a limited period, and then yield. Unresolved state remains on the server for the next invocation. Do not depend on one permanent conversation or repeatedly notify the owner about an unchanged inbox.
+Start the OpenClaw agent when the owner requests a batch. Each invocation is bounded: recover applications and confirmations first, discover and request new eligible work second, observe newly queued work for a limited period, then process blocked applications one at a time after independent work ends. Unresolved state remains on the server. A recurring schedule is optional and must be requested by the owner. Do not repeatedly notify the owner about an unchanged inbox.
 
 ## Confirmation flow
 

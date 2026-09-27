@@ -21,6 +21,8 @@ $JOBCLI sources
 $JOBCLI opportunities
 $JOBCLI applications
 $JOBCLI application-log
+$JOBCLI backlog
+$JOBCLI handoff APPLICATION_UUID
 $JOBCLI application-metrics
 $JOBCLI campaigns
 $JOBCLI inbox
@@ -86,17 +88,20 @@ printf '%s' '{"idempotencyKey":"campaign-approval-2026-09-22-01","entries":[{"ap
   | $JOBCLI campaign-approve CAMPAIGN_UUID
 ```
 
-For each recurring cycle, use this order:
+For each owner-requested batch, use this order:
 
 1. `health` and `profile`;
-2. `applications` and `inbox` to recover durable work;
+2. `applications` and `backlog` to recover durable work;
 3. `scan` and evidence-based opportunity evaluation;
 4. `add`/`apply` for eligible work;
-5. bounded `applications`/`inbox` observation before yielding.
+5. bounded `applications`/`inbox` observation and verified receipt counting;
+6. one-at-a-time `handoff ID` review after independent work is complete.
 
-The external agent runtime schedules the next cycle. Do not implement an unbounded shell polling loop, overlap cycles for one profile, or repeat a mutation after an ambiguous timeout.
+Do not create a schedule unless the owner explicitly requests one. Do not implement an unbounded shell polling loop, overlap batches for one profile, or repeat a mutation after an ambiguous timeout.
 
 `application-log` joins each durable application with its opportunity. It reports the company, role, URLs, status, timestamps, receipt, and structured questions with answers. Credential-like values are redacted.
+
+`backlog` lists this profile's paused applications, oldest pause first, with their blocker kinds and the number of safely recorded form values. Track the application IDs created during the current request and review those after its independent work; older paused applications remain available for a separate owner request. `handoff ID` returns one paused application with its destination, pending questions, and the latest checkpoint's filled and unfilled fields. A checkpoint records what the worker observed before closing its tab; it does not prove that the employer retained the values. Match each saved field against the live form before restoring it. If `requiresOutcomeCheck` is true, reconcile the prior final action before reopening or submitting the role. Handle one backlog item at a time in a visible browser after independent batch work is done.
 
 `application-metrics` returns profile-bound aggregate attempt counts and p50/p95 queue, execution, owner-wait, and worker-stage durations. Every duration includes a sample count; unavailable token counts are `null`, not zero.
 
@@ -165,7 +170,7 @@ printf '%s' '{"answers":{}}' | $JOBCLI apply OPPORTUNITY_ID
 
 The request persists and returns `queued` before browser work finishes. Poll `$JOBCLI applications` for the final status; do not repeat the apply command after a timeout.
 
-Resolve a confirmation only after receiving the owner's answer:
+Resolve a personal-fact or legal confirmation only after receiving the owner's answer. A supported narrative answer may also be supplied by the agent under an active owner standing policy after checking each material claim against verified evidence and confirming that the employer allows AI writing:
 
 ```bash
 printf '%s' '{"answers":{"question_key":"owner answer"}}' | $JOBCLI confirm CONFIRMATION_ID

@@ -1,4 +1,4 @@
 interface:
   display_name: "Job Application"
-  short_description: "Run recurring job discovery and application cycles"
-  default_prompt: "Use $job-application to run one bounded job-search cycle, resume durable work, submit eligible applications, and surface only new decisions that need me."
+  short_description: "Run an on-demand job application batch"
+  default_prompt: "Use $job-application for the batch I request. Count only verified employer receipts, continue past safely checkpointed blockers, and then handle the review backlog with me one application at a time."

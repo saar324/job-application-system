@@ -63,3 +63,39 @@ test("jobctl forwards a supplied campaign idempotency key", async (context) => {
   }, '{"target":10,"idempotencyKey":"campaign-request-1"}');
   assert.equal(key, "campaign-request-1");
 });
+
+test("skill backlog and handoff expose one paused form and flag uncertain outcomes", async (context) => {
+  const requests = [];
+  const items = [
+    { applicationId: "blocked", company: "Example", title: "Engineer", status: "waiting_confirmation",
+      updatedAt: "2026-09-27T10:00:00Z", pause: { phase: "before_final_action" },
+      pendingReview: [{ kind: "human_challenge", message: "Complete CAPTCHA" }],
+      pausedFields: [{ key: "email", status: "filled", value: "ada@example.test" }] },
+    { applicationId: "uncertain", status: "waiting_confirmation",
+      updatedAt: "2026-09-27T11:00:00Z", pause: { phase: "final_action_started" },
+      pendingReview: [{ kind: "submission_unverified" }], pausedFields: [] },
+    { applicationId: "done", status: "submitted", updatedAt: "2026-09-27T09:00:00Z" }
+  ];
+  const server = createServer((request, response) => {
+    requests.push(request.url);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ items }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  }));
+  const env = { ...process.env, JOB_SERVER_URL: `http://127.0.0.1:${server.address().port}`,
+    JOB_SERVER_TOKEN: "test-token" };
+  const backlog = JSON.parse((await execute(process.execPath,
+    ["skills/job-application/scripts/jobctl.js", "backlog"], { env })).stdout);
+  assert.equal(backlog.total, 2);
+  assert.deepEqual(backlog.items.map((item) => item.applicationId), ["blocked", "uncertain"]);
+  assert.equal(backlog.items[0].savedFieldCount, 1);
+  assert.equal(backlog.items[1].requiresOutcomeCheck, true);
+  const handoff = JSON.parse((await execute(process.execPath,
+    ["skills/job-application/scripts/jobctl.js", "handoff", "blocked"], { env })).stdout);
+  assert.equal(handoff.pausedFields[0].value, "ada@example.test");
+  assert.equal(handoff.requiresOutcomeCheck, false);
+  assert.deepEqual(requests, ["/v1/application-log", "/v1/application-log"]);
+});

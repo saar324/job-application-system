@@ -31,16 +31,16 @@ Start with [Getting started](docs/getting-started.md). It separates a five-minut
 
 ## Primary operating model
 
-The normal deployment is driven by an agent that runs continuously or wakes on a schedule. Each cycle:
+The normal deployment is an owner-requested batch. When the owner requests a number of applications, count verified employer receipts toward that number. Each bounded pass:
 
 1. checks profile readiness and unfinished applications;
 2. reads the confirmation inbox and surfaces new human decisions;
 3. scans configured sources and evaluates evidence-backed matches;
 4. requests eligible applications within policy and daily limits;
-5. observes queued browser work, records verified receipts, and leaves blocked work durable;
-6. sleeps or exits until the next scheduled cycle.
+5. observes queued browser work, records verified receipts, and saves blocked forms with safe filled answers;
+6. continues with other suitable roles, then handles blocked forms one at a time in a visible browser.
 
-The agent runtime owns scheduling, backoff, and notifications. The server owns durable state, deduplication, policy, identity, confirmations, and receipts. A cycle can stop at any point and a later cycle—or a replacement agent runtime—can resume without relying on chat history or an always-running process.
+The agent runtime owns bounded polling, backoff, and notifications. The server owns durable state, deduplication, policy, identity, confirmations, and receipts. A batch can stop at any point and a later owner request can resume without relying on chat history or an always-running process. Scheduling is optional and requires an explicit owner request.
 
 ## Private configuration boundary
 
