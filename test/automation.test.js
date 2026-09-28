@@ -103,6 +103,25 @@ test("worker pauses for an unknown required answer", async () => {
   assert.deepEqual(result.requirements[0].fields, ["kotlin_years"]);
 });
 
+test("Workday legal-name fields use the owner's saved script-specific spellings", async () => {
+  const result = await run(`<form>
+    <label>Bulgarian Given Name(s)<input name="firstNameLocal" required></label>
+    <label>Bulgarian Patronymic Name<input name="secondaryLocal" required></label>
+    <label>Bulgarian Family Name<input name="lastNameLocal" required></label>
+    <label>Patronymic Name - Latin Script<input name="secondaryLastName" required></label>
+    <button type="submit">Submit Application</button></form>`, {}, {
+    ...profile, applicationAnswers: {
+      workday_bulgarian_given_name: "Ада",
+      workday_bulgarian_patronymic_name: "Няма",
+      workday_bulgarian_family_name: "Лавлейс",
+      workday_latin_patronymic_name: "N/A"
+    }
+  }, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled.map((field) => field.value),
+    ["Ада", "Няма", "Лавлейс", "N/A"]);
+});
+
 test("visual required markers cannot produce an empty final approval", async () => {
   const result = await run(`<form>
     <label>First name* <span class="sr-only">Required</span><input name="first_name"></label>

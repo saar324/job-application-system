@@ -163,6 +163,13 @@ function flattenProfile(profile, currentUrl) {
     if (key && values[key] === undefined) values[key] = answer;
   }
   const storedAnswers = profile.applicationAnswers ?? {};
+  // Workday can require both local-script and Latin-script legal-name parts.
+  // Use only spellings the owner has saved; never derive them from a generic
+  // first/last name or invent a patronymic.
+  values["bulgarian given name s"] = storedAnswers.workday_bulgarian_given_name;
+  values["bulgarian patronymic name"] = storedAnswers.workday_bulgarian_patronymic_name;
+  values["bulgarian family name"] = storedAnswers.workday_bulgarian_family_name;
+  values["patronymic name latin script"] = storedAnswers.workday_latin_patronymic_name;
   const residenceCountry = String(contact.country ?? "").trim();
   values["what would be your availability to join us"] = storedAnswers["What is your availability?"]
     ?? storedAnswers.Availability ?? storedAnswers.availability;
