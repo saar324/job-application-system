@@ -346,6 +346,13 @@ async function fillControl(locator, field, value, surface) {
       && await locator.evaluate((element) =>
         element.closest('.file-upload[role="group"]')?.getAttribute("aria-labelledby")
           === "upload-label-resume").catch(() => false);
+    const ashbyUploadSaved = isAshby ? rootPage.waitForResponse(async (response) => {
+      if (response.request().method() !== "POST" || response.status() !== 200
+        || new URL(response.url()).hostname !== "jobs.ashbyhq.com"
+        || new URL(response.url()).pathname !== "/api/non-user-graphql") return false;
+      const payload = await response.json().catch(() => null);
+      return Boolean(payload?.data?.setFormValueToFile && !payload?.errors?.length);
+    }, { timeout: 20_000 }).then(() => true, () => false) : null;
     try { await locator.setInputFiles(String(value)); }
     catch (error) {
       // React can remove the input during its change event before Playwright
@@ -359,10 +366,11 @@ async function fillControl(locator, field, value, surface) {
         { timeout: 20_000 });
     }
     if (isAshby) {
-      // Ashby's GraphQL operation name has changed over time, so binding the
-      // upload to one request payload creates a slow false failure. Trust the
-      // stable user-visible evidence instead: the selected file remains on a
-      // live input, or Ashby replaces the input with the uploaded filename.
+      // A local filename is not proof that Ashby saved the upload. Wait for
+      // the current file-save mutation and its render before final review.
+      if (!await ashbyUploadSaved) throw new Error("Ashby did not acknowledge the resume upload");
+      await rootPage.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
+      await rootPage.waitForTimeout(650);
       await rootPage.waitForFunction((expected) =>
         document.body?.innerText?.includes(expected)
           || [...document.querySelectorAll('input[type="file"]')]
