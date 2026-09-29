@@ -856,6 +856,56 @@ test("a rescanned Greenhouse-style file control retains an exact live upload", a
     && field.files[0].size === 11));
 });
 
+test("Ashby resume waits for the save response before final review", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
+  const resume = path.join(directory, "resume.pdf");
+  await writeFile(resume, "resume-body");
+  const url = "https://jobs.ashbyhq.com/example/application";
+  let uploadSaved = false;
+  const html = `<form>
+    <label>Resume <input name="resume" type="file" required
+      onchange="setTimeout(() => fetch('/api/non-user-graphql', {method:'POST'}), 3000)"></label>
+    <button type="submit">Submit Application</button>
+  </form>`;
+  const result = await run(html, {}, { ...profile, documents: { resume } },
+    { finalApprovalRequired: true }, async (page) => {
+      await page.route(url, (route) => route.fulfill({ status: 200,
+        contentType: "text/html", body: html }));
+      await page.route("https://jobs.ashbyhq.com/api/non-user-graphql", async (route) => {
+        uploadSaved = true;
+        await route.fulfill({ status: 200, contentType: "application/json",
+          body: JSON.stringify({ data: { setFormValueToFile: { ok: true } } }) });
+      });
+    }, {}, { applyUrl: url });
+  assert.equal(uploadSaved, true);
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.equal(result.requirements[0].preview.filled.find((field) => field.key === "resume")?.value,
+    "resume.pdf");
+});
+
+test("Ashby resume lost after save cannot reach final review", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
+  const resume = path.join(directory, "resume.pdf");
+  await writeFile(resume, "resume-body");
+  const url = "https://jobs.ashbyhq.com/example/application";
+  const html = `<form>
+    <label>Resume <input name="resume" type="file" required
+      onchange="setTimeout(() => fetch('/api/non-user-graphql', {method:'POST'})
+        .then(() => { document.querySelector('[name=resume]').value = ''; }), 3000)"></label>
+    <button type="submit">Submit Application</button>
+  </form>`;
+  const result = await run(html, {}, { ...profile, documents: { resume } },
+    { finalApprovalRequired: true }, async (page) => {
+      await page.route(url, (route) => route.fulfill({ status: 200,
+        contentType: "text/html", body: html }));
+      await page.route("https://jobs.ashbyhq.com/api/non-user-graphql", (route) =>
+        route.fulfill({ status: 200, contentType: "application/json",
+          body: JSON.stringify({ data: { setFormValueToFile: { ok: true } } }) }));
+    }, {}, { applyUrl: url });
+  assert.equal(result.status, "needs_input");
+  assert.ok(result.requirements.every((item) => item.kind !== "final_submission_approval"));
+});
+
 test("Greenhouse resume success chip survives final review beside an empty cover-letter input", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-upload-test-"));
   const resume = path.join(directory, "resume.pdf");
