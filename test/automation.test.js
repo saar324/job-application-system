@@ -291,6 +291,18 @@ test("visual required text does not break deterministic profile aliases", async 
     ["Ada", "https://www.linkedin.com/in/example/", "5", "Yes"]);
 });
 
+test("an exact boolean answer checks its matching checkbox inside a group", async () => {
+  const option = "I can be based in a European country other than Germany or the UK where I do not need visa support";
+  const result = await run(`<form><fieldset><legend>Preferred work location</legend>
+    <label><input type="checkbox" name="${option}">${option}</label>
+    <label><input type="checkbox" name="UK">I can be based in the UK</label>
+    </fieldset><button type="submit">Submit Application</button></form>`,
+  { [option]: true }, profile, { finalApprovalRequired: true });
+  assert.equal(result.requirements[0].kind, "final_submission_approval");
+  assert.deepEqual(result.requirements[0].preview.filled.map((field) => [field.label, field.value]),
+    [[option, "Yes"]]);
+});
+
 test("phone widgets may normalize spacing without invalidating the verified number", async () => {
   const result = await run(`<form><label>Phone number with country code
     <input name="phone" type="tel" oninput="this.value=this.value.replace(/\\s/g,'')"></label>

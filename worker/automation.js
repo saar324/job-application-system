@@ -209,6 +209,14 @@ function resolveAnswer(field, answers, profileValues, preparedAnswers = {}, appr
   const candidates = [...new Set([field.name, field.id, field.label, field.groupQuestion]
     .filter(Boolean).flatMap((value) => [value, withoutRequiredMarker(value)]))];
   const annualSalary = savedAnnualSalary(field, profile);
+  if (field.type === "checkbox") {
+    for (const candidate of [field.id, field.label, withoutRequiredMarker(field.label)].filter(Boolean)) {
+      const direct = Object.hasOwn(answers, candidate) ? answers[candidate] : answers[normalize(candidate)];
+      if (typeof direct === "boolean" || /^(?:yes|no|true|false)$/.test(normalize(direct))) {
+        return { value: direct, source: "application answer" };
+      }
+    }
+  }
   if (field.type === "checkbox" && field.groupQuestion) {
     for (const candidate of [field.name, field.groupQuestion]) {
       const direct = Object.hasOwn(answers, candidate) ? answers[candidate] : answers[normalize(candidate)];
