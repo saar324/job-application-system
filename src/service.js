@@ -799,9 +799,16 @@ export class ApplicationService {
     }
     const outcomeEvidence = typeof input?.outcomeEvidence === "string"
       ? input.outcomeEvidence.trim() : input?.outcomeEvidence;
+    if (input?.submissionOutcome !== undefined && input.submissionOutcome !== "unverified") {
+      throw new ClientError(400, "submission outcome must be unverified");
+    }
     if (outcomeEvidence !== undefined && (typeof outcomeEvidence !== "string"
       || outcomeEvidence.length < 8 || outcomeEvidence.length > 500)) {
       throw new ClientError(400, "outcome evidence must be 8 to 500 characters");
+    }
+    if (input?.submissionOutcome === "unverified" && !outcomeEvidence
+      || outcomeEvidence && input?.submissionOutcome !== "unverified") {
+      throw new ClientError(400, "an unverified outcome and evidence must be provided together");
     }
     return this.store.mutate((state) => {
       const application = state.applications.find((item) => item.id === applicationId
@@ -836,7 +843,8 @@ export class ApplicationService {
       application.status = "skipped";
       application.updatedAt = changedAt;
       application.skip = { reasonCode, reason, at: changedAt, by: identity.actorId,
-        ...(outcomeUncertain ? { submissionOutcome: "unverified", outcomeEvidence } : {}) };
+        ...(input?.submissionOutcome === "unverified"
+          ? { submissionOutcome: "unverified", outcomeEvidence } : {}) };
       application.decision ??= { eligible: false, reasons: [] };
       application.decision.reasons ??= [];
       application.decision.reasons.push(`skipped: ${reason}`);
