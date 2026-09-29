@@ -206,6 +206,15 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "GET" && url.pathname === "/v1/application-metrics") {
         return send(response, 200, service.applicationMetrics(identity.profileId));
       }
+      const skipApplication = url.pathname.match(/^\/v1\/applications\/([^/]+)\/skip$/);
+      if (request.method === "POST" && skipApplication) {
+        const body = await jsonBody(request);
+        const saved = await idempotentHttp(service, request, identity, "skip_application",
+          { applicationId: skipApplication[1], body },
+          async () => ({ status: 200,
+            body: await service.skipApplication(skipApplication[1], body, identity) }));
+        return send(response, saved.status, saved.body);
+      }
       if (request.method === "GET" && url.pathname === "/v1/confirmations") {
         const items = service.list("confirmations", identity.profileId);
         return send(response, 200, { items: items.filter((item) => item.status === "pending") });

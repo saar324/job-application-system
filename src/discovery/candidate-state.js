@@ -14,7 +14,8 @@ export function matchingStoredLead(state, profileId, candidate) {
 
 export function leadRetryDecision(item, candidate, at = Date.now()) {
   if (!item) return null;
-  if (item.discoveryState === "closed" && item.closedOrigin === "posting_unavailable") {
+  if (item.discoveryState === "closed"
+    && ["posting_unavailable", "reviewed_skip"].includes(item.closedOrigin)) {
     return Date.parse(item.closedRetryAfter ?? "") > at ? "closed_backoff" : null;
   }
   const pending = item.discoveryState === "pending_destination"

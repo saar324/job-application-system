@@ -23,6 +23,7 @@ $JOBCLI applications
 $JOBCLI application-log
 $JOBCLI backlog
 $JOBCLI handoff APPLICATION_UUID
+$JOBCLI skip APPLICATION_UUID
 $JOBCLI application-metrics
 $JOBCLI campaigns
 $JOBCLI inbox
@@ -102,6 +103,22 @@ Do not create a schedule unless the owner explicitly requests one. Do not implem
 `application-log` joins each durable application with its opportunity. It reports the company, role, URLs, status, timestamps, receipt, and structured questions with answers. Credential-like values are redacted.
 
 `backlog` lists this profile's paused applications, oldest pause first, with their blocker kinds and the number of safely recorded form values. Track the application IDs created during the current request and review those after its independent work; older paused applications remain available for a separate owner request. `handoff ID` returns one paused application with its destination, pending questions, and the latest checkpoint's filled and unfilled fields. A checkpoint records what the worker observed before closing its tab; it does not prove that the employer retained the values. Match each saved field against the live form before restoring it. If `requiresOutcomeCheck` is true, reconcile the prior final action before reopening or submitting the role. Handle one backlog item at a time in a visible browser after independent batch work is done.
+
+For a reviewed paused application that should no longer be pursued, close it as `skipped` rather than rejecting an unrelated confirmation. This also reclassifies a previously declined application. Accepted reason codes are `posting_closed`, `invalid_destination`, `not_relevant`, `ineligible`, `duplicate`, and `owner_choice`. Give a specific reason from the current official listing or verified profile:
+
+```bash
+printf '%s' '{"reasonCode":"posting_closed","reason":"The current official job board no longer lists this role."}' \
+  | $JOBCLI skip APPLICATION_UUID
+```
+
+If the prior Submit may have run, check the attempt and employer outcome before closing. When the outcome still cannot be verified and the owner chooses to abandon the application, retain that uncertainty instead of claiming no submission:
+
+```bash
+printf '%s' '{"reasonCode":"not_relevant","reason":"The role requires work rights this profile does not hold.","submissionOutcome":"unverified","outcomeEvidence":"The attempt log and receipt email search did not verify an employer result."}' \
+  | $JOBCLI skip APPLICATION_UUID
+```
+
+Do not use a 403, CAPTCHA, login wall, or generic page alone as a closed-posting reason. A successfully submitted application cannot be skipped.
 
 `application-metrics` returns profile-bound aggregate attempt counts and p50/p95 queue, execution, owner-wait, and worker-stage durations. Every duration includes a sample count; unavailable token counts are `null`, not zero.
 

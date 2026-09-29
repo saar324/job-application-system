@@ -96,6 +96,33 @@ test("HTTP authentication fixes profile identity and mutation retries are idempo
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
+test("HTTP skip closes a paused application and requires profile authentication", async () => {
+  const { server, service, base } = await fixture();
+  try {
+    const identity = { actorId: "agent-one", profileId: "profile-one" };
+    service.config.modes.full_time.requireConfirmationFor = ["legal_attestation"];
+    const job = await service.addOpportunity({ title: "Engineer", company: "Example",
+      applyUrl: "https://example.test/apply", score: 90,
+      legalAttestations: [{ key: "truthful", label: "I certify that this application is truthful" }]
+    }, identity);
+    const pending = await service.requestApplication(job.id, {}, identity);
+    assert.equal(pending.status, "waiting_confirmation");
+    const url = `${base}/v1/applications/${pending.id}/skip`;
+    const body = JSON.stringify({ reasonCode: "not_relevant",
+      reason: "The reviewed role does not fit this profile." });
+    assert.equal((await fetch(url, { method: "POST", body })).status, 401);
+    const headers = { authorization: "Bearer profile-one-token", "content-type": "application/json",
+      "idempotency-key": "skip-paused-example-1" };
+    const first = await fetch(url, { method: "POST", headers, body });
+    const replay = await fetch(url, { method: "POST", headers, body });
+    assert.equal(first.status, 200);
+    assert.equal(replay.status, 200);
+    assert.equal((await first.json()).status, "skipped");
+    assert.equal((await replay.json()).status, "skipped");
+    assert.equal(service.list("confirmations", identity.profileId)[0].status, "superseded");
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
 test("HTTP idempotency serializes concurrent retries and rejects changed payloads", async () => {
   const { server, service, base } = await fixture();
   let executions = 0;

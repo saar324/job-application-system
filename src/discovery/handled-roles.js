@@ -82,6 +82,7 @@ export function relatedApplicationRole(state, profileId, candidate, excludeAppli
     if (application.profileId !== profileId || application.id === excludeApplicationId) continue;
     if (["skipped", "rejected", "failed"].includes(application.status)
       && !application.receipt?.submittedAt
+      && application.skip?.submissionOutcome !== "unverified"
       && application.finalSubmissionDecision?.status !== "consumed") continue;
     const previous = opportunities.get(application.opportunityId);
     if (!previous) continue;
@@ -139,9 +140,10 @@ export function knownRoleIndex(state, profileId, { includeIrrelevant = true } = 
     // carried no final action, so a fresh employer check is safe; receipts and
     // uncertain final actions remain handled regardless of lead state.
     if (opportunity.discoveryState === "closed"
-      && opportunity.closedOrigin === "posting_unavailable"
+      && ["posting_unavailable", "reviewed_skip"].includes(opportunity.closedOrigin)
       && applications.every((application) =>
       application.status === "skipped" && !application.receipt?.submittedAt
+      && application.skip?.submissionOutcome !== "unverified"
       && application.finalSubmissionDecision?.status !== "consumed")) continue;
     for (const key of roleKeys(opportunity)) keys.add(key);
   }

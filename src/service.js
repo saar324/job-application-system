@@ -17,6 +17,12 @@ import { CLOSED_RETRY_MS, PENDING_RETRY_MS, PENDING_TTL_MS,
 
 function now() { return new Date().toISOString(); }
 const inactive = (item) => ["skipped", "rejected", "failed"].includes(item.status);
+const SKIP_REASONS = new Set([
+  "posting_closed", "invalid_destination", "not_relevant", "ineligible", "duplicate", "owner_choice"
+]);
+const UNCERTAIN_SUBMISSION_KINDS = new Set([
+  "submission_unverified", "submission_recovery", "submission_email_verification", "submission_blocked"
+]);
 
 export class ApplicationService {
   #profileRunners = new Map();
@@ -153,13 +159,15 @@ export class ApplicationService {
         const priorApplications = state.applications.filter((application) =>
           application.profileId === identity.profileId && application.opportunityId === existing.id);
         const safeClosedRetry = existing.discoveryState === "closed"
-          && existing.closedOrigin === "posting_unavailable"
+          && ["posting_unavailable", "reviewed_skip"].includes(existing.closedOrigin)
           && priorApplications.every((application) => application.status === "skipped"
             && !application.receipt?.submittedAt
+            && application.skip?.submissionOutcome !== "unverified"
             && application.finalSubmissionDecision?.status !== "consumed");
         const safeExpiredRetry = existing.discoveryState === "expired"
           && priorApplications.every((application) => application.status === "skipped"
             && !application.receipt?.submittedAt
+            && application.skip?.submissionOutcome !== "unverified"
             && application.finalSubmissionDecision?.status !== "consumed");
         const canPromote = (existing.applicationDestinationPending === true
           && priorApplications.length === 0)
@@ -780,6 +788,79 @@ export class ApplicationService {
     });
     if (result.status === "queued") this.enqueue(result.id);
     return result;
+  }
+
+  async skipApplication(applicationId, input, identity) {
+    const reasonCode = input?.reasonCode;
+    const reason = typeof input?.reason === "string" ? input.reason.trim() : undefined;
+    if (!SKIP_REASONS.has(reasonCode) || typeof reason !== "string"
+      || reason.length < 8 || reason.length > 500) {
+      throw new ClientError(400, "a valid skip reason code and 8 to 500 character reason are required");
+    }
+    const outcomeEvidence = typeof input?.outcomeEvidence === "string"
+      ? input.outcomeEvidence.trim() : input?.outcomeEvidence;
+    if (outcomeEvidence !== undefined && (typeof outcomeEvidence !== "string"
+      || outcomeEvidence.length < 8 || outcomeEvidence.length > 500)) {
+      throw new ClientError(400, "outcome evidence must be 8 to 500 characters");
+    }
+    return this.store.mutate((state) => {
+      const application = state.applications.find((item) => item.id === applicationId
+        && item.profileId === identity.profileId);
+      if (!application) throw new ClientError(404, "application not found");
+      if (application.receipt?.submittedAt || application.status === "submitted") {
+        throw new ClientError(409, "a submitted application cannot be skipped");
+      }
+      if (!["waiting_confirmation", "waiting_research", "rejected", "skipped"].includes(application.status)) {
+        throw new ClientError(409, "only a paused or previously declined application can be skipped");
+      }
+      if (application.status === "skipped") {
+        if (application.skip?.reasonCode === reasonCode && application.skip?.reason === reason) return application;
+        throw new ClientError(409, "application was already skipped for a different reason");
+      }
+      const confirmations = state.confirmations.filter((item) => item.applicationId === application.id
+        && item.profileId === identity.profileId);
+      const outcomeUncertain = application.checkpoint?.phase === "final_action_started"
+        || application.finalSubmissionDecision?.status === "consumed"
+        || confirmations.some((item) => UNCERTAIN_SUBMISSION_KINDS.has(item.kind));
+      if (outcomeUncertain && (!outcomeEvidence || input?.submissionOutcome !== "unverified")) {
+        throw new ClientError(409,
+          "the prior submission outcome is uncertain; check it and record unverified outcome evidence before skipping");
+      }
+      const changedAt = now();
+      for (const confirmation of confirmations) {
+        if (confirmation.status !== "pending") continue;
+        confirmation.status = "superseded";
+        confirmation.resolvedAt = changedAt;
+        confirmation.resolvedBy = identity.actorId;
+      }
+      application.status = "skipped";
+      application.updatedAt = changedAt;
+      application.skip = { reasonCode, reason, at: changedAt, by: identity.actorId,
+        ...(outcomeUncertain ? { submissionOutcome: "unverified", outcomeEvidence } : {}) };
+      application.decision ??= { eligible: false, reasons: [] };
+      application.decision.reasons ??= [];
+      application.decision.reasons.push(`skipped: ${reason}`);
+      if (reasonCode === "posting_closed" || reasonCode === "invalid_destination") {
+        const opportunity = state.opportunities.find((item) => item.id === application.opportunityId
+          && item.profileId === identity.profileId);
+        if (opportunity) {
+          const count = Number(opportunity.closedRetryCount ?? 0) + 1;
+          opportunity.discoveryState = "closed";
+          opportunity.closedOrigin = "reviewed_skip";
+          opportunity.closedObservedAt = changedAt;
+          opportunity.closedRetryCount = count;
+          opportunity.closedRetryAfter = new Date(Date.now()
+            + retryDelay(CLOSED_RETRY_MS, count, 7 * CLOSED_RETRY_MS)).toISOString();
+          opportunity.reserveExpiresAt = changedAt;
+        }
+      }
+      audit(state, identity, "application.skipped", application.id,
+        { reasonCode, reason, outcomeUncertain });
+      recordWorkflowStage(state, identity, application.id, "terminal_failure", {
+        campaignId: application.campaignId, applicationId: application.id, outcome: "reviewed_skip"
+      });
+      return application;
+    });
   }
 
   async refreshFinalPreview(applicationId, identity, input = {}) {
@@ -1937,6 +2018,7 @@ function buildApplicationLogEntry(application, opportunity = {}, confirmations =
     decision: application.decision,
     error: application.error,
     employerStatus: application.employerStatus,
+    skip: application.skip,
     receipt: application.receipt
   };
 }
