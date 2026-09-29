@@ -149,6 +149,22 @@ test("an uncertain prior submission needs an explicit unverified outcome before 
   assert.equal(relatedApplicationRole(state, identity.profileId, role), "same_role");
 });
 
+test("an explicitly reported unverified outcome remains recorded and fenced", async () => {
+  const service = await fixture();
+  const job = await opportunity(service, {
+    legalAttestations: [{ key: "truthful", label: "I certify that this application is truthful" }]
+  });
+  const pending = await service.requestApplication(job.id, {}, identity);
+  const input = { reasonCode: "not_relevant", reason: "The reviewed role requires another stack.",
+    submissionOutcome: "unverified",
+    outcomeEvidence: "The earlier external browser outcome could not be confirmed." };
+  const skipped = await service.skipApplication(pending.id, input, identity);
+  assert.equal(skipped.skip.submissionOutcome, "unverified");
+  const { relatedApplicationRole } = await import("../src/discovery/handled-roles.js");
+  const state = service.store.snapshot();
+  assert.equal(relatedApplicationRole(state, identity.profileId, state.opportunities[0]), "same_role");
+});
+
 test("skipping rejects submitted applications and other profiles", async () => {
   const service = await fixture();
   const job = await opportunity(service);
