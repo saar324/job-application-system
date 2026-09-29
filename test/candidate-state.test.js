@@ -66,7 +66,8 @@ test("pending destination retries are delayed, bounded, and expire across campai
   assert.equal(store.snapshot().applications.length, 0);
 });
 
-test("closed role waits for retry and reopens only after a fresh matching ATS role", async () => {
+for (const closedOrigin of ["posting_unavailable", "reviewed_skip"]) test(
+  `${closedOrigin} role waits for retry and reopens only after a fresh matching ATS role`, async () => {
   const job = { id: roleId, title: "Senior Engineer", isRemote: true,
     location: "Worldwide", descriptionPlain: "TypeScript Node.js", applyUrl,
     jobUrl: `https://jobs.ashbyhq.com/example/${roleId}` };
@@ -78,7 +79,7 @@ test("closed role waits for retry and reopens only after a fresh matching ATS ro
     applicationDestinationPending: false }, identity, { serverVerifiedDiscovery: true });
   await store.mutate((state) => {
     state.opportunities[0].discoveryState = "closed";
-    state.opportunities[0].closedOrigin = "posting_unavailable";
+    state.opportunities[0].closedOrigin = closedOrigin;
     state.opportunities[0].closedRetryAfter = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
     state.applications.push({ id: "prior-skipped", profileId: "owner",
       opportunityId: stored.id, status: "skipped", createdAt: new Date().toISOString() });

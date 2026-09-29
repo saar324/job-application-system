@@ -178,6 +178,24 @@ export function createProfileMcpServer({ service, discovery, profiles, config, i
     if (!item) throw new Error("application not found");
     return result(item);
   });
+  server.registerTool("skip_application", {
+    description: "Close a reviewed paused or declined application as skipped with a reason. Check any uncertain prior submission outcome first.",
+    inputSchema: {
+      applicationId: z.string().uuid(),
+      reasonCode: z.enum(["posting_closed", "invalid_destination", "not_relevant",
+        "ineligible", "duplicate", "owner_choice"]),
+      reason: z.string().min(8).max(500),
+      submissionOutcome: z.literal("unverified").optional(),
+      outcomeEvidence: z.string().min(8).max(500).optional(),
+      idempotencyKey: z.string().min(8).max(200)
+    }, annotations: { openWorldHint: false, destructiveHint: true }
+  }, async ({ applicationId, idempotencyKey, ...input }) => result(await idempotent(
+    service, identity, "skip_application", idempotencyKey, { applicationId, ...input },
+    async () => {
+      const value = await service.skipApplication(applicationId, input, identity);
+      return { applicationId: value.id, status: value.status, skip: value.skip };
+    }
+  )));
   server.registerTool("request_application", {
     description: "Create or return a durable application for a public HTTPS URL.",
     inputSchema: {

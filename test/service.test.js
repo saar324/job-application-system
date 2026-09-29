@@ -90,6 +90,76 @@ test("an explicit unavailable posting is skipped without approval or submission"
   assert.ok(Date.parse(stored.closedRetryAfter) > Date.now());
 });
 
+test("a reviewed paused application is skipped with a reason and no pending confirmations", async () => {
+  const service = await fixture();
+  service.adapter.submit = async () => { throw new NeedsReviewError("Review", [{ kind: "human_challenge" }]); };
+  const job = await opportunity(service);
+  const pending = await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const skipped = await service.skipApplication(pending.id, {
+    reasonCode: "posting_closed", reason: "The official posting has been removed."
+  }, identity);
+  assert.equal(skipped.status, "skipped");
+  assert.equal(skipped.skip.reasonCode, "posting_closed");
+  assert.equal(service.applicationLog(identity.profileId)[0].skip.reasonCode, "posting_closed");
+  assert.equal(service.list("confirmations", identity.profileId)[0].status, "superseded");
+  assert.equal(service.list("opportunities", identity.profileId)[0].discoveryState, "closed");
+});
+
+test("a declined application can be relabeled skipped without losing its audit trail", async () => {
+  const service = await fixture();
+  const job = await opportunity(service, {
+    legalAttestations: [{ key: "truthful", label: "I certify that this application is truthful" }]
+  });
+  const pending = await service.requestApplication(job.id, {}, identity);
+  const confirmation = service.list("confirmations", identity.profileId)[0];
+  await service.resolveConfirmation(confirmation.id, { approved: false }, identity);
+  const input = { reasonCode: "not_relevant", reason: "The role needs a different primary technology stack." };
+  const skipped = await service.skipApplication(pending.id, input, identity);
+  assert.equal(skipped.status, "skipped");
+  assert.equal(service.list("confirmations", identity.profileId)[0].status, "rejected");
+  assert.equal((await service.skipApplication(pending.id, input, identity)).status, "skipped");
+  await assert.rejects(service.skipApplication(pending.id, {
+    ...input, reason: "This is a different reason for the same role."
+  }, identity), { status: 409 });
+});
+
+test("an uncertain prior submission needs an explicit unverified outcome before skip", async () => {
+  const service = await fixture();
+  service.adapter.submit = async () => { throw new NeedsReviewError("Check outcome", [
+    { kind: "submission_unverified" }
+  ]); };
+  const job = await opportunity(service);
+  const pending = await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const input = { reasonCode: "ineligible", reason: "The form requires work rights not in the profile." };
+  await assert.rejects(service.skipApplication(pending.id, input, identity), { status: 409 });
+  const skipped = await service.skipApplication(pending.id, { ...input,
+    submissionOutcome: "unverified",
+    outcomeEvidence: "Checked the saved attempt and receipt inbox; neither proves submission."
+  }, identity);
+  assert.equal(skipped.status, "skipped");
+  assert.equal(skipped.skip.submissionOutcome, "unverified");
+  assert.equal(service.list("confirmations", identity.profileId)[0].status, "superseded");
+  const { knownRoleIndex, isHandledRole, relatedApplicationRole } = await import(
+    "../src/discovery/handled-roles.js");
+  const state = service.store.snapshot();
+  const role = state.opportunities[0];
+  assert.equal(isHandledRole(role, knownRoleIndex(state, identity.profileId)), true);
+  assert.equal(relatedApplicationRole(state, identity.profileId, role), "same_role");
+});
+
+test("skipping rejects submitted applications and other profiles", async () => {
+  const service = await fixture();
+  const job = await opportunity(service);
+  const submitted = await service.requestApplication(job.id, {}, identity);
+  await service.waitForIdle();
+  const input = { reasonCode: "owner_choice", reason: "The owner chose to stop pursuing this role." };
+  await assert.rejects(service.skipApplication(submitted.id, input, identity), { status: 409 });
+  await assert.rejects(service.skipApplication(submitted.id, input,
+    { actorId: "other", profileId: "person-two" }), { status: 404 });
+});
+
 test("full-time is the default and a high-score routine application submits", async () => {
   const service = await fixture();
   const job = await opportunity(service);
