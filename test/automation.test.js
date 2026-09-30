@@ -418,6 +418,23 @@ test("Ashby custom answers are selected, verified, and shown in final preview", 
   [["Location", "Portugal"], ["Completed degree?", "Yes"], ["How did you hear about us?", "Job board"]]);
 });
 
+test("Ashby Yes/No rejects a stale opposite selection", async () => {
+  const result = await run(`<form>
+    <div class="ashby-application-form-field-entry" data-field-path="support-id">
+      <label class="ashby-application-form-question-title _required_a1">Need employer support?</label>
+      <div class="ashby-application-form-input-yesno">
+        <button type="button" data-option="yes" aria-pressed="true">Yes</button>
+        <button type="button" data-option="no" aria-pressed="false"
+          onclick="this.setAttribute('aria-pressed','true')">No</button>
+      </div>
+    </div>
+    <button type="submit">Submit Application</button>
+  </form>`, { "support-id": false }, profile, { finalApprovalRequired: true });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.requirements[0].kind, "missing_answer");
+  assert.match(result.requirements[0].message, /selected exclusively/);
+});
+
 test("Ashby optional location combobox uses the verified profile and reaches final review", async () => {
   const result = await run(`<form>
     <div class="ashby-application-form-field-entry" data-field-path="location-id">

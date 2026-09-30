@@ -153,10 +153,12 @@ export async function fillAshbyRequiredControls(surface, profile, answers = {}) 
       } else if (field.type === "yesno") {
         const choice = value === true ? "yes" : value === false ? "no" : normalize(value);
         if (!["yes", "no"].includes(choice)) throw new Error("answer must be Yes or No");
-        const button = surface.locator(".ashby-application-form-field-entry").nth(field.index)
-          .locator(`.ashby-application-form-input-yesno button[data-option="${choice}"]`);
+        const entry = surface.locator(".ashby-application-form-field-entry").nth(field.index);
+        const button = entry.locator(`.ashby-application-form-input-yesno button[data-option="${choice}"]`);
         await button.click();
-        if (await button.getAttribute("aria-pressed") !== "true") throw new Error("answer was not selected");
+        const selected = await entry.locator(".ashby-application-form-input-yesno button[aria-pressed='true']")
+          .evaluateAll((buttons) => buttons.map((item) => item.getAttribute("data-option")));
+        if (selected.length !== 1 || selected[0] !== choice) throw new Error("answer was not selected exclusively");
         value = choice === "yes" ? "Yes" : "No";
       } else {
         const option = field.options.find((item) => normalize(item.label) === normalize(value));
@@ -204,7 +206,7 @@ export async function verifyAshbyRequiredControls(surface, fields) {
         && input.getAttribute("aria-expanded") === "false");
     }
     const choice = normalize(field.value);
-    return entry.querySelector(`.ashby-application-form-input-yesno button[data-option="${choice}"]`)
-      ?.getAttribute("aria-pressed") === "true";
+    const selected = [...entry.querySelectorAll(".ashby-application-form-input-yesno button[aria-pressed='true']")];
+    return selected.length === 1 && selected[0].getAttribute("data-option") === choice;
   }), fields);
 }
