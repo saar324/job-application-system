@@ -19,7 +19,7 @@ test("public starter has reusable sources without applicant policy or employer b
   const catalog = JSON.parse(await readFile("skills/job-application/references/public-sources.json", "utf8"));
   const sources = [...catalog.autonomousDiscovery.serverAdapters,
     ...catalog.autonomousDiscovery.visibleBrowserSources];
-  assert.equal(sources.length, 13);
+  assert.equal(sources.length, 14);
   assert.equal(new Set(sources.map((source) => source.id)).size, sources.length);
   assert.ok(sources.every((source) => Object.keys(source).sort().join(",") === "id,name,url"));
   assert.ok(sources.every((source) => {

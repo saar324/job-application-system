@@ -2,7 +2,7 @@
 
 Discovery adapters normalize provider-specific listings into one opportunity model and fail independently, so one unavailable provider does not stop a scan.
 
-The codebase includes adapter implementations for public feeds and configurable ATS boards. No adapter is enabled in the base defaults, and no employer board is preconfigured. An optional `config/discovery.example.json` enables four public feeds in simulation. `skills/job-application/references/public-sources.json` lists broad public browser sources and the seven server adapter types without applicant filters. Select employer boards and personal source priorities only in a private config file.
+The codebase includes adapter implementations for public feeds and configurable ATS boards. No adapter is enabled in the base defaults, and no employer board is preconfigured. An optional `config/discovery.example.json` enables four public feeds in simulation. `skills/job-application/references/public-sources.json` lists broad public browser sources and the eight server adapter types without applicant filters. Select employer boards and personal source priorities only in a private config file.
 
 ## Private configuration
 
@@ -14,7 +14,8 @@ Mode-level `sources` chooses enabled adapter IDs. ATS board selections live unde
     "sourceOptions": {
       "ashby": { "boards": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] },
       "greenhouse": { "boards": [{ "token": "REPLACE_ME", "company": "REPLACE_ME" }] },
-      "lever": { "sites": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] }
+      "lever": { "sites": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] },
+      "workable": { "boards": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] }
     }
   },
   "modes": {
@@ -186,6 +187,12 @@ Additional official ATS boards may be admitted from a profile's recent verified 
 This configuration is server owned and cannot be supplied by an agent's search request. The URL must identify one role on a recognized official Ashby, Greenhouse, or Lever host. Owner-curated reviews expire after seven days; other verified-role and receipt seeds expire after 30 days. Each profile gets at most five added boards per ATS source per completed search cycle. An added board receives at most two list requests in a rolling 24 hours, recorded in the durable audit log before fetch. Configured boards retain the ordinary source request budget. Every returned role still goes through current posting, geography, fit, destination, and handled-role checks. To roll back an added board immediately, set `enabled: false` on its curated seed or add its lowercase `source:board` key to `disabledBoardKeys`; remove the key after review. A 403 or 429 still triggers the existing six-hour board cooldown and stops queued requests to that origin for the scan.
 
 The scan response includes `learnedBoardYield` with each added board's seed provenance, list requests, and count of distinct eligible, unhandled, verified-destination roles. Inspect this count and the actual roles in a read-only shadow before promoting a board. A board with zero eligible roles has zero measured application supply even if its feed returned many postings.
+
+## Workable
+
+The `workable` adapter reads each configured account (the slug in `apply.workable.com/{slug}/`) from Workable's documented public careers-page endpoint, `https://www.workable.com/api/accounts/{slug}?details=true`. One request returns every published job for the account, including descriptions. No key is needed. Workable's `telecommuting` flag is the only remote evidence, and locations Workable marks `hidden` are ignored. An unknown account is reported as an HTTP 404 for that account only; 403 and 429 responses start the usual six-hour board cooldown.
+
+Workable roles are for reading only in the automatic lanes: there is no Workable submission adapter yet. A discovered Workable role has a known employer destination, so it is not "destination pending", but auto-apply, campaign selection, reserve refresh and standing authorization all skip it with `ats_submission_unsupported`. Source health reports those roles as `submission_unsupported`. A person can still request one manually. Before admitting that request, the server re-reads the role from Workable. A closed or renamed posting is refused with `role_closed_or_changed`, an unreachable check is refused as retryable (`workable_revalidation_unavailable`), and an admitted application always needs exact final approval.
 
 ## Normalized records
 

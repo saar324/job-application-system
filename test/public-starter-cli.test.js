@@ -21,7 +21,7 @@ test("all-source runner uses the public catalog when no private catalog is suppl
       "--server", `http://127.0.0.1:${server.address().port}`, "--reserve-only"]),
     /fixture stop/);
     assert.deepEqual(submitted.sources,
-      ["remoteok", "arbeitnow", "jobicy", "himalayas", "ashby", "greenhouse", "lever"]);
+      ["remoteok", "arbeitnow", "jobicy", "himalayas", "ashby", "greenhouse", "lever", "workable"]);
     assert.deepEqual(submitted.fallbackSources,
       ["jobgether", "remotive", "weworkremotely", "workingnomads", "wellfound", "ycombinator"]);
     assert.equal(submitted.reserveOnly, true);

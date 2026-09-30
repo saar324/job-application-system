@@ -9,7 +9,7 @@ ineligible, and compensation-conflicting records.
 ## Flow
 
 1. `run-all-source-campaign.js` reads the public starter catalog by default, or a private catalog supplied with `--catalog`, and creates one campaign.
-2. The seven server adapters search their official or public feeds with a limit of 10 per source.
+2. The eight server adapters search their official or public feeds with a limit of 10 per source.
 3. The browser runner visits each visible source sequentially. It uses the source's listing URL, searches a title from the private profile when a visible search box exists, reads schema.org `JobPosting` data, follows likely job links, and follows explicit
    next-page controls. It reports small candidate batches after each page or detail. The server returns the count that passed
    eligibility, destination, and handled-role gates; the runner continues until 10 have been accepted or the source budget ends.

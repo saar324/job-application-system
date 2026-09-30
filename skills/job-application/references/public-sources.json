@@ -20,7 +20,8 @@
       { "id": "himalayas", "name": "Himalayas", "url": "https://himalayas.app/jobs" },
       { "id": "ashby", "name": "Ashby", "url": "https://jobs.ashbyhq.com/" },
       { "id": "greenhouse", "name": "Greenhouse", "url": "https://job-boards.greenhouse.io/" },
-      { "id": "lever", "name": "Lever", "url": "https://jobs.lever.co/" }
+      { "id": "lever", "name": "Lever", "url": "https://jobs.lever.co/" },
+      { "id": "workable", "name": "Workable", "url": "https://apply.workable.com/" }
     ],
     "visibleBrowserSources": [
       { "id": "jobgether", "name": "Jobgether", "url": "https://jobgether.com/" },
