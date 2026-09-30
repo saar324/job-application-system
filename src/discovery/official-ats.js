@@ -2,7 +2,10 @@ import { roleKeys } from "./handled-roles.js";
 import { plainText } from "./text.js";
 import { normalizeApplicationQuestions } from "./normalization.js";
 import { greenhouseRemoteRole } from "./greenhouse-remote.js";
-import { greenhouseAnnualSalary } from "./greenhouse-compensation.js";
+import { labeledAnnualSalary } from "./labeled-compensation.js";
+import { WORKABLE_HOST, workableDestination, workableIdentity } from "./workable-identity.js";
+import { workdayCanonicalPosting, workdayDestination, workdayIdentity, workdayKeyFromUrl,
+  workdayPostingKey } from "./workday-identity.js";
 
 const ATS_HOSTS = {
   ashby: new Set(["jobs.ashbyhq.com"]),
@@ -89,7 +92,7 @@ export async function fetchVerifiedOfficialAtsRole(rawUrl, sourceOptions = {}, f
       applyUrl: row.absolute_url || `https://job-boards.greenhouse.io/${parsed.board}/jobs/${parsed.id}`,
       listingUrl: row.absolute_url || `https://job-boards.greenhouse.io/${parsed.board}/jobs/${parsed.id}`,
       description: plainText(`${row.content ?? ""} ${(row.departments ?? []).map((item) => item.name).join(" ")}`),
-      compensation: greenhouseAnnualSalary(row.content),
+      compensation: labeledAnnualSalary(row.content),
       location: row.location?.name ?? "", remote: greenhouseRemoteRole(row),
       employmentType: "Full-Time", postedAt: row.updated_at,
       tags: [...(row.departments ?? []).map((item) => item.name), ...(row.offices ?? []).map((item) => item.name)],
@@ -121,6 +124,71 @@ export function officialAtsDestination(role) {
   return url.protocol === "https:" && !url.username && !url.password
     && ATS_HOSTS[parsed.source].has(url.hostname.toLowerCase())
     && roleKeys({ applyUrl: url.toString() }).has(parsed.key);
+}
+
+export const ATS_SUBMISSION_UNSUPPORTED = "ats_submission_unsupported";
+
+// Known employer ATS destinations that the server can read but not submit to.
+// Every automatic lane requires officialAtsDestination, which excludes them.
+export function automaticSubmissionUnsupported(role) {
+  return workableDestination(role) || workdayDestination(role);
+}
+
+export function employerAtsDestination(role) {
+  return officialAtsDestination(role) || automaticSubmissionUnsupported(role);
+}
+
+// Returns "open", "closed_or_changed" or "unavailable". Only "open" admits.
+export async function revalidateWorkableRole(role, fetchImpl = fetch) {
+  const parsed = workableIdentity(role);
+  if (!parsed || !workableDestination(role)) return "closed_or_changed";
+  let response;
+  try {
+    response = await fetchImpl(`https://${WORKABLE_HOST}/api/v2/accounts/${parsed.slug}/jobs/${parsed.shortcode}`, {
+      headers: { "user-agent": "job-application-system/0.2", accept: "application/json" },
+      signal: AbortSignal.timeout(5000) });
+  } catch { return "unavailable"; }
+  if (response.status === 404 || response.status === 410) return "closed_or_changed";
+  if (!response.ok) return "unavailable";
+  let row;
+  try { row = await response.json(); } catch { return "unavailable"; }
+  if (!row || typeof row !== "object") return "unavailable";
+  return row.state === "published"
+    && String(row.shortcode ?? "").toUpperCase() === parsed.shortcode
+    && String(row.title ?? "").trim() === String(role.title ?? "").trim()
+    ? "open" : "closed_or_changed";
+}
+
+// Workday's detail endpoint is the careers site's own, undocumented backend.
+// The URL is rebuilt from the role's canonical listing URL, never from a payload.
+// Returns "open", "closed_or_changed" or "unavailable". Only "open" admits.
+export async function revalidateWorkdayRole(role, fetchImpl = fetch) {
+  const parsed = workdayIdentity(role);
+  const posting = workdayCanonicalPosting(role, "listingUrl");
+  if (!parsed || !posting || !workdayDestination(role) || role.applyUrl !== posting.applyUrl) {
+    return "closed_or_changed";
+  }
+  let response;
+  try {
+    response = await fetchImpl(new URL(`/wday/cxs/${posting.tenant}/${posting.site}${posting.externalPath}`,
+      posting.origin).href, {
+      headers: { "user-agent": "job-application-system/0.2", accept: "application/json" },
+      signal: AbortSignal.timeout(5000) });
+  } catch { return "unavailable"; }
+  if (response.status === 404 || response.status === 410) return "closed_or_changed";
+  if (!response.ok) return "unavailable";
+  let body;
+  try { body = await response.json(); } catch { return "unavailable"; }
+  const info = body?.jobPostingInfo;
+  if (!info || typeof info !== "object") return "unavailable";
+  let urlKey = null;
+  try { urlKey = info.externalUrl ? workdayKeyFromUrl(new URL(info.externalUrl)) : null; } catch { urlKey = null; }
+  const idKey = workdayPostingKey(info.jobPostingId);
+  const keys = [urlKey, idKey && `workday:${parsed.tenant}:${idKey}`].filter(Boolean);
+  return info.posted === true && info.canApply === true
+    && keys.length > 0 && keys.every((key) => key === parsed.key)
+    && String(info.title ?? "").trim() === String(role.title ?? "").trim()
+    ? "open" : "closed_or_changed";
 }
 
 export async function revalidateOfficialAtsRole(role, fetchImpl = fetch) {

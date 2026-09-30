@@ -1,7 +1,18 @@
 import { officialAtsIdentityFromUrl } from "./official-ats.js";
+import { workdaySite } from "./workday-identity.js";
 
+const siteKeyOf = (item) => workdaySite(item?.url)?.key;
+// Each source names its configured list and the board key of one entry: a
+// field, or a function when the key is derived from the entry (Workday's
+// `{tenant}/{site}` comes from a careers-site URL and is never learned).
 const SOURCE_KEYS = { ashby: ["boards", "slug"], greenhouse: ["boards", "token"],
-  lever: ["sites", "slug"] };
+  lever: ["sites", "slug"], workable: ["boards", "slug"], workday: ["sites", siteKeyOf] };
+
+export function configuredBoardKey(sourceId, item) {
+  const keyOf = SOURCE_KEYS[sourceId]?.[1];
+  const key = typeof keyOf === "function" ? keyOf(item) : keyOf ? item?.[keyOf] : item?.slug ?? item?.token;
+  return typeof key === "string" && key ? key : null;
+}
 const MAX_LEARNED_BOARDS = 5;
 const MAX_AGE_MS = 30 * 24 * 60 * 60_000;
 const CURATED_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
@@ -42,8 +53,8 @@ export function sourceConfigWithLearnedBoards(state, profileId, sourceId, config
   const [listKey, boardKey] = definition;
   const configuredBase = configured[listKey] ?? [];
   if (!Array.isArray(configuredBase)) return configured;
-  const base = configuredBase.filter((item) => !isBackedOff(`${sourceId}:${item?.[boardKey]}`));
-  if (!includeLearned) return { ...configured, [listKey]: base };
+  const base = configuredBase.filter((item) => !isBackedOff(`${sourceId}:${configuredBoardKey(sourceId, item)}`));
+  if (!includeLearned || typeof boardKey === "function") return { ...configured, [listKey]: base };
   const seen = new Set(base.map((item) => String(item?.[boardKey] ?? "").toLowerCase()));
   const recent = (state?.opportunities ?? []).filter((item) => item.profileId === profileId
     && item.applicationDestinationVerified === true

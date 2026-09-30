@@ -2,7 +2,7 @@
 
 Discovery adapters normalize provider-specific listings into one opportunity model and fail independently, so one unavailable provider does not stop a scan.
 
-The codebase includes adapter implementations for public feeds and configurable ATS boards. No adapter is enabled in the base defaults, and no employer board is preconfigured. An optional `config/discovery.example.json` enables four public feeds in simulation. `skills/job-application/references/public-sources.json` lists broad public browser sources and the seven server adapter types without applicant filters. Select employer boards and personal source priorities only in a private config file.
+The codebase includes adapter implementations for public feeds and configurable ATS boards. No adapter is enabled in the base defaults, and no employer board is preconfigured. An optional `config/discovery.example.json` enables four public feeds in simulation. `skills/job-application/references/public-sources.json` lists broad public browser sources and the nine server adapter types without applicant filters. Select employer boards and personal source priorities only in a private config file.
 
 ## Private configuration
 
@@ -14,7 +14,9 @@ Mode-level `sources` chooses enabled adapter IDs. ATS board selections live unde
     "sourceOptions": {
       "ashby": { "boards": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] },
       "greenhouse": { "boards": [{ "token": "REPLACE_ME", "company": "REPLACE_ME" }] },
-      "lever": { "sites": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] }
+      "lever": { "sites": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] },
+      "workable": { "boards": [{ "slug": "REPLACE_ME", "company": "REPLACE_ME" }] },
+      "workday": { "sites": [{ "url": "https://REPLACE_ME.wd5.myworkdayjobs.com/REPLACE_ME", "company": "REPLACE_ME" }] }
     }
   },
   "modes": {
@@ -186,6 +188,34 @@ Additional official ATS boards may be admitted from a profile's recent verified 
 This configuration is server owned and cannot be supplied by an agent's search request. The URL must identify one role on a recognized official Ashby, Greenhouse, or Lever host. Owner-curated reviews expire after seven days; other verified-role and receipt seeds expire after 30 days. Each profile gets at most five added boards per ATS source per completed search cycle. An added board receives at most two list requests in a rolling 24 hours, recorded in the durable audit log before fetch. Configured boards retain the ordinary source request budget. Every returned role still goes through current posting, geography, fit, destination, and handled-role checks. To roll back an added board immediately, set `enabled: false` on its curated seed or add its lowercase `source:board` key to `disabledBoardKeys`; remove the key after review. A 403 or 429 still triggers the existing six-hour board cooldown and stops queued requests to that origin for the scan.
 
 The scan response includes `learnedBoardYield` with each added board's seed provenance, list requests, and count of distinct eligible, unhandled, verified-destination roles. Inspect this count and the actual roles in a read-only shadow before promoting a board. A board with zero eligible roles has zero measured application supply even if its feed returned many postings.
+
+## Workable
+
+The `workable` adapter reads each configured account (the slug in `apply.workable.com/{slug}/`) from Workable's documented public careers-page endpoint, `https://www.workable.com/api/accounts/{slug}?details=true`. One request returns every published job for the account, including descriptions. No key is needed. Workable's `telecommuting` flag is the only remote evidence, and locations Workable marks `hidden` are ignored. An unknown account is reported as an HTTP 404 for that account only; 403 and 429 responses start the usual six-hour board cooldown.
+
+Workable roles are for reading only in the automatic lanes: there is no Workable submission adapter yet. A discovered Workable role has a known employer destination, so it is not "destination pending", but auto-apply, campaign selection, reserve refresh and standing authorization all skip it with `ats_submission_unsupported`. Source health reports those roles as `submission_unsupported`. A person can still request one manually. Before admitting that request, the server re-reads the role from Workable. A closed or renamed posting is refused with `role_closed_or_changed`, an unreachable check is refused as retryable (`workable_revalidation_unavailable`), and an admitted application always needs exact final approval.
+
+## Workday
+
+The `workday` adapter reads each configured careers site. Copy the site URL from a browser, for example `https://{tenant}.wd5.myworkdayjobs.com/en-US/{site}`:
+
+```json
+{ "discovery": { "sourceOptions": { "workday": { "sites": [
+  { "url": "https://REPLACE_ME.wd5.myworkdayjobs.com/REPLACE_ME", "company": "REPLACE_ME" }
+] } } } }
+```
+
+The server reads the tenant, the `wdN` instance and the site ID from the URL; the optional locale segment is ignored. The host must be `{tenant}.wd{N}.myworkdayjobs.com`, and the path must name only the site. Custom careers domains, `myworkdaysite.com` URLs, non-`https` URLs and URLs with a `/job/` path, `/login` or a query are ignored. The site key `{tenant}/{site}` names the site in board queries, errors and backoff.
+
+The endpoint the adapter calls, `POST https://{tenant}.{instance}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs`, is **not documented** by Workday. It is the backend the careers site itself uses, and it may change without notice. No key, cookie, login or browser is used. Each scan sends the shared title search plan's terms as Workday's `searchText`, never an empty search, and reads each shortlisted posting from `GET …/wday/cxs/{tenant}/{site}{externalPath}`. The site's own company name is the configured `company`, falling back to the tenant; Workday's `hiringOrganization` names a legal entity and is not used.
+
+Request limits are fixed in code: pages of exactly 20 rows (Workday rejects more), at most 4 search terms and 3 pages per term for each site, at most 15 posting details per site, and at most 120 Workday requests per scan. The scan's own per-source request budget also applies. When a limit stops the adapter reading rows it would otherwise read, the scan records `partial_response_cap` for the site instead of truncating silently.
+
+A role is remote only when Workday's `remoteType` is `Remote` or `Fully Remote`, or, when the tenant sets no `remoteType`, when every one of its locations has a comma- or dash-separated part equal to `Remote` (`US, Remote`, `Remote - Germany`). `Flex`, `Hybrid` and `Onsite` are not remote, and a single office location makes a role not remote. Search rows that are already decided are dropped before their details are read; rows listing several locations are decided from the detail. Unrecognized `remoteType` values are counted as `unrecognizedRemoteType` in the source's yield row. Pay stays unknown unless the description has a labelled annual salary with an ISO currency.
+
+An unknown site returns HTTP 404 and is reported for that site only. HTTP 403 or 429 starts the usual six-hour board cooldown for `workday:{tenant}/{site}` and stops further requests to that host for the rest of the scan. A challenge page or other non-JSON response is reported as `invalid_official_response`, not as zero jobs.
+
+Like Workable, Workday roles are discovery-only for automation. Workday application forms need a candidate account for each employer, and there is no Workday submission adapter. Auto-apply, campaign selection, reserve refresh and standing authorization skip Workday roles with `ats_submission_unsupported`, and source health reports them as `submission_unsupported`. A manual request re-reads the posting from Workday first. A closed, no-longer-applicable or renamed posting is refused with `role_closed_or_changed`, an unreachable or unreadable check is refused as retryable (`workday_revalidation_unavailable`), and an admitted application always needs exact final approval. The same Workday role found through JobsPipe or the browser runner is deduplicated by its tenant and requisition.
 
 ## Normalized records
 

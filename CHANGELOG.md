@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- A `workable` discovery source that reads configured Workable accounts from Workable's documented public careers-page endpoint. Workable roles deduplicate across the account and short-link URL forms, are revalidated before a manual application is admitted, and are skipped by every automatic lane with `ats_submission_unsupported` until a Workable submission adapter exists.
+- A `workday` discovery source that searches operator-configured Workday careers sites through the sites' own undocumented search endpoint, using the shared title search plan within fixed per-site and per-scan request limits (`partial_response_cap` when a limit truncates reading). Workday roles deduplicate across locale, `/apply` and aggregator URL forms by tenant and requisition, are revalidated before a manual application is admitted (`role_closed_or_changed`, retryable `workday_revalidation_unavailable`), and are skipped by every automatic lane with `ats_submission_unsupported`.
+
+### Changed
+
+- The labeled annual-salary extractor is now provider-neutral (`src/discovery/labeled-compensation.js`).
+
+### Fixed
+
+- Paced official-feed requests are keyed by method and body, like the response cache, so two concurrent POST searches to one URL no longer share a response.
+
 ## [0.2.0] - 2026-09-19
 
 ### Added

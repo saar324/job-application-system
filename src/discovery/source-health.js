@@ -7,6 +7,7 @@ export function summarizeSourceHealth(sourceId, scans) {
   const handledFiltered = sum("handledFiltered");
   const excluded = sum("excluded");
   const destinationPending = sum("destinationPending");
+  const submissionUnsupported = sum("submissionUnsupported");
   const exclusionCounts = {
     hardExclusion: rows.reduce((sum, row) => sum + Number(row.exclusionCounts?.hardExclusion ?? 0), 0),
     belowScore: rows.reduce((sum, row) => sum + Number(row.exclusionCounts?.belowScore ?? 0), 0),
@@ -31,9 +32,10 @@ export function summarizeSourceHealth(sourceId, scans) {
       : partialReasons.length ? "partial_cap"
       : hasError ? "partial_error" : selected ? "yielding" : handledFiltered && (found === 0 || handledFiltered === found)
       ? "already_handled" : destinationPending && destinationPending >= found - excluded - handledFiltered
-        ? "missing_destination" : excluded && excluded >= found - handledFiltered
+        ? "missing_destination" : submissionUnsupported ? "submission_unsupported" : excluded && excluded >= found - handledFiltered
           ? "ineligible" : !found && completed ? "zero_extractable" : completed ? "zero_accepted" : "in_progress";
   return { sourceId, status, completed, found, selected, handledFiltered, excluded, destinationPending,
+    submissionUnsupported,
     exclusionCounts, pagesVisited: measuredSum("pagesVisited"), requestsMade: sum("requestsMade"),
     elapsedMs: measuredSum("elapsedMs"),
     rawRowsObserved: measuredSum("rawRowsObserved"),
