@@ -1,3 +1,4 @@
+import { ashbyRemoteRole } from "../ashby-remote.js";
 import { normalizeApplicationQuestions } from "../normalization.js";
 
 function configuredBoards(sourceConfig) {
@@ -31,7 +32,7 @@ export const ashby = {
     });
     const rows = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
     const prescreened = rows
-      .filter(({ board, job }) => job?.id && job?.title && job?.applyUrl && job.isRemote
+      .filter(({ board, job }) => job?.id && job?.title && job?.applyUrl && ashbyRemoteRole(job)
         && job.isListed !== false
         && (!query.title || job.title.toLowerCase().includes(query.title.toLowerCase()))
         && (!query.location || locationOf(job).toLowerCase().includes(query.location.toLowerCase())));

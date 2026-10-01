@@ -528,7 +528,7 @@ test("a stale official ATS role is revalidated once before final permit", async 
     applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
   let fetches = 0;
   service.fetchImpl = async () => { fetches += 1; return new Response(JSON.stringify({ jobs: [{
-    id, title: "Engineer", applyUrl, isListed: true }] })); };
+    id, title: "Engineer", applyUrl, isListed: true, isRemote: true }] })); };
   await service.store.mutate((state) => {
     state.opportunities[0].discoveryVerification.verifiedAt =
       new Date(Date.now() - 20 * 60_000).toISOString();
