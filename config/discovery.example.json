@@ -1,0 +1,19 @@
+{
+  "execution": {
+    "adapter": "simulation"
+  },
+  "modes": {
+    "full_time": {
+      "sources": ["remoteok", "arbeitnow", "jobicy", "himalayas"],
+      "autoApply": false,
+      "autoApplyDiscovered": false,
+      "submissionApproval": "always"
+    },
+    "freelance": {
+      "sources": ["remoteok", "arbeitnow", "jobicy", "himalayas"],
+      "autoApply": false,
+      "autoApplyDiscovered": false,
+      "submissionApproval": "always"
+    }
+  }
+}
