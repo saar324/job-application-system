@@ -66,4 +66,4 @@ Verification-only release8dae8ee:592 full tests, privacy339trackedfiles, strict 
 - [x] Diagnose PlanetScale saved original-form-plus-code challenge; preserve the ended attempt hold.
 - [x] Scope exact labeled code controls and bind original input values.
 - [x] Verify six Chromium cases including retained form, changed contact, and ambiguous code.
-- [ ] Run full checks and paired staging/production release with idle preflight.
+- [x] Run full checks and paired staging/production release with idle preflight. 3949cc5:611full,35installed staging, paired health/auth and two resource checks; historical ended attempts preserved.
