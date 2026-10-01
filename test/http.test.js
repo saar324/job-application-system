@@ -265,3 +265,15 @@ test("Streamable HTTP MCP uses the same profile-bound bearer authentication", as
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('recruiter endpoint authenticates and saves contact and draft on the correct application', async()=>{
+ const {server,service,base}=await fixture();
+ await service.store.mutate(s=>{s.opportunities.push({id:'role',profileId:'profile-one',company:'Example',title:'Engineer'});s.applications.push({id:'app',profileId:'profile-one',opportunityId:'role',status:'submitted',createdAt:'2026-10-01T00:00:00Z'});});
+ const body=JSON.stringify({recruiter:{fullName:'Alex Smith',source:'Listing'},outreach:{draft:'Hi Alex, I applied for Engineer. I build production APIs. Could we discuss the role?',context:'Verified role and API experience.'}});
+ try {
+ assert.equal((await fetch(base+'/v1/applications/app/recruiter-outreach',{method:'POST',headers:{'Content-Type':'application/json'},body})).status,401);
+ const response=await fetch(base+'/v1/applications/app/recruiter-outreach',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer profile-one-token'},body});
+ assert.equal(response.status,200);assert.equal((await response.json()).recruiter.fullName,'Alex Smith');
+ assert.equal((await fetch(base+'/v1/applications/unknown/recruiter-outreach',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer profile-one-token'},body})).status,404);
+ } finally {server.close();}
+});
