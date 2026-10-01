@@ -67,3 +67,9 @@ Verification-only release8dae8ee:592 full tests, privacy339trackedfiles, strict 
 - [x] Scope exact labeled code controls and bind original input values.
 - [x] Verify six Chromium cases including retained form, changed contact, and ambiguous code.
 - [x] Run full checks and paired staging/production release with idle preflight. 3949cc5:611full,35installed staging, paired health/auth and two resource checks; historical ended attempts preserved.
+
+## Public feed continuation consistency
+- [x] Reproduce Arbeitnow identity-only pre-cap callback using three retained real postings without provider requests.
+- [x] Pass complete current fingerprint fields through RemoteOK and Arbeitnow callbacks.
+- [x] Verify unchanged/changed/profile/submitted/uncertain-final behavior across five adapters (25 cases).
+- [ ] Complete fresh full checks, immutable staging verification and idle paired production release.
