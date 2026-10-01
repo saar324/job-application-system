@@ -20,4 +20,12 @@ Discovery release evidence: f945564 passed 540 tests and strict OpenSpec; stagin
 
 - [x] Implement observed multiselect array option selection and exact selected-set readback/preview
 - [x] Verify golden multi/single controls plus unknown and missing/changed/extra chips before final
-- [ ] Run full checks and paired staged/browser/production release for multiselect correction while idle
+- [x] Run full checks and paired staged/browser/production release for multiselect correction while idle
+
+Multiselect release evidence: e028e7c passed546 tests and strict OpenSpec; staging26 isolated Chromium/API tests passed. Production API/worker e028e7c healthy at13:43:18Z and13:46:21Z. Actual Tavily preserved English/Hebrew array, then email verification held after one final action; no receipt.
+
+- [x] Preserve typed arrays and bounded file readback diagnostics through API checkpoints
+- [ ] Verify and release checkpoint observability without weakening attachment guards
+- [x] Implement bounded transient verification registry and browser security regressions
+- [ ] Integrate authenticated same-attempt verification-only continuation and receipt persistence
+- [ ] Complete verification-only full/browser/staging/paired production gates

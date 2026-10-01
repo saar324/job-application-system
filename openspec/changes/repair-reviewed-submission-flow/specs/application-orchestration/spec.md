@@ -47,3 +47,18 @@ For an observed multi-value combobox the executor SHALL select supplied array op
 #### Scenario: Ordinary single selection
 - **WHEN** the control is a single-value combobox
 - **THEN** existing scalar selection SHALL remain supported and an array SHALL NOT become a guessed scalar
+
+### Requirement: Safe checkpoint evidence
+The API SHALL preserve bounded typed arrays and file readback counts and flags, redact sensitive values, and SHALL NOT infer an upload from an unrelated optional file control.
+#### Scenario: Detached resume readback
+- **WHEN** the final resume attachment cannot be established
+- **THEN** bounded acknowledgement, detached state and exact resume-container readback flags SHALL persist without weakening the guard
+
+### Requirement: Verification-only live continuation
+An explicit supported employer email challenge MAY retain a bounded live browser context. Continuation SHALL bind profile, application, attempt, destination and exact approved preview. Codes SHALL remain transient and absent persistent state, request caches, logs and errors. No new permit or initial submission SHALL occur.
+#### Scenario: Current authorized challenge
+- **WHEN** current authority and exact live binding remain valid before a verified challenge-only control action
+- **THEN** one continuation MAY capture an actual employer receipt without repeating initial Submit
+#### Scenario: Expired or lost session
+- **WHEN** a session expires, changes destination, closes or is lost on restart
+- **THEN** an outcome hold SHALL remain with no automatic replay
