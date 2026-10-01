@@ -1494,8 +1494,9 @@ export async function automateApplication({ page, profile, opportunity, applicat
         preview: approvedContent,
         privateFingerprints: [...observedFields.values()].map((field) => {
           const base = [field.step, field.key, field.secretFingerprint, field.stagedPathFingerprint];
-          return field.teamtailorResumeFingerprint ? [...base, field.teamtailorResumeFingerprint,
-            field.teamtailorDocumentFingerprint] : base;
+          // Storage URLs are attempt-local. Approval binds stable file content;
+          // the current URL remains guarded by verifiedTeamtailorResume/live state.
+          return field.teamtailorDocumentFingerprint ? [...base, field.teamtailorDocumentFingerprint] : base;
         })
       })).digest("hex");
       if ((application.finalApprovalRequired || application.standingPolicyVersion === undefined
