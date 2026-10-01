@@ -25,19 +25,31 @@ Discovery release evidence: f945564 passed 540 tests and strict OpenSpec; stagin
 Multiselect release evidence: e028e7c passed546 tests and strict OpenSpec; staging26 isolated Chromium/API tests passed. Production API/worker e028e7c healthy at13:43:18Z and13:46:21Z. Actual Tavily preserved English/Hebrew array, then email verification held after one final action; no receipt.
 
 - [x] Preserve typed arrays and bounded file readback diagnostics through API checkpoints
-- [ ] Verify and release checkpoint observability without weakening attachment guards
+- [x] Verify and release checkpoint observability without weakening attachment guards
 - [x] Implement bounded transient verification registry and browser security regressions
-- [ ] Integrate authenticated same-attempt verification-only continuation and receipt persistence
+- [x] Integrate authenticated same-attempt verification-only continuation and receipt persistence
 - [ ] Complete verification-only full/browser/staging/paired production gates
 
 - [x] Diagnose public Teamtailor upload controller and implement exact storage acknowledgement binding
 - [x] Add browser golden plus changed URL/name/missing/extra/progress and stale disabled acknowledgement cases
-- [ ] Run full/staged/browser/paired production gates for exact Teamtailor resume acknowledgement
+- [x] Run full/staged/browser/paired production gates for exact Teamtailor resume acknowledgement
 
 Teamtailor initial release b2712ef:573 full tests;19 installed Chromium/API fixtures and paired health/auth passed. Actual employer rerender exposed overly conservative same-attempt reuse guard; no final action. Baseline b2712ef fixture reproduced exact hold, patched same-page proof succeeds with one upload.
 - [x] Reproduce same-attempt resume rerender against deployed baseline and verify private SHA-bound reuse
-- [ ] Release corrected same-attempt reuse after fresh full/staging/production gates
+- [x] Release corrected same-attempt reuse after fresh full/staging/production gates
 
 - [x] Preserve stable canonical document approval across fresh context storage URLs
 - [x] Verify joined normal API discovery/prepare/exactreview/freshbrowser/permit/commit/syntheticreceipt plus changed document/profile/question/destination edges
-- [ ] Run fresh full checks and paired staged/production gates for canonical approval correction
+- [x] Run fresh full checks and paired staged/production gates for canonical approval correction
+
+## Live email verification and receipt recognition
+- [x] Implement transient verification-only HTTP ingress, exact consumed-attempt authority recheck, retained context and original-phase receipt binding.
+- [x] Verify normal authenticated discovery/apply → initial final → live code form → verification-only API → durable simulated receipt with actual Chromium; changed profile and cross-profile denial.
+- [x] Verify closed/destination-changed sessions, one original final action, secret-free state/results/disk, and success context cleanup.
+- [x] Add same-role Teamtailor UUID thanks-route receipt recognition and five positive/negative Chromium cases.
+- [ ] Run fresh full checks and strict OpenSpec validation after final integration changes.
+- [ ] Deploy paired staging and verify immutable-runtime browser/API cases and health/authentication.
+- [ ] Deploy paired production when live lanes are idle; verify both identities and two resource samples.
+- [ ] Observe a future legitimate live verification application if eligible supply provides one; current closed Tavily remains unrecoverable and shall not be retried.
+
+Canonical CV release evidence:690c423 passed579 full tests,25 immutable staged Chromium/API cases and strict OpenSpec; production API/worker690c423 paired with idle preflight, authentication negatives and two resource samples. Actual Equitable employer receipt followed one final action and was reconciled through the normal receipt API. The automatic detector missed an ancillary Connect form; the bounded exact-route detector correction is included in the pending verification-only release. The first10-real-receipt pilot remains outstanding.

@@ -81,3 +81,21 @@ The executor SHALL distinguish a Teamtailor remote resume success preview from i
 - **WHEN** a new worker context uploads the same reviewed document bytes under a different ephemeral storage URL
 - **THEN** canonical approval SHALL bind the unchanged document content SHA, name and size, while the new live URL SHALL be independently acknowledged and guarded
 - **AND** changed document content, owner facts, question or destination SHALL invalidate approval
+
+### Requirement: Verification-only live-session continuation
+The worker SHALL retain a supported explicit Greenhouse post-submit email-code form for at most15minutes. The authenticated continuation SHALL bind the same profile, application, consumed attempt, destination, exact approved fingerprint, current policy, and current profile/answer authority hash. The code SHALL remain transient and SHALL bypass request idempotency persistence. This continuation SHALL use only the captured unambiguous code-form action, never reset the original final permit or repeat initial application Submit. Successful receipt capture SHALL close the retained browser context. Expired, restarted, closed, changed, unauthorized, and already-claimed sessions SHALL remain outcome holds.
+
+#### Scenario: Live code form yields a verified receipt
+- **WHEN** the initial final action shows the exact supported code form and the authenticated owner-delegated code continuation passes all bindings
+- **THEN** the worker performs one verification action and persists the receipt against the original final-action marker without creating another application or permit
+
+#### Scenario: Closed attempt cannot resume
+- **WHEN** a process restart or expired/closed browser removes the live session
+- **THEN** the continuation refuses the code and preserves the uncertain outcome without another application Submit
+
+### Requirement: Exact Teamtailor receipt route with ancillary form
+The worker SHALL recognize a newly reached same-origin, same-role applications/UUID/thanks route with explicit employer receipt text and no invalid controls as successful even when a separate Connect-profile form remains. Unrelated roles/origins, missing receipt text, and invalid controls SHALL not qualify through this rule.
+
+#### Scenario: Ancillary Connect form does not obscure receipt
+- **WHEN** a new same-role application UUID thanks route displays explicit receipt text and only an ancillary Connect form remains without invalid controls
+- **THEN** the receipt detector recognizes submission; unrelated destinations and missing receipt text remain unverified
