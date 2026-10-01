@@ -121,3 +121,10 @@ The worker SHALL retain a supported explicit employer email-code challenge when 
 #### Scenario: Application values change during verification
 - **WHEN** an original non-code input changes or a second code input appears
 - **THEN** no verification click or receipt occurs
+
+### Requirement: Preserve review-only continuation across public feed adapters
+RemoteOK and Arbeitnow SHALL pass the current title, company, description and destination into the same profile-bound handled predicate before their existing result limit. An unchanged irrelevant review SHALL not consume the next result batch. Changed postings SHALL remain reviewable. Submitted and uncertain-final identities SHALL remain handled. Provider page limits, request budgets, rate-limit stops and raw-row reporting SHALL remain unchanged.
+
+#### Scenario: Arbeitnow retained reviewed rows precede an unseen row
+- **WHEN** the first two retained current postings have unchanged irrelevant reviews for this profile
+- **THEN** a limit-two review-only scan returns the following unseen posting without increasing provider requests or treating the source as exhausted

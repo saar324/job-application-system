@@ -15,6 +15,7 @@ export const remoteok = {
       adapterPrescreenRejected: rows.filter((row) => !row?.position || !row?.id).length });
     const selected = rows.filter((row) => row?.position && row?.id)
       .filter((row) => !isHandled({ source: "remoteok", externalId: String(row.id),
+        title: row.position, company: row.company || "Unknown company", description: plainText(row.description),
         applyUrl: row.apply_url || row.url, listingUrl: row.url }));
     if (selected.length > limit) onError({ stage: "selection", reason: "partial_raw_pool_cap",
       rawRows: selected.length, omittedRows: selected.length - limit });
