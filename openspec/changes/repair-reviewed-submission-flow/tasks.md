@@ -33,3 +33,7 @@ Multiselect release evidence: e028e7c passed546 tests and strict OpenSpec; stagi
 - [x] Diagnose public Teamtailor upload controller and implement exact storage acknowledgement binding
 - [x] Add browser golden plus changed URL/name/missing/extra/progress and stale disabled acknowledgement cases
 - [ ] Run full/staged/browser/paired production gates for exact Teamtailor resume acknowledgement
+
+Teamtailor initial release b2712ef:573 full tests;19 installed Chromium/API fixtures and paired health/auth passed. Actual employer rerender exposed overly conservative same-attempt reuse guard; no final action. Baseline b2712ef fixture reproduced exact hold, patched same-page proof succeeds with one upload.
+- [x] Reproduce same-attempt resume rerender against deployed baseline and verify private SHA-bound reuse
+- [ ] Release corrected same-attempt reuse after fresh full/staging/production gates
