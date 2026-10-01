@@ -23,3 +23,15 @@ The pipeline SHALL distinguish observed raw roles, canonical unseen roles, curre
 #### Scenario: Independent destination or access hold
 - **WHEN** a route is unverified, blocked by policy, inaccessible or human challenged
 - **THEN** the system SHALL save a specific checkpoint without expanding host permissions or retrying uncertain final actions
+
+### Requirement: Bounded unseen ATS continuation
+Official ATS queries SHALL remove unchanged profile-bound irrelevant postings before the adapter result cap using their exact normalized public posting fingerprint. They SHALL preserve existing handled applications, source request budgets and changed-posting re-review. A selected result cap SHALL NOT imply source exhaustion.
+#### Scenario: Reviewed first window
+- **WHEN** the first bounded ATS rows have unchanged irrelevant decisions and later unseen roles exist
+- **THEN** the later unseen roles SHALL occupy the returned window without extra provider requests or source budget reset
+#### Scenario: Changed or other-profile posting
+- **WHEN** a reviewed posting changes or its irrelevant decision belongs to another profile
+- **THEN** the posting SHALL remain available for fit review
+#### Scenario: Previously executed posting
+- **WHEN** a posting has a handled application or uncertain final action for this profile
+- **THEN** its existing canonical identity protection SHALL remain effective

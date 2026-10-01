@@ -42,6 +42,7 @@ export const greenhouse = {
         && (!query.location || String(job.location?.name ?? "").toLowerCase().includes(query.location.toLowerCase())));
     const selected = prescreened.filter(({ board, job }) =>
       !isHandled({ source: "greenhouse", externalId: `${board.token}:${job.id}`,
+          title: job.title, company: board.company, description: descriptionOf(job),
           applyUrl: `https://job-boards.greenhouse.io/${board.token}/jobs/${job.id}` }))
       .sort((left, right) => Date.parse(right.job.updated_at ?? "") - Date.parse(left.job.updated_at ?? ""));
     onStats({ rawRows: rows.length, adapterPrescreenRejected: rows.length - prescreened.length,

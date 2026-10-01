@@ -8,3 +8,5 @@ Service confirmation/final decision, browser checkpoint review, health and regre
 ## Terminal outcome and measured scope
 A normally considered, eligible official role reaches actual browser fill, authenticated exact review, one final action and durable verified receipt. Fixture receipts prove functionality only; first10 real eligible employer receipts are a separate measured throughput pilot, not yet achieved. No eligible supply is distinguished from executor failure.
 Current16held:6blocked destination,2unsupported form,2CAPTCHA,1access restricted,3uncertain final,1Linearprovenance,1JumaNextJS. This release never bypasses those independent barriers; prototype provenance alone does not prove whole-batch throughput.
+
+Discovery continuation correction: bounded queries sliced ATS rows before unchanged irrelevant review fingerprints were checked. Pass complete public posting evidence into the existing pre-cap handled filter, so unchanged reviewed rows do not hide later unseen rows. Changed postings remain reviewable; source request budgets and final-action dedupe remain unchanged. A first100 retained result window is not feed exhaustion.
