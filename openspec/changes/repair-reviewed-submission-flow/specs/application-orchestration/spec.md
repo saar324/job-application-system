@@ -71,3 +71,8 @@ The executor SHALL distinguish a Teamtailor remote resume success preview from i
 #### Scenario: Changed resume preview
 - **WHEN** URL, filename, preview cardinality, upload progress or acknowledgement changes
 - **THEN** final review SHALL hold before permit commit and Submit
+
+#### Scenario: Upload rerender within the same live attempt
+- **WHEN** the native resume input is replaced after this worker acknowledged the current document
+- **THEN** private live-page evidence MAY reuse only the same document content hash, size, filename and acknowledged remote URL hash, without a second upload
+- **AND** an unknown preexisting attachment SHALL remain held
