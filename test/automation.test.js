@@ -487,7 +487,7 @@ test("common location variants and exact verified answers are reused determinist
 test("verified jurisdiction work facts and common availability variants are reused", async () => {
   const result = await run(`<form>
     <label>What would be your availability to join us? <input name="availability" required></label>
-    <label>Are you authorized to work in Portugal? <input name="authorized" required></label>
+    <label>Are you authorized to work in Bulgaria? <input name="authorized" required></label>
     <label>Will you now or in the future require sponsorship for employment visa status? <input name="sponsor" required></label>
     <label>Please share your online CV or LinkedIn profile with us. <input name="online_cv" required></label>
     <button type="submit">Submit Application</button>
@@ -496,7 +496,7 @@ test("verified jurisdiction work facts and common availability variants are reus
     links: { linkedin: "https://www.linkedin.com/in/example/" },
     applicationAnswers: {
       "What is your availability?": "Can start now.",
-      "Are you authorized to work in Portugal and for EU companies without visa sponsorship?": "Yes",
+      "Are you authorized to work in Bulgaria and for EU companies without visa sponsorship?": "Yes",
       "Will you now or in the future require employer visa sponsorship?": "No"
     }
   }, { finalApprovalRequired: true }, undefined);

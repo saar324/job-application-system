@@ -99,7 +99,7 @@ function currentPostingLocation(html, sourceId) {
 
 function compatibleRemoteLocation(location) {
   return /\b(remote|distributed)\b/i.test(location) ? location
-    : /\b(Portugal|EU|EEA|Europe|European|EMEA|worldwide|anywhere|global)\b/i.test(location)
+    : /\b(Bulgaria|EU|EEA|Europe|European|EMEA|worldwide|anywhere|global)\b/i.test(location)
       ? `Remote, ${location}` : location;
 }
 
@@ -119,9 +119,9 @@ function isDetailPage(pageUrl) {
 
 function explicitRemoteLocation(text) {
   const labelled = text.match(/(?:remote\s+location|location|eligible\s+locations?|work\s+from)\s*:?\s*([^\n]{0,140})/i)?.[1];
-  const region = String(labelled ?? "").match(/\b(Portugal|EU|EEA|Europe|European|EMEA|worldwide|anywhere|global)\b/i)?.[1]
-    ?? text.match(/\b(?:remote|distributed)[^\n]{0,80}\b(Portugal|EU|EEA|Europe|European|EMEA|worldwide|anywhere|global)\b/i)?.[1]
-    ?? text.match(/\b(Portugal|EU|EEA|Europe|European|EMEA|worldwide|anywhere|global)\b[^\n]{0,80}\b(?:remote|distributed)\b/i)?.[1];
+  const region = String(labelled ?? "").match(/\b(Bulgaria|EU|EEA|Europe|European|EMEA|worldwide|anywhere|global)\b/i)?.[1]
+    ?? text.match(/\b(?:remote|distributed)[^\n]{0,80}\b(Bulgaria|EU|EEA|Europe|European|EMEA|worldwide|anywhere|global)\b/i)?.[1]
+    ?? text.match(/\b(Bulgaria|EU|EEA|Europe|European|EMEA|worldwide|anywhere|global)\b[^\n]{0,80}\b(?:remote|distributed)\b/i)?.[1];
   return region ? `Remote, ${region}` : null;
 }
 

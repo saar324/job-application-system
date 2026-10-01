@@ -182,7 +182,7 @@ async function searchSource(source, policy, progressState, budget) {
       if (listing.challenge) { challenge = true; break; }
       if (!listing.ok) { errors.push({ error: `listing returned HTTP ${listing.status}: ${nextUrl}` }); break; }
       if (pagesVisited === 0) await budget.run(() => applyBroadSearch(page,
-        options.query ?? "engineer", options.location ?? "Portugal", budget));
+        options.query ?? "engineer", options.location ?? "", budget));
       pagesVisited += 1;
       const extracted = extractSourcePage(await budget.run(() => page.content()), page.url(), source.id);
       await budget.run(() => progressState.add(extracted.jobs));
@@ -266,7 +266,7 @@ async function applyBroadSearch(page, query, location, budget) {
       const before = page.url();
       await input.fill(query);
       const locationInput = page.locator('input[placeholder*="location" i]').filter({ visible: true }).first();
-      if (await locationInput.isVisible().catch(() => false)) {
+      if (location && await locationInput.isVisible().catch(() => false)) {
         await locationInput.fill(location);
         await budget.sleep(400);
         const option = page.getByRole("option", { name: new RegExp(`^${escapePattern(location)}$`, "i") })

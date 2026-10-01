@@ -5,7 +5,7 @@ import { parsePublicFeed, publicFeedUrl } from "../src/discovery/public-feeds.js
 test("Jobgether official API query is bounded and normalized", () => {
   const url = new URL(publicFeedUrl("jobgether", { query: "Platform Developer", page: 2, limit: 100 }));
   assert.equal(url.pathname, "/api/v1/jobs");
-  assert.equal(url.searchParams.get("locations"), "europe,portugal");
+  assert.equal(url.searchParams.has("locations"), false);
   assert.equal(url.searchParams.get("remoteType"), "full-remote");
   assert.equal(url.searchParams.get("sort"), "relevance");
   assert.equal(url.searchParams.get("limit"), "25");

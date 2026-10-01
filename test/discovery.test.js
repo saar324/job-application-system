@@ -337,6 +337,15 @@ test("ISO country-code lists accept the applicant residence code", () => {
   assert.equal(scored.scoreDetails.hardExclusion, undefined);
 });
 
+test("a Bulgarian-only ISO list excludes a Portuguese resident", () => {
+  const scored = scoreOpportunity({ title: "Platform Developer", description: "Python",
+    location: "BG", remote: true, employmentType: "Full-Time" }, {
+    skills: ["Python"], preferences: { fullTime: { jobTitles: ["Platform Developer"],
+      remoteOnly: true, allowedLocations: ["Portugal", "Europe"], employmentTypes: ["full_time"] } }
+  }, "full_time");
+  assert.match(scored.scoreDetails.hardExclusion, /does not include the applicant residence/);
+});
+
 test("ISO country-code lists still exclude a missing residence code", () => {
   const scored = scoreOpportunity({
     title: "Senior Platform Developer", description: "Python", tags: [],

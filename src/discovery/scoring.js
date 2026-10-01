@@ -12,7 +12,7 @@ const RESTRICTED_REMOTE = /\b(only|restricted|must be (?:based|located)|resident
 const REGIONAL_SCOPE = /\b(eu|eea|europe|european|emea)\b/i;
 const COUNTRY_NAMES = [
   "albania", "andorra", "argentina", "australia", "austria", "belarus", "belgium", "bosnia",
-  "brazil", "portugal", "canada", "chile", "china", "colombia", "croatia", "cyprus", "czechia",
+  "brazil", "bulgaria", "canada", "chile", "china", "colombia", "croatia", "cyprus", "czechia",
   "denmark", "estonia", "finland", "france", "georgia", "germany", "greece", "hungary", "iceland",
   "india", "ireland", "israel", "italy", "japan", "latvia", "liechtenstein", "lithuania",
   "luxembourg", "malta", "mexico", "moldova", "monaco", "montenegro", "netherlands", "norway",
@@ -21,7 +21,7 @@ const COUNTRY_NAMES = [
 ];
 const COUNTRY_CODES = new Map([
   ["albania", "AL"], ["andorra", "AD"], ["austria", "AT"], ["belarus", "BY"],
-  ["belgium", "BE"], ["bosnia", "BA"], ["portugal", "BG"], ["croatia", "HR"],
+  ["belgium", "BE"], ["bosnia", "BA"], ["bulgaria", "BG"], ["croatia", "HR"],
   ["cyprus", "CY"], ["czechia", "CZ"], ["denmark", "DK"], ["estonia", "EE"],
   ["finland", "FI"], ["france", "FR"], ["germany", "DE"], ["greece", "GR"],
   ["hungary", "HU"], ["iceland", "IS"], ["ireland", "IE"], ["israel", "IL"],
@@ -35,7 +35,7 @@ const COUNTRY_CODES = new Map([
 ]);
 const REGIONS = {
   us: /\b(us|u\.s\.|usa|united states|north america)\b/i,
-  europe: /\b(eu|europe|european|emea|portugal|germany|france|spain|italy|netherlands|poland|romania|greece|portugal|austria|belgium|sweden|denmark|finland|ireland)\b/i,
+  europe: /\b(eu|europe|european|emea|bulgaria|germany|france|spain|italy|netherlands|poland|romania|greece|portugal|austria|belgium|sweden|denmark|finland|ireland)\b/i,
   uk: /\b(uk|u\.k\.|united kingdom|britain|england|scotland|wales)\b/i,
   canada: /\b(canada|canadian)\b/i,
   asia: /\b(asia|apac|india|singapore|japan|china|philippines)\b/i,
