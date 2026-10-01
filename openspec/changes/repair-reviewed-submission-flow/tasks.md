@@ -29,3 +29,7 @@ Multiselect release evidence: e028e7c passed546 tests and strict OpenSpec; stagi
 - [x] Implement bounded transient verification registry and browser security regressions
 - [ ] Integrate authenticated same-attempt verification-only continuation and receipt persistence
 - [ ] Complete verification-only full/browser/staging/paired production gates
+
+- [x] Diagnose public Teamtailor upload controller and implement exact storage acknowledgement binding
+- [x] Add browser golden plus changed URL/name/missing/extra/progress and stale disabled acknowledgement cases
+- [ ] Run full/staged/browser/paired production gates for exact Teamtailor resume acknowledgement

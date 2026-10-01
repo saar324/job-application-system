@@ -62,3 +62,12 @@ An explicit supported employer email challenge MAY retain a bounded live browser
 #### Scenario: Expired or lost session
 - **WHEN** a session expires, changes destination, closes or is lost on restart
 - **THEN** an outcome hold SHALL remain with no automatic replay
+
+### Requirement: Exact acknowledged Teamtailor resume
+The executor SHALL distinguish a Teamtailor remote resume success preview from its reset native file input. It SHALL require one exact resume container, one completed preview, matching filename, enabled matching remote URL input and removal of progress. Current uploaded document content and remote URL hashes SHALL bind the exact review. An unrelated attachment or body filename SHALL NOT count.
+#### Scenario: Native input reset after successful upload
+- **WHEN** exact current resume storage success is acknowledged while an optional attachment input remains
+- **THEN** final review MAY use the bound completed resume preview
+#### Scenario: Changed resume preview
+- **WHEN** URL, filename, preview cardinality, upload progress or acknowledgement changes
+- **THEN** final review SHALL hold before permit commit and Submit

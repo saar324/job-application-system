@@ -342,6 +342,15 @@ async function fillControl(locator, field, value, surface) {
     const isGreenhouse = ["job-boards.greenhouse.io", "job-boards.eu.greenhouse.io",
       "boards.greenhouse.io", "boards.eu.greenhouse.io"].includes(host);
     const rootPage = typeof surface.page === "function" ? surface.page() : surface;
+    const teamtailorResume = field.id === "candidate_resume_remote_url"
+      && await locator.evaluate(element => element.closest('#upload_resume_field')
+        ?.getAttribute('data-controller') === 'forms--inputs--upload').catch(() => false);
+    const teamtailorDocumentFingerprint = teamtailorResume
+      ? createHash('sha256').update(await readFile(String(value))).digest('hex') : undefined;
+    if (teamtailorResume && await rootPage.locator(
+      '#upload_resume_field [data-controller="forms--inputs--upload-preview"]').count()) {
+      throw new Error('Review the existing resume attachment before replacing it');
+    }
     const greenhouseResume = isGreenhouse && field.id === "resume"
       && await locator.evaluate((element) =>
         element.closest('.file-upload[role="group"]')?.getAttribute("aria-labelledby")
@@ -377,7 +386,16 @@ async function fillControl(locator, field, value, surface) {
             .some((input) => [...(input.files ?? [])].some((item) => item.name === expected)),
       file.name, { timeout: 8_000 });
     }
-    return { uploadAcknowledged: true, files: [file], greenhouseResume };
+    let teamtailorResumeFingerprint;
+    if (teamtailorResume) {
+      await rootPage.waitForFunction(teamtailorResumeUploaded, file.name, { timeout: 20_000 });
+      const remoteUrl = await rootPage.evaluate(teamtailorResumeUploaded, file.name);
+      teamtailorResumeFingerprint = createHash("sha256").update(remoteUrl).digest("hex");
+      if (createHash('sha256').update(await readFile(String(value))).digest('hex')
+        !== teamtailorDocumentFingerprint) throw new Error('The resume changed during upload');
+    }
+    return { uploadAcknowledged: true, files: [file], greenhouseResume, teamtailorResumeFingerprint,
+      teamtailorDocumentFingerprint };
   } else if (field.tag === "select") {
     const desired = normalize(value);
     const option = field.options.find((item) => normalize(item.label) === desired || normalize(item.value) === desired);
@@ -625,6 +643,35 @@ async function detachedFileLiveMatch(surface, action, field) {
     greenhouseResume, teamtailorResume };
 }
 
+// Observed Teamtailor upload controller enables the exact resume URL only after
+// its successful storage response. The preview removes progress and shows name.
+// Never use body-wide filename text or a different attachment as upload proof.
+export function teamtailorResumeUploaded(filename) {
+  const groups = document.querySelectorAll('#upload_resume_field[data-controller="forms--inputs--upload"]');
+  if (groups.length !== 1) return false;
+  const previews = groups[0].querySelectorAll('[data-controller="forms--inputs--upload-preview"]');
+  if (previews.length !== 1) return false;
+  const preview = previews[0];
+  const input = preview.querySelector('[data-forms--inputs--upload-preview-target="urlInput"]');
+  const name = preview.querySelector('[data-forms--inputs--upload-preview-target="name"]');
+  const link = preview.querySelector('[data-forms--inputs--upload-preview-target="link"]');
+  const url = preview.getAttribute('data-forms--inputs--upload-preview-url-value');
+  if (!input || input.disabled || input.name !== 'candidate[resume_remote_url]'
+    || !url || input.value !== url || !name || name.classList.contains('hidden')
+    || link?.textContent?.trim() !== filename
+    || preview.querySelector('[data-forms--inputs--upload-preview-target="progress"]')) return false;
+  try { if (new URL(url).protocol !== 'https:') return false; } catch { return false; }
+  return url;
+}
+
+async function verifiedTeamtailorResume(surface, field) {
+  if (!field.teamtailorResumeFingerprint || field.key !== 'candidate_resume_remote_url'
+    || !field.uploadAcknowledged || field.files?.length !== 1) return false;
+  const url = await surface.evaluate(teamtailorResumeUploaded, field.files[0].name).catch(() => false);
+  return typeof url === 'string'
+    && createHash('sha256').update(url).digest('hex') === field.teamtailorResumeFingerprint;
+}
+
 async function controlMatches(locator, field, answer, observed) {
   const expected = field.type === "file" ? path.basename(String(answer.value))
     : field.type === "checkbox" ? Boolean(answer.value === true || normalize(answer.value) === "yes"
@@ -759,10 +806,16 @@ export async function fillVisibleFields(page, profile, opportunity, answers, pre
       if (!matches || !validity.valid) throw new Error(validity.problem || "live value did not match the planned answer");
       fields.push({ ...fieldSummary(field, answer, observed),
         ...(fillEvidence?.uploadAcknowledged ? { uploadAcknowledged: true } : {}),
+        ...(fillEvidence?.teamtailorResumeFingerprint ? {
+          teamtailorResumeFingerprint: fillEvidence.teamtailorResumeFingerprint,
+          teamtailorDocumentFingerprint: fillEvidence.teamtailorDocumentFingerprint } : {}),
         ...(fillEvidence?.greenhouseResume ? { greenhouseResume: true } : {}) });
     } catch (error) {
       if (field.type === "file" && fillEvidence?.uploadAcknowledged) {
         fields.push({ ...fieldSummary(field, answer, fillEvidence.files), uploadAcknowledged: true,
+          ...(fillEvidence.teamtailorResumeFingerprint ? {
+            teamtailorResumeFingerprint: fillEvidence.teamtailorResumeFingerprint,
+            teamtailorDocumentFingerprint: fillEvidence.teamtailorDocumentFingerprint } : {}),
           ...(fillEvidence.greenhouseResume ? { greenhouseResume: true } : {}) });
         if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
       }
@@ -1354,6 +1407,7 @@ export async function automateApplication({ page, profile, opportunity, applicat
       const matchedDetachedFileInputs = new Set();
       for (const field of [...observedFields.values()].filter((item) => item.step === step)) {
         if (field.type === "ashby_custom") continue;
+        if (field.type === 'file' && await verifiedTeamtailorResume(surface, field)) continue;
         if (field.detached) {
           if (field.type === "file" && field.status === "filled") {
             const live = await detachedFileLiveMatch(surface, action, field);
@@ -1392,6 +1446,16 @@ export async function automateApplication({ page, profile, opportunity, applicat
           && createHash("sha256").update(String(live)).digest("hex") !== field.secretFingerprint;
         const changedFile = field.type === "file" && field.status === "filled"
           && JSON.stringify(live) !== JSON.stringify(field.files);
+        if (changedFile) {
+          const readback = await detachedFileLiveMatch(surface, action, field);
+          field.fileReadback = { inputCount: readback?.inputCount ?? -1,
+            matchingInputCount: readback?.matches?.length ?? 0,
+            associatedResumeAcknowledged: readback?.greenhouseResume === true,
+            ...(readback?.teamtailorResume ? {
+              resumeContainerCount: readback.teamtailorResume.containerCount,
+              resumeFilenameVisible: readback.teamtailorResume.filenameVisible,
+              resumeFileInputCount: readback.teamtailorResume.fileInputCount } : {}) };
+        }
         const unexpectedValue = field.type === "checkbox" ? live === true
           : field.type === "file" ? live.length > 0 : String(live ?? "").trim() !== "";
         const changedValue = Array.isArray(field.value)
@@ -1417,9 +1481,11 @@ export async function automateApplication({ page, profile, opportunity, applicat
       };
       const previewFingerprint = createHash("sha256").update(JSON.stringify({
         preview: approvedContent,
-        privateFingerprints: [...observedFields.values()].map((field) => [
-          field.step, field.key, field.secretFingerprint, field.stagedPathFingerprint
-        ])
+        privateFingerprints: [...observedFields.values()].map((field) => {
+          const base = [field.step, field.key, field.secretFingerprint, field.stagedPathFingerprint];
+          return field.teamtailorResumeFingerprint ? [...base, field.teamtailorResumeFingerprint,
+            field.teamtailorDocumentFingerprint] : base;
+        })
       })).digest("hex");
       if ((application.finalApprovalRequired || application.standingPolicyVersion === undefined
         && [...observedFields.values()].some((field) => field.source === "drafted prose"))
@@ -1591,7 +1657,14 @@ async function finalLiveState(surface) {
     ]).catch(() => [false, "detached"]));
   }
   const errors = (await inlineValidationQuestions(surface, inventory)).map((item) => [item.kind, item.fields]);
-  return JSON.stringify([surface.url(), inventoryStamp(inventory), values, validity, errors]);
+  const remoteResume = await surface.locator('#upload_resume_field').evaluateAll(groups =>
+    groups.map(group => [...group.querySelectorAll('[data-controller="forms--inputs--upload-preview"]')]
+      .map(preview => [preview.getAttribute('data-forms--inputs--upload-preview-url-value'),
+        preview.querySelector('[data-forms--inputs--upload-preview-target="urlInput"]')?.value,
+        preview.querySelector('[data-forms--inputs--upload-preview-target="urlInput"]')?.disabled,
+        preview.querySelector('[data-forms--inputs--upload-preview-target="link"]')?.textContent,
+        Boolean(preview.querySelector('[data-forms--inputs--upload-preview-target="progress"]'))]))).catch(() => []);
+  return JSON.stringify([surface.url(), inventoryStamp(inventory), values, validity, errors, remoteResume]);
 }
 
 async function waitForStepChange(page, priorBody) {
@@ -1614,7 +1687,8 @@ async function waitForInventoryStability(surface, timeoutMs = 3500) {
 }
 
 function previewOf(observedFields, destination, opportunity) {
-  const fields = [...observedFields.values()].map(({ secretFingerprint, stagedPathFingerprint, ...field }) => field);
+  const fields = [...observedFields.values()].map(({ secretFingerprint, stagedPathFingerprint,
+    teamtailorResumeFingerprint, teamtailorDocumentFingerprint, ...field }) => field);
   const url = new URL(destination);
   return {
     destination: `${url.origin}${url.pathname}`, company: opportunity.company, title: opportunity.title,
