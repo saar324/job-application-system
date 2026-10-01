@@ -1877,8 +1877,27 @@ function validatedCheckpoint(checkpoint, applicationId) {
       status: field?.status === "filled" ? "filled" : "unfilled",
       ...(field?.source ? { source: String(field.source).slice(0, 160) } : {}),
       ...(field?.truncated === true ? { truncated: true } : {}),
+      ...(field?.type === "file" ? {
+        uploadAcknowledged: field.uploadAcknowledged === true, detached: field.detached === true,
+        ...(field.fileReadback && Number.isInteger(field.fileReadback.inputCount)
+          && field.fileReadback.inputCount >= -1 && field.fileReadback.inputCount <= 200
+          && Number.isInteger(field.fileReadback.matchingInputCount)
+          && field.fileReadback.matchingInputCount >= 0 && field.fileReadback.matchingInputCount <= 200
+          ? { fileReadback: { inputCount: field.fileReadback.inputCount,
+            matchingInputCount: field.fileReadback.matchingInputCount,
+            associatedResumeAcknowledged: field.fileReadback.associatedResumeAcknowledged === true,
+            ...(Number.isInteger(field.fileReadback.resumeContainerCount)
+              && field.fileReadback.resumeContainerCount >= 0 && field.fileReadback.resumeContainerCount <= 200
+              && Number.isInteger(field.fileReadback.resumeFileInputCount)
+              && field.fileReadback.resumeFileInputCount >= -1 && field.fileReadback.resumeFileInputCount <= 200
+              ? { resumeContainerCount: field.fileReadback.resumeContainerCount,
+                resumeFileInputCount: field.fileReadback.resumeFileInputCount,
+                resumeFilenameVisible: field.fileReadback.resumeFilenameVisible === true } : {}) } } : {})
+      } : {}),
       ...(Object.hasOwn(field ?? {}, "value") ? {
-        value: secret ? "[redacted]" : String(field.value ?? "").slice(0, 5000)
+        value: secret ? "[redacted]" : Array.isArray(field.value)
+          ? field.value.slice(0, 50).map(value => String(value).slice(0, 200))
+          : String(field.value ?? "").slice(0, 5000)
       } : {}) };
   }) };
 }

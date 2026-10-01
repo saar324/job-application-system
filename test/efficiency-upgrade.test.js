@@ -397,7 +397,13 @@ test("a paused challenge keeps its field log while the next application submits"
             { step: 0, key: "email", label: "Email", type: "email", required: true,
               status: "filled", source: "profile", value: "ada@example.test" },
             { step: 0, key: "password", label: "Password", type: "password", required: true,
-              status: "filled", source: "account", value: "private-value" }
+              status: "filled", source: "account", value: "private-value" },
+            { step: 0, key: "languages", label: "Languages", type: "text", status: "filled",
+              value: ["English", "Hebrew"] },
+            { step: 0, key: "resume", label: "Resume", type: "file", status: "filled",
+              value: "synthetic.pdf", uploadAcknowledged: true, detached: true,
+              fileReadback: { inputCount: 1, matchingInputCount: 0,
+                associatedResumeAcknowledged: false, unknown: "must-not-persist" } }
           ] }
       });
     }
@@ -416,6 +422,13 @@ test("a paused challenge keeps its field log while the next application submits"
   assert.equal(paused.pendingReview[0].kind, "human_challenge");
   assert.equal(paused.pausedFields[0].value, "ada@example.test");
   assert.equal(paused.pausedFields[1].value, "[redacted]");
+  const checkpoint = service.list("applications", identity.profileId).find(item => item.id === first.id).checkpoint;
+  assert.deepEqual(checkpoint.fields[2].value, ["English", "Hebrew"]);
+  assert.deepEqual(checkpoint.fields[3].fileReadback,
+    { inputCount: 1, matchingInputCount: 0, associatedResumeAcknowledged: false });
+  assert.equal(checkpoint.fields[3].uploadAcknowledged, true);
+  assert.equal(checkpoint.fields[3].detached, true);
+  assert.doesNotMatch(JSON.stringify(checkpoint), /must-not-persist/);
   assert.equal(log.find((item) => item.applicationId === second.id).status, "submitted");
 });
 
