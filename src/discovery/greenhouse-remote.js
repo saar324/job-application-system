@@ -5,7 +5,7 @@ import { plainText } from "./text.js";
 export function greenhouseRemoteRole(row) {
   const title = String(row?.title ?? "");
   const location = String(row?.location?.name ?? "");
-  const content = plainText(row?.content ?? "");
+  const content = plainText(plainText(row?.content ?? ""));
   // In-person team gatherings do not make an otherwise fully remote role
   // onsite. Keep actual hybrid/office work requirements as blockers.
   const statement = `${title} ${location} ${content}`.replace(
@@ -17,6 +17,7 @@ export function greenhouseRemoteRole(row) {
     || /\bmust (?:work|be) (?:from|in|at) (?:the|our|an?) office\b/i.test(statement)) return false;
   return /\b(remote|distributed|work from home)\b/i.test(location)
     || /(?:\(\s*remote\s*\)|\[\s*remote\s*\]|[-–—]\s*remote\s*$|^remote\s*[-:])/i.test(title)
+    || /^remote\s*[-–—:]\s*\S/i.test(content)
     || /#LI[-_]REMOTE\b/i.test(content)
     || /\b(?:fully|100%|entirely|exclusively) remote\b/i.test(content)
     || /\bremote[- ]first\b/i.test(content)

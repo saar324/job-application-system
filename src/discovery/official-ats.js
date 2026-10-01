@@ -1,3 +1,4 @@
+import { ashbyRemoteRole } from "./ashby-remote.js";
 import { roleKeys } from "./handled-roles.js";
 import { plainText } from "./text.js";
 import { normalizeApplicationQuestions } from "./normalization.js";
@@ -80,7 +81,7 @@ export async function fetchVerifiedOfficialAtsRole(rawUrl, sourceOptions = {}, f
       title: row.title, applyUrl: row.applyUrl, listingUrl: row.jobUrl || row.applyUrl,
       description: row.descriptionPlain ?? "", location: [row.location,
         ...(row.secondaryLocations ?? []).map((item) => item.location ?? item.name ?? item)].filter(Boolean).join(", "),
-      remote: row.isRemote === true, employmentType: row.employmentType || "Full-Time",
+      remote: ashbyRemoteRole(row), employmentType: row.employmentType || "Full-Time",
       postedAt: row.publishedAt, tags: [row.department, row.team].filter(Boolean),
       applicationQuestions: normalizeApplicationQuestions(row.applicationQuestions
         ?? row.applicationForm?.questions ?? row.questions ?? [])
@@ -143,6 +144,7 @@ export async function revalidateOfficialAtsRole(role, fetchImpl = fetch) {
     if (!row || String(row.id).toLowerCase() !== parsed.id) return false;
     const title = parsed.source === "lever" ? row.text : row.title;
     if (String(title ?? "").trim() !== String(role.title ?? "").trim()) return false;
+    if (parsed.source === "ashby" && !ashbyRemoteRole(row)) return false;
     if (parsed.source === "greenhouse") {
       if (!greenhouseRemoteRole(row) || String(row.location?.name ?? "").trim()
         !== String(role.location ?? "").trim()) return false;

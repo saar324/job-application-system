@@ -99,3 +99,14 @@ The worker SHALL recognize a newly reached same-origin, same-role applications/U
 #### Scenario: Ancillary Connect form does not obscure receipt
 - **WHEN** a new same-role application UUID thanks route displays explicit receipt text and only an ancillary Connect form remains without invalid controls
 - **THEN** the receipt detector recognizes submission; unrelated destinations and missing receipt text remain unverified
+
+### Requirement: Explicit official remote metadata survives nullable or escaped transport
+The official scan, destination verification, and current-role revalidation SHALL use the same remote predicates. A null or missing Ashby remote flag may use an explicit remote role location; false flags and onsite/hybrid workplace contradictions SHALL hold. An HTML-escaped leading Greenhouse Remote - region role header may establish remote status; generic company prose SHALL not. This classification SHALL not establish applicant country eligibility or replace complete agent fit review, policy, exact canonical destination, dedupe or source budgets.
+
+#### Scenario: Official explicit remote role is not lost to nullable metadata
+- **WHEN** an exact current Ashby role has a null flag and Remote location or a Greenhouse role has a decoded leading Remote - EMEA header
+- **THEN** scan and destination verification retain it for full fit review and revalidation uses the same predicate
+
+#### Scenario: Contradictory or generic evidence remains held
+- **WHEN** the flag is false, workplace is hybrid/onsite, wording requires office work, or only company prose mentions remote
+- **THEN** the missing-flag/header fallback does not authorize the role
