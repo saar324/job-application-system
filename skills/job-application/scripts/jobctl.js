@@ -43,11 +43,12 @@ const routes = {
   "refresh-preview": ["POST", `/v1/applications/${id}/refresh-preview`],
   add: ["POST", "/v1/opportunities"], apply: ["POST", `/v1/opportunities/${id}/apply`],
   "record-submission": ["POST", `/v1/applications/${id}/manual-submission`],
+  "record-recruiter": ["POST", `/v1/applications/${id}/recruiter-outreach`],
   "record-employer-status": ["POST", `/v1/applications/${id}/employer-status`],
   confirm: ["POST", `/v1/confirmations/${id}`], reject: ["POST", `/v1/confirmations/${id}`]
 };
-if ((!routes[command] && !["callback", "backlog", "handoff"].includes(command)) || (["apply", "campaign-status", "campaign-report", "campaign-approve", "campaign-add-source", "research", "skip", "refresh-preview", "record-submission", "record-employer-status", "confirm", "reject", "callback", "handoff"].includes(command) && !id)) {
-  console.error("usage: jobctl <health|me|profile|fit-context|profile-update|sources|scan|filter|consider|query|campaign-start|campaigns|campaign-status ID|campaign-report ID|campaign-approve ID|campaign-add-source ID|direct|opportunities|applications|application-log|backlog|handoff ID|application-metrics|inbox|approve-batch|research ID|skip ID|refresh-preview ID|add|apply ID|record-submission ID|record-employer-status ID|confirm ID|reject ID|callback DATA>");
+if ((!routes[command] && !["callback", "backlog", "handoff"].includes(command)) || (["apply", "campaign-status", "campaign-report", "campaign-approve", "campaign-add-source", "research", "skip", "refresh-preview", "record-submission", "record-employer-status", "record-recruiter", "confirm", "reject", "callback", "handoff"].includes(command) && !id)) {
+  console.error("usage: jobctl <health|me|profile|fit-context|profile-update|sources|scan|filter|consider|query|campaign-start|campaigns|campaign-status ID|campaign-report ID|campaign-approve ID|campaign-add-source ID|direct|opportunities|applications|application-log|backlog|handoff ID|application-metrics|inbox|approve-batch|research ID|skip ID|refresh-preview ID|add|apply ID|record-submission ID|record-employer-status ID|record-recruiter ID|confirm ID|reject ID|callback DATA>");
   process.exit(2);
 }
 

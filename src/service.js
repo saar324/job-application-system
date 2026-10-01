@@ -1,3 +1,4 @@
+import { normalizeRecruiterOutreach } from "./recruiter-outreach.js";
 import { createHash, randomUUID } from "node:crypto";
 import { evaluatePolicy } from "./policy.js";
 import { NeedsInputError, NeedsReviewError, NeedsResearchError, PostingUnavailableError,
@@ -1308,6 +1309,23 @@ export class ApplicationService {
     return result;
   }
 
+  async recordRecruiterOutreach(applicationId, input, identity) {
+    let update;
+    try { update = normalizeRecruiterOutreach(input); }
+    catch (error) { throw new ClientError(400, error.message); }
+    return this.store.mutate(async (state) => {
+      const application = state.applications.find(item => item.id === applicationId && item.profileId === identity.profileId);
+      if (!application) throw new ClientError(404, "application not found");
+      const opportunity = state.opportunities.find(item => item.id === application.opportunityId && item.profileId === identity.profileId);
+      if (!opportunity) throw new ClientError(404, "opportunity not found");
+      application.recruiter = update.recruiter;
+      if (update.outreach) application.outreach = { ...update.outreach, updatedAt: now() };
+      application.updatedAt = now();
+      audit(state, identity, "application.recruiter_outreach_recorded", application.id, { hasDraft: !!update.outreach });
+      return buildApplicationLogEntry(application, opportunity, state.confirmations.filter(item => item.applicationId === application.id));
+    });
+  }
+
   async recordEmployerStatus(applicationId, input, identity) {
     const state = requiredEmployerStatus(input.status);
     const observedAt = requiredTimestamp(input.observedAt, "observedAt");
@@ -2026,6 +2044,8 @@ function buildApplicationLogEntry(application, opportunity = {}, confirmations =
     decision: application.decision,
     error: application.error,
     employerStatus: application.employerStatus,
+    recruiter: application.recruiter,
+    outreach: application.outreach,
     skip: application.skip,
     receipt: application.receipt
   };

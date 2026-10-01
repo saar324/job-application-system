@@ -972,3 +972,14 @@ test("a verified browser submission updates a skipped application and stores saf
     /application not found/
   );
 });
+
+test('recruiter contacts and draft persist without altering receipt or submission state', async()=>{
+ const service=await fixture();
+ await service.store.mutate(s=>{s.opportunities.push({id:'role',profileId:identity.profileId,company:'Example',title:'Engineer'});s.applications.push({id:'app',profileId:identity.profileId,opportunityId:'role',status:'submitted',createdAt:'2026-10-01T00:00:00Z',receipt:{submittedAt:'2026-10-01T00:00:00Z'}});});
+ const payload={recruiter:{fullName:'Alex Recruiter',email:'alex@example.test',phone:'+359 123',linkedinUrl:'https://www.linkedin.com/in/alex',source:'Owner supplied listing'},outreach:{draft:'Hi Alex, I applied for Engineer. I build production APIs and would welcome a short conversation.',context:'Applied for Engineer. Production API experience.'}};
+ const result=await service.recordRecruiterOutreach('app',payload,identity);
+ assert.equal(result.recruiter.email,'alex@example.test');assert.equal(result.outreach.status,'draft');assert.equal(result.status,'submitted');assert.equal(result.receipt.submittedAt,'2026-10-01T00:00:00Z');
+ assert.equal(service.applicationLog(identity.profileId)[0].recruiter.fullName,'Alex Recruiter');
+ await assert.rejects(service.recordRecruiterOutreach('app',payload,{profileId:'other',actorId:'other'}),/application not found/);
+ await assert.rejects(service.recordRecruiterOutreach('app',{...payload,outreach:{...payload.outreach,draft:'Hi Alex; hello'}},identity),/Draft must not contain/);
+});
