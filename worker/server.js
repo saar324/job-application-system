@@ -61,7 +61,7 @@ async function finalGate(pathname, body) {
 const server = createServer(async (request, response) => {
   try {
     if (request.method === "GET" && request.url === "/health") {
-      return send(response, 200, { ok: true, browser: "chromium" });
+      return send(response, 200, { ok: true, browser: "chromium", release: process.env.JOB_RELEASE_ID ?? "unknown" });
     }
     if (request.headers.authorization !== `Bearer ${token}`) {
       return send(response, 401, { error: "invalid worker token" });

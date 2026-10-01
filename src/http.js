@@ -44,7 +44,8 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         return send(response, 200, {
           ok: true, adapter: service.adapter.name,
           storage: service.store.kind ?? "json", schemaVersion: service.store.schemaVersion?.(),
-          telemetry: telemetry.health()
+          telemetry: telemetry.health(), execution: service.executionHealth(),
+          release: process.env.JOB_RELEASE_ID ?? "unknown"
         });
       }
       if (url.pathname === "/v1/internal/final-decision" || url.pathname === "/v1/internal/final-commit") {
