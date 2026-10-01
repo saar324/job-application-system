@@ -28,7 +28,7 @@ Multiselect release evidence: e028e7c passed546 tests and strict OpenSpec; stagi
 - [x] Verify and release checkpoint observability without weakening attachment guards
 - [x] Implement bounded transient verification registry and browser security regressions
 - [x] Integrate authenticated same-attempt verification-only continuation and receipt persistence
-- [ ] Complete verification-only full/browser/staging/paired production gates
+- [x] Complete verification-only full/browser/staging/paired production gates
 
 - [x] Diagnose public Teamtailor upload controller and implement exact storage acknowledgement binding
 - [x] Add browser golden plus changed URL/name/missing/extra/progress and stale disabled acknowledgement cases
@@ -47,9 +47,11 @@ Teamtailor initial release b2712ef:573 full tests;19 installed Chromium/API fixt
 - [x] Verify normal authenticated discovery/apply → initial final → live code form → verification-only API → durable simulated receipt with actual Chromium; changed profile and cross-profile denial.
 - [x] Verify closed/destination-changed sessions, one original final action, secret-free state/results/disk, and success context cleanup.
 - [x] Add same-role Teamtailor UUID thanks-route receipt recognition and five positive/negative Chromium cases.
-- [ ] Run fresh full checks and strict OpenSpec validation after final integration changes.
-- [ ] Deploy paired staging and verify immutable-runtime browser/API cases and health/authentication.
-- [ ] Deploy paired production when live lanes are idle; verify both identities and two resource samples.
+- [x] Run fresh full checks and strict OpenSpec validation after final integration changes.
+- [x] Deploy paired staging and verify immutable-runtime browser/API cases and health/authentication.
+- [x] Deploy paired production when live lanes are idle; verify both identities and two resource samples.
 - [ ] Observe a future legitimate live verification application if eligible supply provides one; current closed Tavily remains unrecoverable and shall not be retried.
 
 Canonical CV release evidence:690c423 passed579 full tests,25 immutable staged Chromium/API cases and strict OpenSpec; production API/worker690c423 paired with idle preflight, authentication negatives and two resource samples. Actual Equitable employer receipt followed one final action and was reconciled through the normal receipt API. The automatic detector missed an ancillary Connect form; the bounded exact-route detector correction is included in the pending verification-only release. The first10-real-receipt pilot remains outstanding.
+
+Verification-only release8dae8ee:592 full tests, privacy339trackedfiles, strict OpenSpec and52 actual Chromium/API fixtures under the immutable deployed staging runtime passed. Production API/worker8dae8ee paired healthy15:44:50Z; consumed-attempt verification ingress authentication403/401 verified. Current closed Tavily remains unrecoverable; legitimate future live email verification proof and first10real receipts remain outstanding.
