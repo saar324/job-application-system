@@ -247,3 +247,7 @@ A pending submission_email_verification may contain a verificationSession with e
 Synthetic schema only: {"approved":true,"verificationCode":"TEST1234"}. This is not a real code.
 
 The server rechecks the consumed original permit, current policy and profile/answer authority. Changed, expired, closed, restarted, or already-used sessions remain outcome holds. The worker performs one verification-only action and records a receipt only after employer success. Successful contexts close; idle sessions expire within15minutes. The historical closed Tavily session cannot be recovered by this release. Ordinary CAPTCHA/anti-spam holds still require outcome review and never authorize stealth or transport changes.
+
+### Employer frequency review
+
+For an `employer_frequency_review` before form preparation, review the exact current role and the value of another application to that employer. Confirm a distinct suitable opening using the ordinary exact-confirmation payload `{ "approved": true }`. This confirmation has no named fields or `manual_review` action; do not invent `answers.retry` or owner approval. Delegated routine review may resolve it within existing authority. The server still requires complete exact final-submission preview approval for this application. This does not change employer history, policy, caps, or uncertain-final protection.
