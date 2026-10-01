@@ -37,3 +37,7 @@ Multiselect release evidence: e028e7c passed546 tests and strict OpenSpec; stagi
 Teamtailor initial release b2712ef:573 full tests;19 installed Chromium/API fixtures and paired health/auth passed. Actual employer rerender exposed overly conservative same-attempt reuse guard; no final action. Baseline b2712ef fixture reproduced exact hold, patched same-page proof succeeds with one upload.
 - [x] Reproduce same-attempt resume rerender against deployed baseline and verify private SHA-bound reuse
 - [ ] Release corrected same-attempt reuse after fresh full/staging/production gates
+
+- [x] Preserve stable canonical document approval across fresh context storage URLs
+- [x] Verify joined normal API discovery/prepare/exactreview/freshbrowser/permit/commit/syntheticreceipt plus changed document/profile/question/destination edges
+- [ ] Run fresh full checks and paired staged/production gates for canonical approval correction
