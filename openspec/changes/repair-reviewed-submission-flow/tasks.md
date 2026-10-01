@@ -14,4 +14,10 @@ Release evidence: tested code ba2e1dd; 525 automated tests; strict OpenSpec; fiv
 
 - [x] Verify all three ATS pre-cap continuation, changed-posting and profile-bound protections
 - [x] Run current full checks and strict OpenSpec for discovery correction
-- [ ] Release discovery correction to paired staging and production only while execution is idle
+- [x] Release discovery correction to paired staging and production only while execution is idle
+
+Discovery release evidence: f945564 passed 540 tests and strict OpenSpec; staging hosted20 isolated continuation/Chromium tests; production API/worker f945564 healthy with authentication negatives. Resource samples13:19:31Z and13:21:54Z confirmed actual services; second worker sample included active real browser execution. No schema migration or source budget change.
+
+- [x] Implement observed multiselect array option selection and exact selected-set readback/preview
+- [x] Verify golden multi/single controls plus unknown and missing/changed/extra chips before final
+- [ ] Run full checks and paired staged/browser/production release for multiselect correction while idle
