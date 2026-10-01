@@ -35,3 +35,15 @@ Official ATS queries SHALL remove unchanged profile-bound irrelevant postings be
 #### Scenario: Previously executed posting
 - **WHEN** a posting has a handled application or uncertain final action for this profile
 - **THEN** its existing canonical identity protection SHALL remain effective
+
+### Requirement: Exact observed multiselect execution
+For an observed multi-value combobox the executor SHALL select supplied array options independently and SHALL preserve an exact selected set in live readback, review preview and checkpoint. It SHALL NOT serialize the array into a guessed comma-joined option.
+#### Scenario: Verified language array
+- **WHEN** the observed multi control exposes each known supplied option
+- **THEN** the executor SHALL select each option and present the typed array for exact review
+#### Scenario: Changed or unknown selection
+- **WHEN** an option is unknown, ambiguous, missing, changed or extra at final readback
+- **THEN** the executor SHALL hold before permit commit or submission
+#### Scenario: Ordinary single selection
+- **WHEN** the control is a single-value combobox
+- **THEN** existing scalar selection SHALL remain supported and an array SHALL NOT become a guessed scalar

@@ -411,6 +411,37 @@ async function fillControl(locator, field, value, surface) {
     }
     throw new Error(`answer does not match a radio option for ${field.label}`);
   } else if (field.tag === "input" && await locator.getAttribute("role") === "combobox") {
+    const multiple = await locator.evaluate(element => Boolean(element.closest(".select-shell")
+      ?.querySelector(".select__value-container--is-multi")));
+    if (multiple) {
+      if (!Array.isArray(value) || !value.length || value.length > 50
+        || value.some(item => typeof item !== "string" || !item.trim())
+        || new Set(value.map(normalize)).size !== value.length) {
+        throw new Error(`multiselect requires distinct exact options for ${field.label}`);
+      }
+      const current = await readControl(locator, field);
+      if (current.some(item => !value.some(expected => normalize(expected) === normalize(item)))) {
+        throw new Error(`unverified multiselect option is already present for ${field.label}`);
+      }
+      for (const item of value) {
+        if ((await readControl(locator, field)).some(selected => normalize(selected) === normalize(item))) continue;
+        await locator.fill(item);
+        await locator.press("ArrowDown").catch(() => undefined);
+        const options = surface.locator('[role="option"]:visible');
+        await options.first().waitFor({ state: "visible", timeout: 1500 }).catch(() => undefined);
+        const matches = [];
+        for (let index = 0; index < await options.count(); index += 1) {
+          if (normalize(await options.nth(index).innerText()) === normalize(item)) matches.push(index);
+        }
+        if (matches.length !== 1) throw new Error(`answer does not match one exact multiselect option for ${field.label}`);
+        await options.nth(matches[0]).click();
+        if (!(await readControl(locator, field)).some(selected => normalize(selected) === normalize(item))) {
+          throw new Error(`selected multiselect option was not retained for ${field.label}`);
+        }
+      }
+      return;
+    }
+    if (Array.isArray(value)) throw new Error(`array answer requires a multiselect control for ${field.label}`);
     await locator.fill(String(value));
     const desired = normalize(value);
     await locator.press("ArrowDown").catch(() => undefined);
@@ -543,6 +574,10 @@ async function readControl(locator, field) {
     }
     if (element.getAttribute("role") === "combobox") {
       const shell = element.closest(".select-shell") ?? element;
+      if (shell.querySelector(".select__value-container--is-multi")) {
+        return [...shell.querySelectorAll(".select__multi-value__label")]
+          .map(label => label.innerText.trim().replace(/\s+/g, " "));
+      }
       const answer = shell.dataset.jobApplicationVerifiedAnswer;
       const expectedVisual = shell.dataset.jobApplicationVerifiedVisual;
       const visual = shell.querySelector(".select__single-value")?.innerText?.trim().replace(/\s+/g, " ")
@@ -605,6 +640,10 @@ async function controlMatches(locator, field, answer, observed) {
   if (field.tag === "select") return field.options.some((option) => option.value === observed
     && (normalize(option.label) === normalize(answer.value) || normalize(option.value) === normalize(answer.value)));
   if (field.tag === "input" && await locator.getAttribute("role") === "combobox") {
+    if (Array.isArray(answer.value)) {
+      return Array.isArray(observed) && observed.length === answer.value.length
+        && JSON.stringify(observed.map(normalize).sort()) === JSON.stringify(answer.value.map(normalize).sort());
+    }
     const actual = normalize(observed);
     const desired = normalize(expected);
     return actual === desired || actual.startsWith(`${desired} `);
@@ -766,7 +805,8 @@ function fieldSummary(field, answer, observed) {
     if (field.type === "password") value = "[stored securely]";
     else if (field.type === "file") value = observed.map((file) => file.name).join(", ");
     else if (field.type === "checkbox") value = observed ? "Yes" : "No";
-    else value = String(observed);
+    else value = Array.isArray(observed)
+      ? [...(Array.isArray(answer.value) ? answer.value : observed)] : String(observed);
   }
   return {
     key: field.name || field.id || normalize(field.label), label: field.label,
@@ -938,7 +978,8 @@ function checkpointField(field) {
     required: field.required === true, status: field.status,
     ...(field.source ? { source: String(field.source).slice(0, 160) } : {}),
     ...(field.status === "filled" ? { value: secret ? "[redacted]"
-      : String(field.value ?? "").slice(0, 5000) } : {})
+      : Array.isArray(field.value) ? field.value.slice(0, 50).map(value => String(value).slice(0, 200))
+        : String(field.value ?? "").slice(0, 5000) } : {})
   };
 }
 
@@ -1329,7 +1370,8 @@ export async function automateApplication({ page, profile, opportunity, applicat
         const live = await readControl(locator, field);
         const currentValue = field.type === "password" ? "[stored securely]"
           : field.type === "file" ? live.map((file) => file.name).join(", ")
-            : field.type === "checkbox" ? live ? "Yes" : "No" : String(live);
+            : field.type === "checkbox" ? live ? "Yes" : "No"
+              : Array.isArray(live) ? live : String(live);
         const valid = await locator.evaluate((element) => element.validity?.valid ?? true);
         const changedSecret = field.type === "password"
           && createHash("sha256").update(String(live)).digest("hex") !== field.secretFingerprint;
@@ -1337,7 +1379,11 @@ export async function automateApplication({ page, profile, opportunity, applicat
           && JSON.stringify(live) !== JSON.stringify(field.files);
         const unexpectedValue = field.type === "checkbox" ? live === true
           : field.type === "file" ? live.length > 0 : String(live ?? "").trim() !== "";
-        if (!valid || changedSecret || changedFile || (field.status === "filled" ? currentValue !== field.value
+        const changedValue = Array.isArray(field.value)
+          ? !Array.isArray(currentValue)
+            || JSON.stringify(currentValue.map(normalize).sort()) !== JSON.stringify(field.value.map(normalize).sort())
+          : currentValue !== field.value;
+        if (!valid || changedSecret || changedFile || (field.status === "filled" ? changedValue
           : unexpectedValue)) {
           return pause({ status: "needs_input", message: "A field changed before final submission",
             requirements: [{ kind: "final_review_changed", fields: [field.key],
