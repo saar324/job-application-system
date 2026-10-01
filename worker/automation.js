@@ -609,6 +609,12 @@ async function detachedFileLiveMatch(surface, action, field) {
     && files[0].name === field.files[0].name
     && files[0].size === field.files[0].size);
   const host = new URL(surface.url()).hostname;
+  const teamtailorResume = field.key === "candidate_resume_remote_url"
+    ? await surface.locator("#upload_resume_field").evaluateAll((containers, filename) => ({
+      containerCount: containers.length,
+      filenameVisible: containers.length === 1 && containers[0].innerText.includes(filename),
+      fileInputCount: containers.length === 1 ? containers[0].querySelectorAll('input[type="file"]').length : -1
+    }), field.files[0].name).catch(() => null) : null;
   const greenhouseResume = field.greenhouseResume === true && field.key === "resume" && field.uploadAcknowledged
     && ["job-boards.greenhouse.io", "job-boards.eu.greenhouse.io",
       "boards.greenhouse.io", "boards.eu.greenhouse.io"].includes(host)
@@ -616,7 +622,7 @@ async function detachedFileLiveMatch(surface, action, field) {
       .evaluate(greenhouseResumeUploaded, { name: field.files[0].name, formIndex })
       .catch(() => false);
   return { inputCount: inputs.length, matches: matches.map((item) => item.controlIndex),
-    greenhouseResume };
+    greenhouseResume, teamtailorResume };
 }
 
 async function controlMatches(locator, field, answer, observed) {
@@ -977,6 +983,9 @@ function checkpointField(field) {
     step: field.step, key, label, type: field.type,
     required: field.required === true, status: field.status,
     ...(field.source ? { source: String(field.source).slice(0, 160) } : {}),
+    ...(field.type === "file" ? { uploadAcknowledged: field.uploadAcknowledged === true,
+      detached: field.detached === true,
+      ...(field.fileReadback ? { fileReadback: field.fileReadback } : {}) } : {}),
     ...(field.status === "filled" ? { value: secret ? "[redacted]"
       : Array.isArray(field.value) ? field.value.slice(0, 50).map(value => String(value).slice(0, 200))
         : String(field.value ?? "").slice(0, 5000) } : {})
@@ -1348,6 +1357,12 @@ export async function automateApplication({ page, profile, opportunity, applicat
         if (field.detached) {
           if (field.type === "file" && field.status === "filled") {
             const live = await detachedFileLiveMatch(surface, action, field);
+            field.fileReadback = { inputCount: live?.inputCount ?? -1,
+              matchingInputCount: live?.matches?.length ?? 0,
+              associatedResumeAcknowledged: live?.greenhouseResume === true,
+              ...(live?.teamtailorResume ? { resumeContainerCount: live.teamtailorResume.containerCount,
+                resumeFilenameVisible: live.teamtailorResume.filenameVisible,
+                resumeFileInputCount: live.teamtailorResume.fileInputCount } : {}) };
             const greenhouseResume = field.greenhouseResume === true && field.key === "resume"
               && /^(?:job-boards|boards)(?:\.eu)?\.greenhouse\.io$/.test(
                 new URL(surface.url()).hostname);
