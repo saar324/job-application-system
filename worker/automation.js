@@ -12,6 +12,7 @@ const NEXT_BUTTON = /next|continue|save and continue|review/i;
 const START_BUTTON = /^(?:apply|apply manually)$|apply now|apply for this job|start application/i;
 const AUTH_BUTTON = /sign in|log in|create account|register|sign up/i;
 const SIGNUP_BUTTON = /create account|register|sign up/i;
+const teamtailorUploads = new WeakMap();
 const SUCCESS_TEXT = /thank you|application (?:has been |was )?(?:successfully )?submitted|application received|received your application/i;
 const BLOCKED_SUBMISSION_TEXT = /we couldn't submit your application[\s\S]*flagged as possible spam/i;
 const CHALLENGE_TEXT = /(?:complete|solve|enter|check|verify)(?:\s+the|\s+a)?\s+(?:re)?captcha|(?:re)?captcha (?:required|verification)|verify (?:that )?you are (?:a )?human|security check|unusual traffic|cloudflare (?:challenge|verification)/i;
@@ -349,6 +350,14 @@ async function fillControl(locator, field, value, surface) {
       ? createHash('sha256').update(await readFile(String(value))).digest('hex') : undefined;
     if (teamtailorResume && await rootPage.locator(
       '#upload_resume_field [data-controller="forms--inputs--upload-preview"]').count()) {
+      const current = teamtailorUploads.get(rootPage);
+      const remote = await rootPage.evaluate(teamtailorResumeUploaded, file.name).catch(() => false);
+      if (current?.documentFingerprint === teamtailorDocumentFingerprint
+        && current.name === file.name && current.size === file.size && typeof remote === 'string'
+        && createHash('sha256').update(remote).digest('hex') === current.remoteFingerprint) {
+        return { uploadAcknowledged: true, files: [file], teamtailorResumeFingerprint: current.remoteFingerprint,
+          teamtailorDocumentFingerprint };
+      }
       throw new Error('Review the existing resume attachment before replacing it');
     }
     const greenhouseResume = isGreenhouse && field.id === "resume"
@@ -393,6 +402,8 @@ async function fillControl(locator, field, value, surface) {
       teamtailorResumeFingerprint = createHash("sha256").update(remoteUrl).digest("hex");
       if (createHash('sha256').update(await readFile(String(value))).digest('hex')
         !== teamtailorDocumentFingerprint) throw new Error('The resume changed during upload');
+      teamtailorUploads.set(rootPage, { name: file.name, size: file.size,
+        documentFingerprint: teamtailorDocumentFingerprint, remoteFingerprint: teamtailorResumeFingerprint });
     }
     return { uploadAcknowledged: true, files: [file], greenhouseResume, teamtailorResumeFingerprint,
       teamtailorDocumentFingerprint };
