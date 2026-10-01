@@ -72,9 +72,9 @@ Verification-only release8dae8ee:592 full tests, privacy339trackedfiles, strict 
 - [x] Reproduce Arbeitnow identity-only pre-cap callback using three retained real postings without provider requests.
 - [x] Pass complete current fingerprint fields through RemoteOK and Arbeitnow callbacks.
 - [x] Verify unchanged/changed/profile/submitted/uncertain-final behavior across five adapters (25 cases).
-- [ ] Complete fresh full checks, immutable staging verification and idle paired production release.
+- [x] Complete fresh full checks (622), immutable staging verification (61) and idle paired production release b27a58d.
 
 ## Unanswered optional legal controls
 - [x] Fix optional unchecked marketing consent hold; filled legal answers still require scoped review, required blanks still hold.
 - [x] Pass new service regression and existing standing-policy checks (25 tests).
-- [ ] Fresh full checks, installed staging/browser verification, paired production release and current Bjak outcome.
+- [x] Fresh full checks622, installed staging/browser61, paired production b27a58d; actual Bjak review/permit/final passed, then employer spam hold with no receipt or retry.
