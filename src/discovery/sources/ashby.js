@@ -37,6 +37,7 @@ export const ashby = {
         && (!query.location || locationOf(job).toLowerCase().includes(query.location.toLowerCase())));
     const selected = prescreened.filter(({ board, job }) =>
       !isHandled({ source: "ashby", externalId: `${board.slug}:${job.id}`,
+          title: job.title, company: board.company, description: job.descriptionPlain ?? "",
           applyUrl: job.applyUrl, listingUrl: job.jobUrl }))
       .sort((left, right) => Date.parse(right.job.publishedAt ?? "") - Date.parse(left.job.publishedAt ?? ""));
     onStats({ rawRows: rows.length, adapterPrescreenRejected: rows.length - prescreened.length,
