@@ -51,6 +51,40 @@ async function greenhouseEmailCodeChallenge(page, body) {
       })).catch(() => false);
 }
 
+async function emailVerificationContinuation(page, application, profile, artifactsDirectory) {
+  if (!application.finalPermit?.previewFingerprint || !application.claim?.attemptId) return null;
+  const body = await page.locator('body').innerText();
+  if (!await greenhouseEmailCodeChallenge(page, body)) return null;
+  const inputs = page.locator('input:visible:not([type="hidden"]):not([type="submit"])');
+  const lengths = await inputs.evaluateAll(rows => rows.map(row => row.maxLength));
+  if (!(lengths.length === 1 && lengths[0] === 8 || lengths.length === 8 && lengths.every(n => n === 1))) return null;
+  const form = inputs.first().locator('xpath=ancestor::form[1]');
+  if (await form.count() !== 1) return null;
+  const buttons = form.locator('button:visible, input[type="submit"]:visible');
+  if (await buttons.count() !== 1) return null;
+  const readButton = () => buttons.first().evaluate(node => ({tag:node.tagName,text:node.textContent,value:node.value,type:node.type}));
+  const descriptor = await readButton();
+  if (!/submit|verify|confirm/i.test([descriptor.text,descriptor.value].join(' '))) return null;
+  const destination = page.url();
+  return {binding:{profileId:profile.id,applicationId:application.id,attemptId:application.claim.attemptId,
+    destination,previewFingerprint:application.finalPermit.previewFingerprint},continueVerification:async code => {
+    if(page.url() !== destination || await page.locator('body').innerText() !== body
+      || await buttons.count() !== 1 || JSON.stringify(await readButton()) !== JSON.stringify(descriptor)) return {status:'needs_human'};
+    for(let n=0;n<lengths.length;n++) await inputs.nth(n).fill(lengths.length===1?code:code[n]);
+    if(page.url() !== destination || await buttons.count() !== 1
+      || JSON.stringify(await readButton()) !== JSON.stringify(descriptor)
+      || await inputs.count() !== lengths.length
+      || await page.locator('body').innerText() !== body
+      || (await inputs.evaluateAll(rows=>rows.map(row=>row.value))).join('') !== code) return {status:'needs_human'};
+    await buttons.first().click({noWaitAfter:true});
+    if(!await waitForSubmissionEvidence(page,destination,body)) return {status:'needs_human'};
+    const remaining = await page.locator('input').evaluateAll(rows=>rows.map(row=>row.value));
+    if((await page.locator('body').innerText()).includes(code) || remaining.some(value=>value===code)
+      || lengths.length===8 && remaining.join('').includes(code)) return {status:'needs_human'};
+    return {status:'submitted',receipt:await captureReceipt(page,artifactsDirectory,application.id)};
+  }};
+}
+
 export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSubmit, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   const successAlreadyPresent = SUCCESS_TEXT.test(bodyBeforeSubmit);
@@ -62,6 +96,17 @@ export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSub
     const confirmationUrl = /confirmation|thank|success|submitted/i.test(currentUrl) && currentUrl !== previousUrl;
     const invalidControls = await page.locator("input:invalid, textarea:invalid, select:invalid").count().catch(() => 0);
     const activeForm = await page.locator("form:visible").count().catch(() => 0);
+    let exactApplicationThanks = false;
+    try {
+      const before = new URL(previousUrl), after = new URL(currentUrl);
+      const role = before.pathname.match(/^\/jobs\/([^/]+)\/?$/)?.[1];
+      exactApplicationThanks = Boolean(role && before.origin === after.origin
+        && after.pathname.startsWith(`/jobs/${role}/applications/`)
+        && /^\/jobs\/[^/]+\/applications\/[a-f0-9-]{36}\/thanks(?:\/|$)/i.test(after.pathname)
+        && /\bwe have received your application\b/i.test(body)
+        && !SUCCESS_TEXT.test(bodyBeforeSubmit));
+    } catch { /* Invalid or unrelated receipt routes do not prove submission. */ }
+    if (exactApplicationThanks && invalidControls === 0) return true;
     const newSuccessText = !successAlreadyPresent && SUCCESS_TEXT.test(body)
       && activeForm === 0 && body.length < 2000;
     if ((confirmationUrl || newSuccessText) && activeForm === 0 && invalidControls === 0) return true;
@@ -1633,11 +1678,11 @@ export async function automateApplication({ page, profile, opportunity, applicat
         }, step, "final_action_started");
       }
       if (await greenhouseEmailCodeChallenge(surface, diagnostic.body)) {
-        return pause({
-          status: "needs_human", message: "Greenhouse requested an email security code after Submit",
-          requirements: [{ kind: "submission_email_verification", action: "manual_review",
-            message: "Greenhouse requested an emailed security code after Submit. The automated browser session has ended; human review is required to inspect any available employer verification path and reconcile the outcome. Do not retry the automated submission." }]
-        }, step, "final_action_started");
+        const result = pause({status:"needs_human",message:"Greenhouse requested an email security code after Submit",
+          requirements:[{kind:"submission_email_verification",action:"manual_review",
+            message:"Greenhouse requested an emailed security code after Submit. The automated browser session has ended; human review is required to inspect any available employer verification path and reconcile the outcome. Do not retry the automated submission."}]},step,"final_action_started");
+        if(surface===page) result.verificationContinuation = await emailVerificationContinuation(page,application,profile,artifactsDirectory);
+        return result;
       }
       return pause({
         status: "needs_human",

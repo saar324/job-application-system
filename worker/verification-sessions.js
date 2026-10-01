@@ -8,10 +8,10 @@ const hold = (reasonCode) => ({ status: "needs_human", phase: "final_action_star
 // retained, serialized, logged, or recoverable after a process restart.
 export class VerificationSessions {
   #sessions = new Map();
-  constructor({ ttlMs = 15 * 60_000, maxSessions = 3, now = Date.now } = {}) {
+  constructor({ ttlMs = 15 * 60_000, maxSessions = 3, now = Date.now, closeOnSuccess = false } = {}) {
     if (!Number.isFinite(ttlMs) || ttlMs <= 0 || ttlMs > 15 * 60_000
       || !Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > 3) throw new Error("Invalid verification limits");
-    this.ttlMs = ttlMs; this.maxSessions = maxSessions; this.now = now;
+    this.ttlMs = ttlMs; this.maxSessions = maxSessions; this.now = now; this.closeOnSuccess = closeOnSuccess;
   }
   get size() { return this.#sessions.size; }
   retain({ binding, context, page, continueVerification }) {
@@ -60,6 +60,7 @@ export class VerificationSessions {
       if (JSON.stringify(safeResult).includes(input.code)) return hold("verification_receipt_unsafe");
       await persistReceipt(safeResult);
       this.#sessions.delete(input.sessionId); clearTimeout(session.timer);
+      if (this.closeOnSuccess) await session.context.close().catch(() => {});
       // Caller owns successful context cleanup after receipt capture.
       return safeResult;
     } catch { return hold("verification_outcome_unconfirmed"); }

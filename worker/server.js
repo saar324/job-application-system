@@ -9,6 +9,7 @@ import { createAdaptiveControllerFromEnv } from "./adaptive.js";
 import { claimReviewerFromEnv, draftProviderFromEnv } from "./draft-provider.js";
 import { createValidatedEgressProxy } from "./egress-proxy.js";
 import { browserPathConfig, browserPathFor } from "./browser-path.js";
+import { VerificationSessions } from "./verification-sessions.js";
 
 async function readJson(request) {
   const chunks = [];
@@ -36,6 +37,8 @@ const urlPolicy = createUrlPolicy();
 const artifactsDirectory = path.resolve(process.env.WORKER_ARTIFACTS ?? "./data/artifacts");
 const documentRoot = path.resolve(process.env.WORKER_DOCUMENT_ROOT ?? "./data/documents");
 const receiptStore = new ReceiptStore(process.env.WORKER_RECEIPTS ?? "./data/receipts");
+const verificationSessions = new VerificationSessions({closeOnSuccess:true});
+const verificationReceipts = new Map();
 const egressProxy = await createValidatedEgressProxy(urlPolicy);
 const browserPaths = browserPathConfig();
 const browser = await chromium.launch({ headless: browserPaths.defaultHeadless, args: ["--disable-quic"] });
@@ -61,7 +64,7 @@ async function finalGate(pathname, body) {
 const server = createServer(async (request, response) => {
   try {
     if (request.method === "GET" && request.url === "/health") {
-      return send(response, 200, { ok: true, browser: "chromium", release: process.env.JOB_RELEASE_ID ?? "unknown" });
+      return send(response, 200, { ok: true, browser: "chromium", release: process.env.JOB_RELEASE_ID ?? "unknown", waitingVerification: verificationSessions.size });
     }
     if (request.headers.authorization !== `Bearer ${token}`) {
       return send(response, 401, { error: "invalid worker token" });
@@ -70,19 +73,38 @@ const server = createServer(async (request, response) => {
     if (request.method === "GET" && attempt) {
       return send(response, 200, await receiptStore.status(attempt[1]));
     }
+    if (request.method === "POST" && request.url === "/v1/verify") {
+      try {
+        const input = await readJson(request);
+        const recorder = verificationReceipts.get(input.sessionId);
+        const result = await verificationSessions.verify(input, {
+          authorize: body => finalGate("/v1/internal/verification-decision", body),
+          persistReceipt: async result => { if (!recorder) throw new Error("No bound receipt recorder"); await recorder(result); }
+        });
+        if (result.status === "submitted") verificationReceipts.delete(input.sessionId);
+        return send(response, result.status === "submitted" ? 200 : 409, result);
+      } catch { return send(response, 409, {error:"Verification outcome remains unconfirmed"}); }
+    }
     if (request.method !== "POST" || request.url !== "/v1/submit") {
       return send(response, 404, { error: "route not found" });
     }
     const payload = await validateWorkerPayload(await readJson(request), documentRoot);
     const profile = payload.profile;
+    const verificationRecorder = receiptStore.verificationRecorder(payload);
     const result = await receiptStore.run(payload, async (markFinalActionStarted) => {
       const selected = browserPathFor(payload.opportunity.applyUrl, browserPaths);
       return executeInFreshContext({ browser: selected === "headed" ? headedBrowser : browser,
         payload, urlPolicy, artifactsDirectory,
         adaptiveController, draftProvider, claimReviewer, egressProxy, markFinalActionStarted,
         authorizeFinal: (body) => finalGate("/v1/internal/final-decision", body),
-        commitFinal: (body) => finalGate("/v1/internal/final-commit", body) });
+        commitFinal: (body) => finalGate("/v1/internal/final-commit", body), verificationSessions });
     });
+    const retained = result.requirements?.find(item => item.verificationSession)?.verificationSession;
+    if (retained) {
+      verificationReceipts.set(retained.id, verificationRecorder);
+      const timer = setTimeout(() => verificationReceipts.delete(retained.id), Math.max(0, retained.expiresAt-Date.now()));
+      timer.unref?.();
+    }
     return send(response, result.status === "submitted" ? 200 : 409, result);
   } catch (error) {
     console.error(error);
@@ -96,6 +118,7 @@ server.listen(port, host, () => console.log(`application worker listening on htt
 
 async function shutdown() {
   server.close();
+  await verificationSessions.closeAll();
   await browser.close();
   await headedBrowser?.close();
   await egressProxy.close();
