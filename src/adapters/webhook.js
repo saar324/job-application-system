@@ -24,6 +24,19 @@ export class WebhookAdapter {
     }
     return body;
   }
+  async verify(input) {
+    const endpoint = new URL(this.url); endpoint.pathname = '/v1/verify'; endpoint.search = '';
+    try {
+      const response = await fetch(endpoint, {method:'POST',headers:{'content-type':'application/json',
+        ...(this.token ? {authorization:`Bearer ${this.token}`} : {})},body:JSON.stringify(input),
+        signal:AbortSignal.timeout(60_000)});
+      return await response.json();
+    } catch {
+      const status = await this.attemptStatus(input.applicationId).catch(() => null);
+      if (status?.status === 'submitted' && status.receipt) return {status:'submitted',receipt:status.receipt};
+      return {status:'needs_human'};
+    }
+  }
   async submit(payload) {
     let response;
     try {

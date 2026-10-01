@@ -569,6 +569,7 @@ export class ApplicationService {
         policyId: policy?.id ?? null, policyVersion: policy?.version ?? null,
         roleKey: [...roleKeys(opportunity)].sort()[0] ?? opportunity.id,
         previewFingerprint, decision: reasonCodes.length ? "hold" : "permit", reasonCodes,
+        verificationAuthorityHash: verificationAuthorityHash(current, profile, opportunity),
         createdAt: now(), expiresAt: new Date(Date.now() + 30_000).toISOString(),
         status: reasonCodes.length ? "held" : "reserved" };
       current.finalSubmissionDecision = decision;
@@ -642,11 +643,86 @@ export class ApplicationService {
     });
   }
 
+  async authorizeVerification(input) {
+    const state = this.store.snapshot();
+    const application = state.applications.find(item => item.id === input?.applicationId);
+    if (!application || application.profileId !== input?.profileId) return { allowed: false };
+    const profile = await this.profiles?.get(application.profileId);
+    const opportunity = state.opportunities.find(item => item.id === application.opportunityId);
+    const decision = application.finalSubmissionDecision;
+    const session = state.confirmations.find(item => item.applicationId === application.id
+      && item.profileId === application.profileId && item.kind === 'submission_email_verification'
+      && item.status === 'pending' && item.verificationSession?.id === input.sessionId)?.verificationSession;
+    const policy = profile?.standingSubmissionPolicy;
+    let destinationMatches = false;
+    try {
+      const host = new URL(input.destination).hostname;
+      destinationMatches = policy?.destinationHosts?.some(value => value === '*' || value === host)
+        && [...roleKeys({applyUrl: input.destination})].some(key => !key.startsWith('role:')
+          && roleKeys(opportunity).has(key));
+    } catch { /* A changed or invalid destination is a hold. */ }
+    return { allowed: Boolean(session && session.expiresAt > Date.now()
+      && ['profileId','applicationId','attemptId','destination','previewFingerprint']
+        .every(key => session[key] === input[key])
+      && application.status === 'waiting_confirmation'
+      && application.checkpoint?.phase === 'final_action_started'
+      && decision?.status === 'consumed' && decision.attemptId === input.attemptId
+      && decision.previewFingerprint === input.previewFingerprint
+      && decision.policyId === policy?.id && decision.policyVersion === policy?.version
+      && decision.verificationAuthorityHash === verificationAuthorityHash(application, profile, opportunity)
+      && policyCovers(policy, opportunity, application.mode) && destinationMatches
+      && !hardPolicyHolds({opportunity, mode: application.mode, answers: application.answers, profile}).length
+      && !(opportunity?.validThrough && Date.parse(opportunity.validThrough) <= Date.now())) };
+  }
+
+  async #resolveVerification(target, input, identity) {
+    if (target.kind !== 'submission_email_verification' || target.status !== 'pending'
+      || input.approved !== true || !/^[A-Za-z0-9]{8}$/.test(input.verificationCode ?? '')
+      || Object.keys(input).some(key => !['approved','verificationCode'].includes(key))) {
+      throw new ClientError(400, 'invalid verification-only request');
+    }
+    const session = target.verificationSession;
+    if (!session || session.expiresAt <= Date.now() || !this.adapter.verify) {
+      throw new ClientError(409, 'live verification session unavailable; do not repeat application Submit');
+    }
+    const profileId = identity.profileId;
+    const previous = this.#profileRunners.get(profileId) ?? Promise.resolve();
+    const runner = previous.then(() => this.#withGlobalSlot(async () => {
+      const binding = { ...session, sessionId: session.id };
+      if (!(await this.authorizeVerification(binding)).allowed) {
+        throw new ClientError(409, 'verification authority changed; inspect the outcome');
+      }
+      const result = await this.adapter.verify({ ...binding, code: input.verificationCode });
+      if (result?.status !== 'submitted' || !result.receipt?.submittedAt || !result.receipt?.finalUrl) {
+        throw new ClientError(409, 'verification outcome remains unconfirmed; do not repeat application Submit');
+      }
+      const saved = await this.#persistSubmitted(target.applicationId, identity, session.attemptId, result.receipt);
+      await this.store.mutate(state => {
+        const confirmation = state.confirmations.find(item => item.id === target.id);
+        if (confirmation?.status === 'pending') {
+          confirmation.status = 'approved'; confirmation.resolvedAt = now(); confirmation.resolvedBy = identity.actorId;
+        }
+        audit(state, identity, 'application.verification_completed', target.applicationId,
+          {attemptId: session.attemptId});
+      });
+      return saved;
+    }));
+    // Verification actions share the ordinary profile/global serial lane.
+    const tracked = runner.catch(() => {}).finally(() => {
+      if (this.#profileRunners.get(profileId) === tracked) this.#profileRunners.delete(profileId);
+    });
+    this.#profileRunners.set(profileId, tracked);
+    return runner;
+  }
+
   async resolveConfirmation(confirmationId, input, identity) {
     const target = this.store.snapshot().confirmations.find(
       (item) => item.id === confirmationId && item.profileId === identity.profileId
     );
     if (!target) throw new ClientError(404, "confirmation not found");
+    if (Object.hasOwn(input ?? {}, "verificationCode")) {
+      return this.#resolveVerification(target, input, identity);
+    }
     const existingApplication = this.store.snapshot().applications.find((item) =>
       item.id === target.applicationId && item.profileId === identity.profileId);
     if (existingApplication?.status === "submitted" && existingApplication.receipt?.finalUrl) {
@@ -1939,13 +2015,34 @@ function addConfirmation(state, application, requirement, fallback) {
     message: requirement.message ?? fallback, fields: requirement.fields ?? [],
     options: requirement.options, recommendation: requirement.recommendation,
     origin: requirement.origin, preview: requirement.preview,
-    previewFingerprint: requirement.previewFingerprint, createdAt: now()
+    previewFingerprint: requirement.previewFingerprint, createdAt: now(),
+    ...(requirement.kind === 'submission_email_verification'
+      && validatedVerificationSession(requirement.verificationSession)
+      ? {verificationSession: validatedVerificationSession(requirement.verificationSession)} : {})
   };
   confirmation.presentation = buildPresentation(confirmation);
   state.confirmations.push(confirmation);
   recordWorkflowStage(state, { actorId: "system-confirmation", profileId: application.profileId },
     application.id, "owner_hold", { campaignId: application.campaignId,
       applicationId: application.id, outcome: confirmation.kind });
+}
+
+function validatedVerificationSession(value) {
+  const keys = ['profileId','applicationId','attemptId','destination','previewFingerprint'];
+  if (!value || typeof value.id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(value.id)
+    || !Number.isFinite(value.expiresAt) || value.expiresAt <= Date.now()
+    || value.expiresAt > Date.now() + 15 * 60_000
+    || !keys.every(key => typeof value[key] === 'string' && value[key].length > 0 && value[key].length < 2000)
+    || !/^[a-f0-9]{64}$/i.test(value.previewFingerprint)) return null;
+  return {id:value.id, expiresAt:value.expiresAt, ...Object.fromEntries(keys.map(key => [key,value[key]]))};
+}
+
+function verificationAuthorityHash(application, profile, opportunity) {
+  return createHash('sha256').update(JSON.stringify({
+    contact: profile?.contact, links: profile?.links, applicationAnswers: profile?.applicationAnswers,
+    answers: application?.answers, role: {id:opportunity?.id,title:opportunity?.title,
+      company:opportunity?.company,applyUrl:opportunity?.applyUrl,description:opportunity?.description}
+  })).digest('hex');
 }
 
 function buildPresentation(confirmation) {

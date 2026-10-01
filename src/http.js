@@ -48,12 +48,15 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
           release: process.env.JOB_RELEASE_ID ?? "unknown"
         });
       }
-      if (url.pathname === "/v1/internal/final-decision" || url.pathname === "/v1/internal/final-commit") {
+      if (["/v1/internal/final-decision", "/v1/internal/final-commit", "/v1/internal/verification-decision"].includes(url.pathname)) {
         if (request.method !== "POST" || !config.execution?.workerCallbackToken
           || request.headers.authorization !== `Bearer ${config.execution.workerCallbackToken}`) {
           return send(response, 403, { error: "worker authority required" });
         }
         const input = await jsonBody(request);
+        if (url.pathname.endsWith('verification-decision')) {
+          return send(response, 200, await service.authorizeVerification(input));
+        }
         return send(response, 200, url.pathname.endsWith("final-decision")
           ? await service.prepareFinalSubmission(input) : await service.commitFinalSubmission(input));
       }
@@ -247,6 +250,10 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       const confirmation = url.pathname.match(/^\/v1\/confirmations\/([^/]+)$/);
       if (request.method === "POST" && confirmation) {
         const body = await jsonBody(request);
+        if (Object.hasOwn(body, 'verificationCode')) {
+          // Codes must never enter persistent idempotency request hashes/cache.
+          return send(response, 200, await service.resolveConfirmation(confirmation[1], body, identity));
+        }
         const saved = await idempotentHttp(service, request, identity, "resolve_confirmation",
           { confirmationId: confirmation[1], body },
           async () => ({ status: 200, body: await service.resolveConfirmation(confirmation[1], body, identity) }));
