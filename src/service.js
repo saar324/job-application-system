@@ -1,3 +1,4 @@
+import { createFieldReview, reviewedField, requiresLegalReview } from "./reviewed-fields.js";
 import { normalizeRecruiterOutreach } from "./recruiter-outreach.js";
 import { createHash, randomUUID } from "node:crypto";
 import { evaluatePolicy } from "./policy.js";
@@ -40,6 +41,11 @@ export class ApplicationService {
     this.credentialVault = credentialVault;
     this.telemetry = telemetry;
     this.fetchImpl = fetchImpl;
+  }
+
+  executionHealth() {
+    return { active: this.#activeExecutions, waitingForCapacity: this.#executionWaiters.length,
+      queued: this.store.snapshot().applications.filter(item => item.status === "queued").length };
   }
 
   list(collection, profileId) {
@@ -529,7 +535,10 @@ export class ApplicationService {
         reasonCodes.push("invalid_preview");
       } else {
         if (preview.unfilled.some((field) => field.required === true)) reasonCodes.push("required_field_unfilled");
-        if (fields.some((field) => ["application answer", "unverified site prefill"].includes(field.source))) {
+        const reviewContext = { review: current.verifiedFieldReview, preview, fingerprint: previewFingerprint,
+          application: current, profile, opportunity };
+        if (fields.some((field) => ["application answer", "unverified site prefill"].includes(field.source)
+          && !reviewedField(field, reviewContext))) {
           reasonCodes.push("answer_provenance_unverified");
         }
         if (preview.filled.some((field) => {
@@ -543,7 +552,8 @@ export class ApplicationService {
         if (fields.some((field) => field.source === "drafted prose"
           || String(field.source ?? "").startsWith("approved answer:"))
           && !policy?.answerClasses?.includes("grounded_prose")) reasonCodes.push("prose_not_authorized");
-        if (fields.some((field) => LEGAL_ATTESTATION_FIELD.test(`${field.label ?? ""} ${field.key ?? ""}`))) {
+        if (fields.some((field) => requiresLegalReview(field)
+          && !reviewedField(field, reviewContext))) {
           reasonCodes.push("legal_answer_unconfirmed");
         }
       }
@@ -642,7 +652,7 @@ export class ApplicationService {
     if (existingApplication?.status === "submitted" && existingApplication.receipt?.finalUrl) {
       throw new ClientError(409, "application is already submitted; do not retry its confirmation");
     }
-    const approvalProfile = target.kind === "final_submission_approval" && input.approved === true
+    const approvalProfile = ["final_submission_approval", "final_policy_hold"].includes(target.kind) && input.approved === true
       ? await this.profiles?.get(identity.profileId) : null;
     let requireApprovalOnRetry = false;
     if (["submission_unverified", "submission_recovery", "submission_email_verification"].includes(target.kind)
@@ -721,6 +731,18 @@ export class ApplicationService {
       if (application.status === "submitted" && application.receipt?.finalUrl) {
         throw new ClientError(409, "application is already submitted; do not retry its confirmation");
       }
+      let verifiedReview;
+      if (confirmation.kind === "final_policy_hold" && input.approved === true && input.review) {
+        if (application.checkpoint?.phase === "final_action_started"
+          || application.finalSubmissionDecision?.status === "consumed") throw new ClientError(409, "prior final action uncertain");
+        const opportunity = state.opportunities.find(item => item.id === application.opportunityId);
+        if (!policyCovers(approvalProfile?.standingSubmissionPolicy, opportunity, application.mode)) {
+          throw new ClientError(409, "standing policy does not cover review");
+        }
+        try { verifiedReview = createFieldReview({ review: input.review, preview: confirmation.preview,
+          fingerprint: confirmation.previewFingerprint, identity, application, profile: approvalProfile, opportunity }); }
+        catch { throw new ClientError(400, "invalid verified field review"); }
+      }
       const hasManualFieldAnswers = confirmation.action === "manual_review"
         && Array.isArray(confirmation.fields) && confirmation.fields.length > 0
         && confirmation.fields.every((field) => Object.hasOwn(safeAnswers, field)
@@ -729,9 +751,15 @@ export class ApplicationService {
       if (confirmation.action === "manual_review" && input.approved === true
         && input.answers?.retry !== true
         && !(input.answers?.submitted === true && input.answers?.finalUrl)
-        && !hasManualFieldAnswers) {
+        && !hasManualFieldAnswers && !verifiedReview) {
         throw new ClientError(400,
           "manual review requires answers for every named field, answers.retry=true, or a submitted receipt with finalUrl");
+      }
+      if (verifiedReview) {
+        application.verifiedFieldReview = verifiedReview;
+        audit(state, identity, "application.fields_reviewed", application.id,
+          { previewFingerprint: verifiedReview.previewFingerprint, fieldCount: verifiedReview.fields.length,
+            reviewerId: identity.actorId, authorizationSource: verifiedReview.authorizationSource });
       }
       confirmation.status = input.approved === true ? "approved" : "rejected";
       confirmation.resolvedAt = now();
@@ -1536,6 +1564,8 @@ export class ApplicationService {
     });
     if (!claimed) return null;
     const { application, opportunity, identity, attemptId } = claimed;
+    const queuedAttempt = this.store.snapshot().attempts.find(item => item.id === attemptId);
+    if (Number.isFinite(queuedAttempt?.queueMs)) this.telemetry.observe("applications.queue_ms", queuedAttempt.queueMs);
     let verifiedReceipt;
     try {
       let profile = this.profiles ? await this.profiles.get(identity.profileId) : undefined;

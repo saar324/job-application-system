@@ -1,0 +1,11 @@
+- [x] Investigate live API/worker and confirm root cause
+- [ ] Implement exact field provenance review and fail-closed gates
+- [ ] Add queue delay and release identity diagnostics
+- [ ] Regression and real browser fixture checks
+- [ ] Paired staging deployment and golden/edge smoke
+- [ ] Paired production release and resource checks
+- [ ] Report verified behavior and remaining batch blockers
+- [ ] Validate OpenSpec artifacts and complete receipt acceptance scenarios
+- [ ] Report discovery funnel and actual eligible supply separately from executor metrics
+- [ ] Audit16current hold categories; preserve independent barriers and evidence-backed route limits
+- [ ] Record first10-real-receipt pilot as outstanding unless actually measured
