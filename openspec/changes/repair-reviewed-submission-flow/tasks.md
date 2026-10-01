@@ -73,3 +73,8 @@ Verification-only release8dae8ee:592 full tests, privacy339trackedfiles, strict 
 - [x] Pass complete current fingerprint fields through RemoteOK and Arbeitnow callbacks.
 - [x] Verify unchanged/changed/profile/submitted/uncertain-final behavior across five adapters (25 cases).
 - [ ] Complete fresh full checks, immutable staging verification and idle paired production release.
+
+## Unanswered optional legal controls
+- [x] Fix optional unchecked marketing consent hold; filled legal answers still require scoped review, required blanks still hold.
+- [x] Pass new service regression and existing standing-policy checks (25 tests).
+- [ ] Fresh full checks, installed staging/browser verification, paired production release and current Bjak outcome.

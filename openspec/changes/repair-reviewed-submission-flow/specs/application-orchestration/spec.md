@@ -128,3 +128,14 @@ RemoteOK and Arbeitnow SHALL pass the current title, company, description and de
 #### Scenario: Arbeitnow retained reviewed rows precede an unseen row
 - **WHEN** the first two retained current postings have unchanged irrelevant reviews for this profile
 - **THEN** a limit-two review-only scan returns the following unseen posting without increasing provider requests or treating the source as exhausted
+
+### Requirement: Unanswered optional legal controls preserve non-consent
+The service SHALL review filled legal answers and SHALL allow optional legal controls to remain unanswered without implying consent. Required unanswered controls SHALL remain blocked.
+
+#### Scenario: Optional mixed marketing checkbox unchecked
+- **WHEN** the preview leaves an optional marketing consent control unfilled
+- **THEN** that control requires no consent approval and all other final guards remain active
+
+#### Scenario: Required legal checkbox unanswered
+- **WHEN** the preview leaves a required legal control unfilled
+- **THEN** the required-field gate blocks submission

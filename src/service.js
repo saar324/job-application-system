@@ -552,7 +552,7 @@ export class ApplicationService {
         if (fields.some((field) => field.source === "drafted prose"
           || String(field.source ?? "").startsWith("approved answer:"))
           && !policy?.answerClasses?.includes("grounded_prose")) reasonCodes.push("prose_not_authorized");
-        if (fields.some((field) => requiresLegalReview(field)
+        if (preview.filled.some((field) => requiresLegalReview(field)
           && !reviewedField(field, reviewContext))) {
           reasonCodes.push("legal_answer_unconfirmed");
         }

@@ -270,6 +270,17 @@ test("changed form and legal declarations hold independently of mode confirmatio
   assert.ok(legal.reasonCodes.includes("legal_answer_unconfirmed"));
 });
 
+test("unanswered optional legal controls preserve non-consent and required blanks hold", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", policy, owner);
+  const application = await prepared(service);
+  const field = { key: "marketing", label: "Recruitment marketing and business updates consent", type: "checkbox", required: false, status: "unfilled" };
+  const result = await service.prepareFinalSubmission(decisionInput(application, {preview: {...decisionInput(application).preview, unfilled: [field]}}));
+  assert.equal(result.decision, "permit");
+  const required = await service.prepareFinalSubmission(decisionInput(application, {preview: {...decisionInput(application).preview, unfilled: [{...field, required: true}]}}));
+  assert.ok(required.reasonCodes.includes("required_field_unfilled"));
+});
+
 test("owner cap allows one final attempt and rejects a concurrent second reservation", async () => {
   const { profiles, service } = await fixture();
   await profiles.setStandingSubmissionPolicy("person", policy, owner);
