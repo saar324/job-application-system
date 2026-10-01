@@ -7,6 +7,8 @@ import { DiscoveryService } from "../src/discovery/service.js";
 import { ashby } from "../src/discovery/sources/ashby.js";
 import { greenhouse } from "../src/discovery/sources/greenhouse.js";
 import { lever } from "../src/discovery/sources/lever.js";
+import { remoteok } from "../src/discovery/sources/remoteok.js";
+import { arbeitnow } from "../src/discovery/sources/arbeitnow.js";
 import { normalizeOpportunity } from "../src/discovery/normalization.js";
 import { postingFingerprint } from "../src/discovery/fit-assessment.js";
 import { ProfileStore } from "../src/profile-store.js";
@@ -14,13 +16,17 @@ import { ApplicationService } from "../src/service.js";
 import { JsonStore } from "../src/store.js";
 import { SimulationAdapter } from "../src/adapters/simulation.js";
 
-const adapters = { ashby, greenhouse, lever };
+const adapters = { ashby, greenhouse, lever, remoteok, arbeitnow };
 const identity = { actorId: "review-agent", profileId: "person", roles: ["agent"] };
 const ids = [1, 2, 3].map(n => `${n}1111111-1111-4111-8111-111111111111`);
 
 function feed(source, changed = false) {
   const rows = ids.map((id, index) => {
     const description = `Python role ${index + 1}${changed && index === 0 ? " changed mandatory requirement" : ""}`;
+    if (source === "remoteok") return { id, position: `Engineer ${index+1}`, company:"Fixture", description,
+      apply_url: `https://example.test/jobs/${id}`, url: `https://remoteok.com/remote-jobs/${id}`, location:"Remote worldwide" };
+    if (source === "arbeitnow") return { slug:id,title:`Engineer ${index+1}`,company_name:"Fixture",description,
+      url:`https://example.test/jobs/${id}`,location:"Remote worldwide",remote:true };
     if (source === "ashby") return { id, title: `Engineer ${index + 1}`, descriptionPlain: description, applyUrl: `https://jobs.ashbyhq.com/fixture/${id}/application`,
       jobUrl: `https://jobs.ashbyhq.com/fixture/${id}`, location: "Remote worldwide", isRemote: true, isListed: true };
     if (source === "greenhouse") return { id: index + 1, title: `Engineer ${index + 1}`, content: `<p>${description}</p>`, location: { name: "Remote worldwide" },
@@ -28,7 +34,7 @@ function feed(source, changed = false) {
     return { id, text: `Engineer ${index + 1}`, descriptionPlain: description, applyUrl: `https://jobs.lever.co/fixture/${id}/apply`,
       hostedUrl: `https://jobs.lever.co/fixture/${id}`, workplaceType: "remote", categories: { location: "Remote worldwide" } };
   });
-  return source === "lever" ? rows : { jobs: rows };
+  return source === "arbeitnow" ? {data:rows,links:{next:null}} : source === "lever" || source === "remoteok" ? rows : { jobs: rows };
 }
 
 async function fixture(t, source, { changed = false, seedProfile = "person", applicationStatus } = {}) {
