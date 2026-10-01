@@ -12,6 +12,7 @@ const NEXT_BUTTON = /next|continue|save and continue|review/i;
 const START_BUTTON = /^(?:apply|apply manually)$|apply now|apply for this job|start application/i;
 const AUTH_BUTTON = /sign in|log in|create account|register|sign up/i;
 const SIGNUP_BUTTON = /create account|register|sign up/i;
+const teamtailorUploads = new WeakMap();
 const SUCCESS_TEXT = /thank you|application (?:has been |was )?(?:successfully )?submitted|application received|received your application/i;
 const BLOCKED_SUBMISSION_TEXT = /we couldn't submit your application[\s\S]*flagged as possible spam/i;
 const CHALLENGE_TEXT = /(?:complete|solve|enter|check|verify)(?:\s+the|\s+a)?\s+(?:re)?captcha|(?:re)?captcha (?:required|verification)|verify (?:that )?you are (?:a )?human|security check|unusual traffic|cloudflare (?:challenge|verification)/i;
@@ -50,6 +51,57 @@ async function greenhouseEmailCodeChallenge(page, body) {
       })).catch(() => false);
 }
 
+async function emailVerificationContinuation(page, application, profile, artifactsDirectory) {
+  if (!application.finalPermit?.previewFingerprint || !application.claim?.attemptId) return null;
+  const body = await page.locator('body').innerText();
+  if (!await greenhouseEmailCodeChallenge(page, body)) return null;
+  const visibleInputs = page.locator('input:visible:not([type="hidden"]):not([type="submit"])');
+  const controlMetadata = () => visibleInputs.evaluateAll(rows => rows.map((row,index) => ({index,maxLength:row.maxLength,
+    code:/(?:verification|security|one.?time)\s*code|one-time-code/i.test([row.name,row.id,row.placeholder,
+      row.getAttribute('aria-label'),row.getAttribute('autocomplete'),
+      ...[...(row.labels ?? [])].map(label=>label.textContent)].filter(Boolean).join(' '))})));
+  const metadata = await controlMetadata();
+  let selected = metadata.filter(row => row.code && row.maxLength === 8);
+  if (!selected.length) selected = metadata.filter(row => row.maxLength === 1);
+  if (!selected.length && metadata.length === 1 && metadata[0].maxLength === 8) selected = metadata;
+  if (!selected.length) return null;
+  let inputs = visibleInputs.nth(selected[0].index);
+  for (const row of selected.slice(1)) inputs = inputs.or(visibleInputs.nth(row.index));
+  const lengths = selected.map(row => row.maxLength);
+  const otherValues = () => visibleInputs.evaluateAll((rows,indices) => rows.filter((_,index)=>!indices.includes(index))
+    .map(row=>({name:row.name,id:row.id,type:row.type,value:row.value})),selected.map(row=>row.index));
+  const existingValues = JSON.stringify(await otherValues());
+  if (!(lengths.length === 1 && lengths[0] === 8 || lengths.length === 8 && lengths.every(n => n === 1))) return null;
+  const form = inputs.first().locator('xpath=ancestor::form[1]');
+  if (await form.count() !== 1) return null;
+  const buttons = form.locator('button:visible, input[type="submit"]:visible');
+  if (await buttons.count() !== 1) return null;
+  const readButton = () => buttons.first().evaluate(node => ({tag:node.tagName,text:node.textContent,value:node.value,type:node.type}));
+  const descriptor = await readButton();
+  if (!/submit|verify|confirm/i.test([descriptor.text,descriptor.value].join(' '))) return null;
+  const destination = page.url();
+  return {binding:{profileId:profile.id,applicationId:application.id,attemptId:application.claim.attemptId,
+    destination,previewFingerprint:application.finalPermit.previewFingerprint},continueVerification:async code => {
+    if(page.url() !== destination || JSON.stringify(await controlMetadata()) !== JSON.stringify(metadata)
+      || JSON.stringify(await otherValues()) !== existingValues || await page.locator('body').innerText() !== body
+      || await buttons.count() !== 1 || JSON.stringify(await readButton()) !== JSON.stringify(descriptor)) return {status:'needs_human'};
+    for(let n=0;n<lengths.length;n++) await inputs.nth(n).fill(lengths.length===1?code:code[n]);
+    if(page.url() !== destination || await buttons.count() !== 1
+      || JSON.stringify(await readButton()) !== JSON.stringify(descriptor)
+      || await inputs.count() !== lengths.length
+      || JSON.stringify(await controlMetadata()) !== JSON.stringify(metadata)
+      || JSON.stringify(await otherValues()) !== existingValues
+      || await page.locator('body').innerText() !== body
+      || (await inputs.evaluateAll(rows=>rows.map(row=>row.value))).join('') !== code) return {status:'needs_human'};
+    await buttons.first().click({noWaitAfter:true});
+    if(!await waitForSubmissionEvidence(page,destination,body)) return {status:'needs_human'};
+    const remaining = await page.locator('input').evaluateAll(rows=>rows.map(row=>row.value));
+    if((await page.locator('body').innerText()).includes(code) || remaining.some(value=>value===code)
+      || lengths.length===8 && remaining.join('').includes(code)) return {status:'needs_human'};
+    return {status:'submitted',receipt:await captureReceipt(page,artifactsDirectory,application.id)};
+  }};
+}
+
 export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSubmit, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   const successAlreadyPresent = SUCCESS_TEXT.test(bodyBeforeSubmit);
@@ -61,6 +113,17 @@ export async function waitForSubmissionEvidence(page, previousUrl, bodyBeforeSub
     const confirmationUrl = /confirmation|thank|success|submitted/i.test(currentUrl) && currentUrl !== previousUrl;
     const invalidControls = await page.locator("input:invalid, textarea:invalid, select:invalid").count().catch(() => 0);
     const activeForm = await page.locator("form:visible").count().catch(() => 0);
+    let exactApplicationThanks = false;
+    try {
+      const before = new URL(previousUrl), after = new URL(currentUrl);
+      const role = before.pathname.match(/^\/jobs\/([^/]+)\/?$/)?.[1];
+      exactApplicationThanks = Boolean(role && before.origin === after.origin
+        && after.pathname.startsWith(`/jobs/${role}/applications/`)
+        && /^\/jobs\/[^/]+\/applications\/[a-f0-9-]{36}\/thanks(?:\/|$)/i.test(after.pathname)
+        && /\bwe have received your application\b/i.test(body)
+        && !SUCCESS_TEXT.test(bodyBeforeSubmit));
+    } catch { /* Invalid or unrelated receipt routes do not prove submission. */ }
+    if (exactApplicationThanks && invalidControls === 0) return true;
     const newSuccessText = !successAlreadyPresent && SUCCESS_TEXT.test(body)
       && activeForm === 0 && body.length < 2000;
     if ((confirmationUrl || newSuccessText) && activeForm === 0 && invalidControls === 0) return true;
@@ -342,6 +405,23 @@ async function fillControl(locator, field, value, surface) {
     const isGreenhouse = ["job-boards.greenhouse.io", "job-boards.eu.greenhouse.io",
       "boards.greenhouse.io", "boards.eu.greenhouse.io"].includes(host);
     const rootPage = typeof surface.page === "function" ? surface.page() : surface;
+    const teamtailorResume = field.id === "candidate_resume_remote_url"
+      && await locator.evaluate(element => element.closest('#upload_resume_field')
+        ?.getAttribute('data-controller') === 'forms--inputs--upload').catch(() => false);
+    const teamtailorDocumentFingerprint = teamtailorResume
+      ? createHash('sha256').update(await readFile(String(value))).digest('hex') : undefined;
+    if (teamtailorResume && await rootPage.locator(
+      '#upload_resume_field [data-controller="forms--inputs--upload-preview"]').count()) {
+      const current = teamtailorUploads.get(rootPage);
+      const remote = await rootPage.evaluate(teamtailorResumeUploaded, file.name).catch(() => false);
+      if (current?.documentFingerprint === teamtailorDocumentFingerprint
+        && current.name === file.name && current.size === file.size && typeof remote === 'string'
+        && createHash('sha256').update(remote).digest('hex') === current.remoteFingerprint) {
+        return { uploadAcknowledged: true, files: [file], teamtailorResumeFingerprint: current.remoteFingerprint,
+          teamtailorDocumentFingerprint };
+      }
+      throw new Error('Review the existing resume attachment before replacing it');
+    }
     const greenhouseResume = isGreenhouse && field.id === "resume"
       && await locator.evaluate((element) =>
         element.closest('.file-upload[role="group"]')?.getAttribute("aria-labelledby")
@@ -377,7 +457,18 @@ async function fillControl(locator, field, value, surface) {
             .some((input) => [...(input.files ?? [])].some((item) => item.name === expected)),
       file.name, { timeout: 8_000 });
     }
-    return { uploadAcknowledged: true, files: [file], greenhouseResume };
+    let teamtailorResumeFingerprint;
+    if (teamtailorResume) {
+      await rootPage.waitForFunction(teamtailorResumeUploaded, file.name, { timeout: 20_000 });
+      const remoteUrl = await rootPage.evaluate(teamtailorResumeUploaded, file.name);
+      teamtailorResumeFingerprint = createHash("sha256").update(remoteUrl).digest("hex");
+      if (createHash('sha256').update(await readFile(String(value))).digest('hex')
+        !== teamtailorDocumentFingerprint) throw new Error('The resume changed during upload');
+      teamtailorUploads.set(rootPage, { name: file.name, size: file.size,
+        documentFingerprint: teamtailorDocumentFingerprint, remoteFingerprint: teamtailorResumeFingerprint });
+    }
+    return { uploadAcknowledged: true, files: [file], greenhouseResume, teamtailorResumeFingerprint,
+      teamtailorDocumentFingerprint };
   } else if (field.tag === "select") {
     const desired = normalize(value);
     const option = field.options.find((item) => normalize(item.label) === desired || normalize(item.value) === desired);
@@ -411,6 +502,37 @@ async function fillControl(locator, field, value, surface) {
     }
     throw new Error(`answer does not match a radio option for ${field.label}`);
   } else if (field.tag === "input" && await locator.getAttribute("role") === "combobox") {
+    const multiple = await locator.evaluate(element => Boolean(element.closest(".select-shell")
+      ?.querySelector(".select__value-container--is-multi")));
+    if (multiple) {
+      if (!Array.isArray(value) || !value.length || value.length > 50
+        || value.some(item => typeof item !== "string" || !item.trim())
+        || new Set(value.map(normalize)).size !== value.length) {
+        throw new Error(`multiselect requires distinct exact options for ${field.label}`);
+      }
+      const current = await readControl(locator, field);
+      if (current.some(item => !value.some(expected => normalize(expected) === normalize(item)))) {
+        throw new Error(`unverified multiselect option is already present for ${field.label}`);
+      }
+      for (const item of value) {
+        if ((await readControl(locator, field)).some(selected => normalize(selected) === normalize(item))) continue;
+        await locator.fill(item);
+        await locator.press("ArrowDown").catch(() => undefined);
+        const options = surface.locator('[role="option"]:visible');
+        await options.first().waitFor({ state: "visible", timeout: 1500 }).catch(() => undefined);
+        const matches = [];
+        for (let index = 0; index < await options.count(); index += 1) {
+          if (normalize(await options.nth(index).innerText()) === normalize(item)) matches.push(index);
+        }
+        if (matches.length !== 1) throw new Error(`answer does not match one exact multiselect option for ${field.label}`);
+        await options.nth(matches[0]).click();
+        if (!(await readControl(locator, field)).some(selected => normalize(selected) === normalize(item))) {
+          throw new Error(`selected multiselect option was not retained for ${field.label}`);
+        }
+      }
+      return;
+    }
+    if (Array.isArray(value)) throw new Error(`array answer requires a multiselect control for ${field.label}`);
     await locator.fill(String(value));
     const desired = normalize(value);
     await locator.press("ArrowDown").catch(() => undefined);
@@ -543,6 +665,10 @@ async function readControl(locator, field) {
     }
     if (element.getAttribute("role") === "combobox") {
       const shell = element.closest(".select-shell") ?? element;
+      if (shell.querySelector(".select__value-container--is-multi")) {
+        return [...shell.querySelectorAll(".select__multi-value__label")]
+          .map(label => label.innerText.trim().replace(/\s+/g, " "));
+      }
       const answer = shell.dataset.jobApplicationVerifiedAnswer;
       const expectedVisual = shell.dataset.jobApplicationVerifiedVisual;
       const visual = shell.querySelector(".select__single-value")?.innerText?.trim().replace(/\s+/g, " ")
@@ -574,6 +700,12 @@ async function detachedFileLiveMatch(surface, action, field) {
     && files[0].name === field.files[0].name
     && files[0].size === field.files[0].size);
   const host = new URL(surface.url()).hostname;
+  const teamtailorResume = field.key === "candidate_resume_remote_url"
+    ? await surface.locator("#upload_resume_field").evaluateAll((containers, filename) => ({
+      containerCount: containers.length,
+      filenameVisible: containers.length === 1 && containers[0].innerText.includes(filename),
+      fileInputCount: containers.length === 1 ? containers[0].querySelectorAll('input[type="file"]').length : -1
+    }), field.files[0].name).catch(() => null) : null;
   const greenhouseResume = field.greenhouseResume === true && field.key === "resume" && field.uploadAcknowledged
     && ["job-boards.greenhouse.io", "job-boards.eu.greenhouse.io",
       "boards.greenhouse.io", "boards.eu.greenhouse.io"].includes(host)
@@ -581,7 +713,36 @@ async function detachedFileLiveMatch(surface, action, field) {
       .evaluate(greenhouseResumeUploaded, { name: field.files[0].name, formIndex })
       .catch(() => false);
   return { inputCount: inputs.length, matches: matches.map((item) => item.controlIndex),
-    greenhouseResume };
+    greenhouseResume, teamtailorResume };
+}
+
+// Observed Teamtailor upload controller enables the exact resume URL only after
+// its successful storage response. The preview removes progress and shows name.
+// Never use body-wide filename text or a different attachment as upload proof.
+export function teamtailorResumeUploaded(filename) {
+  const groups = document.querySelectorAll('#upload_resume_field[data-controller="forms--inputs--upload"]');
+  if (groups.length !== 1) return false;
+  const previews = groups[0].querySelectorAll('[data-controller="forms--inputs--upload-preview"]');
+  if (previews.length !== 1) return false;
+  const preview = previews[0];
+  const input = preview.querySelector('[data-forms--inputs--upload-preview-target="urlInput"]');
+  const name = preview.querySelector('[data-forms--inputs--upload-preview-target="name"]');
+  const link = preview.querySelector('[data-forms--inputs--upload-preview-target="link"]');
+  const url = preview.getAttribute('data-forms--inputs--upload-preview-url-value');
+  if (!input || input.disabled || input.name !== 'candidate[resume_remote_url]'
+    || !url || input.value !== url || !name || name.classList.contains('hidden')
+    || link?.textContent?.trim() !== filename
+    || preview.querySelector('[data-forms--inputs--upload-preview-target="progress"]')) return false;
+  try { if (new URL(url).protocol !== 'https:') return false; } catch { return false; }
+  return url;
+}
+
+async function verifiedTeamtailorResume(surface, field) {
+  if (!field.teamtailorResumeFingerprint || field.key !== 'candidate_resume_remote_url'
+    || !field.uploadAcknowledged || field.files?.length !== 1) return false;
+  const url = await surface.evaluate(teamtailorResumeUploaded, field.files[0].name).catch(() => false);
+  return typeof url === 'string'
+    && createHash('sha256').update(url).digest('hex') === field.teamtailorResumeFingerprint;
 }
 
 async function controlMatches(locator, field, answer, observed) {
@@ -605,6 +766,10 @@ async function controlMatches(locator, field, answer, observed) {
   if (field.tag === "select") return field.options.some((option) => option.value === observed
     && (normalize(option.label) === normalize(answer.value) || normalize(option.value) === normalize(answer.value)));
   if (field.tag === "input" && await locator.getAttribute("role") === "combobox") {
+    if (Array.isArray(answer.value)) {
+      return Array.isArray(observed) && observed.length === answer.value.length
+        && JSON.stringify(observed.map(normalize).sort()) === JSON.stringify(answer.value.map(normalize).sort());
+    }
     const actual = normalize(observed);
     const desired = normalize(expected);
     return actual === desired || actual.startsWith(`${desired} `);
@@ -714,10 +879,16 @@ export async function fillVisibleFields(page, profile, opportunity, answers, pre
       if (!matches || !validity.valid) throw new Error(validity.problem || "live value did not match the planned answer");
       fields.push({ ...fieldSummary(field, answer, observed),
         ...(fillEvidence?.uploadAcknowledged ? { uploadAcknowledged: true } : {}),
+        ...(fillEvidence?.teamtailorResumeFingerprint ? {
+          teamtailorResumeFingerprint: fillEvidence.teamtailorResumeFingerprint,
+          teamtailorDocumentFingerprint: fillEvidence.teamtailorDocumentFingerprint } : {}),
         ...(fillEvidence?.greenhouseResume ? { greenhouseResume: true } : {}) });
     } catch (error) {
       if (field.type === "file" && fillEvidence?.uploadAcknowledged) {
         fields.push({ ...fieldSummary(field, answer, fillEvidence.files), uploadAcknowledged: true,
+          ...(fillEvidence.teamtailorResumeFingerprint ? {
+            teamtailorResumeFingerprint: fillEvidence.teamtailorResumeFingerprint,
+            teamtailorDocumentFingerprint: fillEvidence.teamtailorDocumentFingerprint } : {}),
           ...(fillEvidence.greenhouseResume ? { greenhouseResume: true } : {}) });
         if (!sameInventory(await inventoryFormStep(page))) return changedPlan();
       }
@@ -766,7 +937,8 @@ function fieldSummary(field, answer, observed) {
     if (field.type === "password") value = "[stored securely]";
     else if (field.type === "file") value = observed.map((file) => file.name).join(", ");
     else if (field.type === "checkbox") value = observed ? "Yes" : "No";
-    else value = String(observed);
+    else value = Array.isArray(observed)
+      ? [...(Array.isArray(answer.value) ? answer.value : observed)] : String(observed);
   }
   return {
     key: field.name || field.id || normalize(field.label), label: field.label,
@@ -937,8 +1109,12 @@ function checkpointField(field) {
     step: field.step, key, label, type: field.type,
     required: field.required === true, status: field.status,
     ...(field.source ? { source: String(field.source).slice(0, 160) } : {}),
+    ...(field.type === "file" ? { uploadAcknowledged: field.uploadAcknowledged === true,
+      detached: field.detached === true,
+      ...(field.fileReadback ? { fileReadback: field.fileReadback } : {}) } : {}),
     ...(field.status === "filled" ? { value: secret ? "[redacted]"
-      : String(field.value ?? "").slice(0, 5000) } : {})
+      : Array.isArray(field.value) ? field.value.slice(0, 50).map(value => String(value).slice(0, 200))
+        : String(field.value ?? "").slice(0, 5000) } : {})
   };
 }
 
@@ -1304,9 +1480,16 @@ export async function automateApplication({ page, profile, opportunity, applicat
       const matchedDetachedFileInputs = new Set();
       for (const field of [...observedFields.values()].filter((item) => item.step === step)) {
         if (field.type === "ashby_custom") continue;
+        if (field.type === 'file' && await verifiedTeamtailorResume(surface, field)) continue;
         if (field.detached) {
           if (field.type === "file" && field.status === "filled") {
             const live = await detachedFileLiveMatch(surface, action, field);
+            field.fileReadback = { inputCount: live?.inputCount ?? -1,
+              matchingInputCount: live?.matches?.length ?? 0,
+              associatedResumeAcknowledged: live?.greenhouseResume === true,
+              ...(live?.teamtailorResume ? { resumeContainerCount: live.teamtailorResume.containerCount,
+                resumeFilenameVisible: live.teamtailorResume.filenameVisible,
+                resumeFileInputCount: live.teamtailorResume.fileInputCount } : {}) };
             const greenhouseResume = field.greenhouseResume === true && field.key === "resume"
               && /^(?:job-boards|boards)(?:\.eu)?\.greenhouse\.io$/.test(
                 new URL(surface.url()).hostname);
@@ -1329,15 +1512,30 @@ export async function automateApplication({ page, profile, opportunity, applicat
         const live = await readControl(locator, field);
         const currentValue = field.type === "password" ? "[stored securely]"
           : field.type === "file" ? live.map((file) => file.name).join(", ")
-            : field.type === "checkbox" ? live ? "Yes" : "No" : String(live);
+            : field.type === "checkbox" ? live ? "Yes" : "No"
+              : Array.isArray(live) ? live : String(live);
         const valid = await locator.evaluate((element) => element.validity?.valid ?? true);
         const changedSecret = field.type === "password"
           && createHash("sha256").update(String(live)).digest("hex") !== field.secretFingerprint;
         const changedFile = field.type === "file" && field.status === "filled"
           && JSON.stringify(live) !== JSON.stringify(field.files);
+        if (changedFile) {
+          const readback = await detachedFileLiveMatch(surface, action, field);
+          field.fileReadback = { inputCount: readback?.inputCount ?? -1,
+            matchingInputCount: readback?.matches?.length ?? 0,
+            associatedResumeAcknowledged: readback?.greenhouseResume === true,
+            ...(readback?.teamtailorResume ? {
+              resumeContainerCount: readback.teamtailorResume.containerCount,
+              resumeFilenameVisible: readback.teamtailorResume.filenameVisible,
+              resumeFileInputCount: readback.teamtailorResume.fileInputCount } : {}) };
+        }
         const unexpectedValue = field.type === "checkbox" ? live === true
           : field.type === "file" ? live.length > 0 : String(live ?? "").trim() !== "";
-        if (!valid || changedSecret || changedFile || (field.status === "filled" ? currentValue !== field.value
+        const changedValue = Array.isArray(field.value)
+          ? !Array.isArray(currentValue)
+            || JSON.stringify(currentValue.map(normalize).sort()) !== JSON.stringify(field.value.map(normalize).sort())
+          : currentValue !== field.value;
+        if (!valid || changedSecret || changedFile || (field.status === "filled" ? changedValue
           : unexpectedValue)) {
           return pause({ status: "needs_input", message: "A field changed before final submission",
             requirements: [{ kind: "final_review_changed", fields: [field.key],
@@ -1356,9 +1554,12 @@ export async function automateApplication({ page, profile, opportunity, applicat
       };
       const previewFingerprint = createHash("sha256").update(JSON.stringify({
         preview: approvedContent,
-        privateFingerprints: [...observedFields.values()].map((field) => [
-          field.step, field.key, field.secretFingerprint, field.stagedPathFingerprint
-        ])
+        privateFingerprints: [...observedFields.values()].map((field) => {
+          const base = [field.step, field.key, field.secretFingerprint, field.stagedPathFingerprint];
+          // Storage URLs are attempt-local. Approval binds stable file content;
+          // the current URL remains guarded by verifiedTeamtailorResume/live state.
+          return field.teamtailorDocumentFingerprint ? [...base, field.teamtailorDocumentFingerprint] : base;
+        })
       })).digest("hex");
       if ((application.finalApprovalRequired || application.standingPolicyVersion === undefined
         && [...observedFields.values()].some((field) => field.source === "drafted prose"))
@@ -1494,11 +1695,11 @@ export async function automateApplication({ page, profile, opportunity, applicat
         }, step, "final_action_started");
       }
       if (await greenhouseEmailCodeChallenge(surface, diagnostic.body)) {
-        return pause({
-          status: "needs_human", message: "Greenhouse requested an email security code after Submit",
-          requirements: [{ kind: "submission_email_verification", action: "manual_review",
-            message: "Greenhouse requested an emailed security code after Submit. The automated browser session has ended; human review is required to inspect any available employer verification path and reconcile the outcome. Do not retry the automated submission." }]
-        }, step, "final_action_started");
+        const result = pause({status:"needs_human",message:"Greenhouse requested an email security code after Submit",
+          requirements:[{kind:"submission_email_verification",action:"manual_review",
+            message:"Greenhouse requested an emailed security code after Submit. The automated browser session has ended; human review is required to inspect any available employer verification path and reconcile the outcome. Do not retry the automated submission."}]},step,"final_action_started");
+        if(surface===page) result.verificationContinuation = await emailVerificationContinuation(page,application,profile,artifactsDirectory);
+        return result;
       }
       return pause({
         status: "needs_human",
@@ -1530,7 +1731,14 @@ async function finalLiveState(surface) {
     ]).catch(() => [false, "detached"]));
   }
   const errors = (await inlineValidationQuestions(surface, inventory)).map((item) => [item.kind, item.fields]);
-  return JSON.stringify([surface.url(), inventoryStamp(inventory), values, validity, errors]);
+  const remoteResume = await surface.locator('#upload_resume_field').evaluateAll(groups =>
+    groups.map(group => [...group.querySelectorAll('[data-controller="forms--inputs--upload-preview"]')]
+      .map(preview => [preview.getAttribute('data-forms--inputs--upload-preview-url-value'),
+        preview.querySelector('[data-forms--inputs--upload-preview-target="urlInput"]')?.value,
+        preview.querySelector('[data-forms--inputs--upload-preview-target="urlInput"]')?.disabled,
+        preview.querySelector('[data-forms--inputs--upload-preview-target="link"]')?.textContent,
+        Boolean(preview.querySelector('[data-forms--inputs--upload-preview-target="progress"]'))]))).catch(() => []);
+  return JSON.stringify([surface.url(), inventoryStamp(inventory), values, validity, errors, remoteResume]);
 }
 
 async function waitForStepChange(page, priorBody) {
@@ -1553,7 +1761,8 @@ async function waitForInventoryStability(surface, timeoutMs = 3500) {
 }
 
 function previewOf(observedFields, destination, opportunity) {
-  const fields = [...observedFields.values()].map(({ secretFingerprint, stagedPathFingerprint, ...field }) => field);
+  const fields = [...observedFields.values()].map(({ secretFingerprint, stagedPathFingerprint,
+    teamtailorResumeFingerprint, teamtailorDocumentFingerprint, ...field }) => field);
   const url = new URL(destination);
   return {
     destination: `${url.origin}${url.pathname}`, company: opportunity.company, title: opportunity.title,

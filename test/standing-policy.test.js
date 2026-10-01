@@ -270,6 +270,17 @@ test("changed form and legal declarations hold independently of mode confirmatio
   assert.ok(legal.reasonCodes.includes("legal_answer_unconfirmed"));
 });
 
+test("unanswered optional legal controls preserve non-consent and required blanks hold", async () => {
+  const { profiles, service } = await fixture();
+  await profiles.setStandingSubmissionPolicy("person", policy, owner);
+  const application = await prepared(service);
+  const field = { key: "marketing", label: "Recruitment marketing and business updates consent", type: "checkbox", required: false, status: "unfilled" };
+  const result = await service.prepareFinalSubmission(decisionInput(application, {preview: {...decisionInput(application).preview, unfilled: [field]}}));
+  assert.equal(result.decision, "permit");
+  const required = await service.prepareFinalSubmission(decisionInput(application, {preview: {...decisionInput(application).preview, unfilled: [{...field, required: true}]}}));
+  assert.ok(required.reasonCodes.includes("required_field_unfilled"));
+});
+
 test("owner cap allows one final attempt and rejects a concurrent second reservation", async () => {
   const { profiles, service } = await fixture();
   await profiles.setStandingSubmissionPolicy("person", policy, owner);
@@ -528,7 +539,7 @@ test("a stale official ATS role is revalidated once before final permit", async 
     applicationDestinationVerified: true }, agent, { serverVerifiedDiscovery: true });
   let fetches = 0;
   service.fetchImpl = async () => { fetches += 1; return new Response(JSON.stringify({ jobs: [{
-    id, title: "Engineer", applyUrl, isListed: true }] })); };
+    id, title: "Engineer", applyUrl, isListed: true, isRemote: true }] })); };
   await service.store.mutate((state) => {
     state.opportunities[0].discoveryVerification.verifiedAt =
       new Date(Date.now() - 20 * 60_000).toISOString();

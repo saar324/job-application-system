@@ -3,7 +3,7 @@ import { automateApplication } from "./automation.js";
 
 export async function executeInFreshContext({ browser, payload, urlPolicy, artifactsDirectory,
   automate = automateApplication, adaptiveController, draftProvider, claimReviewer, egressProxy, markFinalActionStarted,
-  authorizeFinal, commitFinal }) {
+  authorizeFinal, commitFinal, verificationSessions }) {
   const initialHostname = new URL(payload.opportunity.applyUrl).hostname.toLowerCase();
   const requestDomains = payload.opportunity.userRequested === true
     || payload.opportunity.applicationDestinationVerified === true ? [initialHostname] : [];
@@ -39,6 +39,7 @@ export async function executeInFreshContext({ browser, payload, urlPolicy, artif
     }
   });
   const page = await context.newPage();
+  let retained = false;
   try {
     try {
       const result = await automate({
@@ -55,6 +56,13 @@ export async function executeInFreshContext({ browser, payload, urlPolicy, artif
           artifactsDirectory: path.join(artifactsDirectory, payload.profile.id)
         });
       }
+      if (result.verificationContinuation && verificationSessions) {
+        const continuation = result.verificationContinuation; delete result.verificationContinuation;
+        try { const session = verificationSessions.retain({ ...continuation, context, page });
+          result.requirements[0].verificationSession = session; retained = true;
+          result.requirements[0].message = "Enter the employer email code through the verification-only continuation before it expires. Do not repeat application Submit.";
+        } catch { /* Capacity or binding failure stays an outcome hold. */ }
+      } else delete result.verificationContinuation;
       return result;
     } catch (error) {
       if (!blockedRequest) throw error;
@@ -65,6 +73,6 @@ export async function executeInFreshContext({ browser, payload, urlPolicy, artif
       };
     }
   } finally {
-    await context.close();
+    if (!retained) await context.close();
   }
 }

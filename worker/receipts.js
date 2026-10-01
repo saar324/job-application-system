@@ -54,6 +54,23 @@ export class ReceiptStore {
     await rename(temporary, file);
   }
 
+  verificationRecorder(payload) {
+    const id = payload.application.id, hash = fingerprint(payload);
+    return async (result) => {
+      const phase = await this.#readPhase(id);
+      if (phase?.phase !== "final_action_started" || phase.fingerprint !== hash
+        || result?.status !== "submitted" || !result.receipt) throw new Error("Verification receipt binding changed");
+      const file = path.join(this.directory, id + ".json");
+      const existing = await readFile(file, "utf8").then(JSON.parse).catch(error => {
+        if(error.code === "ENOENT") return null; throw error;
+      });
+      if (existing) { if(existing.fingerprint !== hash) throw new Error("Verification receipt conflict"); return; }
+      const temporary = file + "." + process.pid + ".tmp";
+      await writeFile(temporary, JSON.stringify({fingerprint:hash,result}) + "\n", {mode:0o600});
+      await rename(temporary,file);
+    };
+  }
+
   async run(payload, submit) {
     const id = payload.application.id;
     const hash = fingerprint(payload);

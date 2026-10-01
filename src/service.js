@@ -1,3 +1,4 @@
+import { createFieldReview, reviewedField, requiresLegalReview } from "./reviewed-fields.js";
 import { normalizeRecruiterOutreach } from "./recruiter-outreach.js";
 import { createHash, randomUUID } from "node:crypto";
 import { evaluatePolicy } from "./policy.js";
@@ -40,6 +41,11 @@ export class ApplicationService {
     this.credentialVault = credentialVault;
     this.telemetry = telemetry;
     this.fetchImpl = fetchImpl;
+  }
+
+  executionHealth() {
+    return { active: this.#activeExecutions, waitingForCapacity: this.#executionWaiters.length,
+      queued: this.store.snapshot().applications.filter(item => item.status === "queued").length };
   }
 
   list(collection, profileId) {
@@ -529,7 +535,10 @@ export class ApplicationService {
         reasonCodes.push("invalid_preview");
       } else {
         if (preview.unfilled.some((field) => field.required === true)) reasonCodes.push("required_field_unfilled");
-        if (fields.some((field) => ["application answer", "unverified site prefill"].includes(field.source))) {
+        const reviewContext = { review: current.verifiedFieldReview, preview, fingerprint: previewFingerprint,
+          application: current, profile, opportunity };
+        if (fields.some((field) => ["application answer", "unverified site prefill"].includes(field.source)
+          && !reviewedField(field, reviewContext))) {
           reasonCodes.push("answer_provenance_unverified");
         }
         if (preview.filled.some((field) => {
@@ -543,7 +552,8 @@ export class ApplicationService {
         if (fields.some((field) => field.source === "drafted prose"
           || String(field.source ?? "").startsWith("approved answer:"))
           && !policy?.answerClasses?.includes("grounded_prose")) reasonCodes.push("prose_not_authorized");
-        if (fields.some((field) => LEGAL_ATTESTATION_FIELD.test(`${field.label ?? ""} ${field.key ?? ""}`))) {
+        if (preview.filled.some((field) => requiresLegalReview(field)
+          && !reviewedField(field, reviewContext))) {
           reasonCodes.push("legal_answer_unconfirmed");
         }
       }
@@ -559,6 +569,7 @@ export class ApplicationService {
         policyId: policy?.id ?? null, policyVersion: policy?.version ?? null,
         roleKey: [...roleKeys(opportunity)].sort()[0] ?? opportunity.id,
         previewFingerprint, decision: reasonCodes.length ? "hold" : "permit", reasonCodes,
+        verificationAuthorityHash: verificationAuthorityHash(current, profile, opportunity),
         createdAt: now(), expiresAt: new Date(Date.now() + 30_000).toISOString(),
         status: reasonCodes.length ? "held" : "reserved" };
       current.finalSubmissionDecision = decision;
@@ -632,17 +643,92 @@ export class ApplicationService {
     });
   }
 
+  async authorizeVerification(input) {
+    const state = this.store.snapshot();
+    const application = state.applications.find(item => item.id === input?.applicationId);
+    if (!application || application.profileId !== input?.profileId) return { allowed: false };
+    const profile = await this.profiles?.get(application.profileId);
+    const opportunity = state.opportunities.find(item => item.id === application.opportunityId);
+    const decision = application.finalSubmissionDecision;
+    const session = state.confirmations.find(item => item.applicationId === application.id
+      && item.profileId === application.profileId && item.kind === 'submission_email_verification'
+      && item.status === 'pending' && item.verificationSession?.id === input.sessionId)?.verificationSession;
+    const policy = profile?.standingSubmissionPolicy;
+    let destinationMatches = false;
+    try {
+      const host = new URL(input.destination).hostname;
+      destinationMatches = policy?.destinationHosts?.some(value => value === '*' || value === host)
+        && [...roleKeys({applyUrl: input.destination})].some(key => !key.startsWith('role:')
+          && roleKeys(opportunity).has(key));
+    } catch { /* A changed or invalid destination is a hold. */ }
+    return { allowed: Boolean(session && session.expiresAt > Date.now()
+      && ['profileId','applicationId','attemptId','destination','previewFingerprint']
+        .every(key => session[key] === input[key])
+      && application.status === 'waiting_confirmation'
+      && application.checkpoint?.phase === 'final_action_started'
+      && decision?.status === 'consumed' && decision.attemptId === input.attemptId
+      && decision.previewFingerprint === input.previewFingerprint
+      && decision.policyId === policy?.id && decision.policyVersion === policy?.version
+      && decision.verificationAuthorityHash === verificationAuthorityHash(application, profile, opportunity)
+      && policyCovers(policy, opportunity, application.mode) && destinationMatches
+      && !hardPolicyHolds({opportunity, mode: application.mode, answers: application.answers, profile}).length
+      && !(opportunity?.validThrough && Date.parse(opportunity.validThrough) <= Date.now())) };
+  }
+
+  async #resolveVerification(target, input, identity) {
+    if (target.kind !== 'submission_email_verification' || target.status !== 'pending'
+      || input.approved !== true || !/^[A-Za-z0-9]{8}$/.test(input.verificationCode ?? '')
+      || Object.keys(input).some(key => !['approved','verificationCode'].includes(key))) {
+      throw new ClientError(400, 'invalid verification-only request');
+    }
+    const session = target.verificationSession;
+    if (!session || session.expiresAt <= Date.now() || !this.adapter.verify) {
+      throw new ClientError(409, 'live verification session unavailable; do not repeat application Submit');
+    }
+    const profileId = identity.profileId;
+    const previous = this.#profileRunners.get(profileId) ?? Promise.resolve();
+    const runner = previous.then(() => this.#withGlobalSlot(async () => {
+      const binding = { ...session, sessionId: session.id };
+      if (!(await this.authorizeVerification(binding)).allowed) {
+        throw new ClientError(409, 'verification authority changed; inspect the outcome');
+      }
+      const result = await this.adapter.verify({ ...binding, code: input.verificationCode });
+      if (result?.status !== 'submitted' || !result.receipt?.submittedAt || !result.receipt?.finalUrl) {
+        throw new ClientError(409, 'verification outcome remains unconfirmed; do not repeat application Submit');
+      }
+      const saved = await this.#persistSubmitted(target.applicationId, identity, session.attemptId, result.receipt);
+      await this.store.mutate(state => {
+        const confirmation = state.confirmations.find(item => item.id === target.id);
+        if (confirmation?.status === 'pending') {
+          confirmation.status = 'approved'; confirmation.resolvedAt = now(); confirmation.resolvedBy = identity.actorId;
+        }
+        audit(state, identity, 'application.verification_completed', target.applicationId,
+          {attemptId: session.attemptId});
+      });
+      return saved;
+    }));
+    // Verification actions share the ordinary profile/global serial lane.
+    const tracked = runner.catch(() => {}).finally(() => {
+      if (this.#profileRunners.get(profileId) === tracked) this.#profileRunners.delete(profileId);
+    });
+    this.#profileRunners.set(profileId, tracked);
+    return runner;
+  }
+
   async resolveConfirmation(confirmationId, input, identity) {
     const target = this.store.snapshot().confirmations.find(
       (item) => item.id === confirmationId && item.profileId === identity.profileId
     );
     if (!target) throw new ClientError(404, "confirmation not found");
+    if (Object.hasOwn(input ?? {}, "verificationCode")) {
+      return this.#resolveVerification(target, input, identity);
+    }
     const existingApplication = this.store.snapshot().applications.find((item) =>
       item.id === target.applicationId && item.profileId === identity.profileId);
     if (existingApplication?.status === "submitted" && existingApplication.receipt?.finalUrl) {
       throw new ClientError(409, "application is already submitted; do not retry its confirmation");
     }
-    const approvalProfile = target.kind === "final_submission_approval" && input.approved === true
+    const approvalProfile = ["final_submission_approval", "final_policy_hold"].includes(target.kind) && input.approved === true
       ? await this.profiles?.get(identity.profileId) : null;
     let requireApprovalOnRetry = false;
     if (["submission_unverified", "submission_recovery", "submission_email_verification"].includes(target.kind)
@@ -721,6 +807,18 @@ export class ApplicationService {
       if (application.status === "submitted" && application.receipt?.finalUrl) {
         throw new ClientError(409, "application is already submitted; do not retry its confirmation");
       }
+      let verifiedReview;
+      if (confirmation.kind === "final_policy_hold" && input.approved === true && input.review) {
+        if (application.checkpoint?.phase === "final_action_started"
+          || application.finalSubmissionDecision?.status === "consumed") throw new ClientError(409, "prior final action uncertain");
+        const opportunity = state.opportunities.find(item => item.id === application.opportunityId);
+        if (!policyCovers(approvalProfile?.standingSubmissionPolicy, opportunity, application.mode)) {
+          throw new ClientError(409, "standing policy does not cover review");
+        }
+        try { verifiedReview = createFieldReview({ review: input.review, preview: confirmation.preview,
+          fingerprint: confirmation.previewFingerprint, identity, application, profile: approvalProfile, opportunity }); }
+        catch { throw new ClientError(400, "invalid verified field review"); }
+      }
       const hasManualFieldAnswers = confirmation.action === "manual_review"
         && Array.isArray(confirmation.fields) && confirmation.fields.length > 0
         && confirmation.fields.every((field) => Object.hasOwn(safeAnswers, field)
@@ -729,9 +827,15 @@ export class ApplicationService {
       if (confirmation.action === "manual_review" && input.approved === true
         && input.answers?.retry !== true
         && !(input.answers?.submitted === true && input.answers?.finalUrl)
-        && !hasManualFieldAnswers) {
+        && !hasManualFieldAnswers && !verifiedReview) {
         throw new ClientError(400,
           "manual review requires answers for every named field, answers.retry=true, or a submitted receipt with finalUrl");
+      }
+      if (verifiedReview) {
+        application.verifiedFieldReview = verifiedReview;
+        audit(state, identity, "application.fields_reviewed", application.id,
+          { previewFingerprint: verifiedReview.previewFingerprint, fieldCount: verifiedReview.fields.length,
+            reviewerId: identity.actorId, authorizationSource: verifiedReview.authorizationSource });
       }
       confirmation.status = input.approved === true ? "approved" : "rejected";
       confirmation.resolvedAt = now();
@@ -1536,6 +1640,8 @@ export class ApplicationService {
     });
     if (!claimed) return null;
     const { application, opportunity, identity, attemptId } = claimed;
+    const queuedAttempt = this.store.snapshot().attempts.find(item => item.id === attemptId);
+    if (Number.isFinite(queuedAttempt?.queueMs)) this.telemetry.observe("applications.queue_ms", queuedAttempt.queueMs);
     let verifiedReceipt;
     try {
       let profile = this.profiles ? await this.profiles.get(identity.profileId) : undefined;
@@ -1847,8 +1953,27 @@ function validatedCheckpoint(checkpoint, applicationId) {
       status: field?.status === "filled" ? "filled" : "unfilled",
       ...(field?.source ? { source: String(field.source).slice(0, 160) } : {}),
       ...(field?.truncated === true ? { truncated: true } : {}),
+      ...(field?.type === "file" ? {
+        uploadAcknowledged: field.uploadAcknowledged === true, detached: field.detached === true,
+        ...(field.fileReadback && Number.isInteger(field.fileReadback.inputCount)
+          && field.fileReadback.inputCount >= -1 && field.fileReadback.inputCount <= 200
+          && Number.isInteger(field.fileReadback.matchingInputCount)
+          && field.fileReadback.matchingInputCount >= 0 && field.fileReadback.matchingInputCount <= 200
+          ? { fileReadback: { inputCount: field.fileReadback.inputCount,
+            matchingInputCount: field.fileReadback.matchingInputCount,
+            associatedResumeAcknowledged: field.fileReadback.associatedResumeAcknowledged === true,
+            ...(Number.isInteger(field.fileReadback.resumeContainerCount)
+              && field.fileReadback.resumeContainerCount >= 0 && field.fileReadback.resumeContainerCount <= 200
+              && Number.isInteger(field.fileReadback.resumeFileInputCount)
+              && field.fileReadback.resumeFileInputCount >= -1 && field.fileReadback.resumeFileInputCount <= 200
+              ? { resumeContainerCount: field.fileReadback.resumeContainerCount,
+                resumeFileInputCount: field.fileReadback.resumeFileInputCount,
+                resumeFilenameVisible: field.fileReadback.resumeFilenameVisible === true } : {}) } } : {})
+      } : {}),
       ...(Object.hasOwn(field ?? {}, "value") ? {
-        value: secret ? "[redacted]" : String(field.value ?? "").slice(0, 5000)
+        value: secret ? "[redacted]" : Array.isArray(field.value)
+          ? field.value.slice(0, 50).map(value => String(value).slice(0, 200))
+          : String(field.value ?? "").slice(0, 5000)
       } : {}) };
   }) };
 }
@@ -1890,13 +2015,34 @@ function addConfirmation(state, application, requirement, fallback) {
     message: requirement.message ?? fallback, fields: requirement.fields ?? [],
     options: requirement.options, recommendation: requirement.recommendation,
     origin: requirement.origin, preview: requirement.preview,
-    previewFingerprint: requirement.previewFingerprint, createdAt: now()
+    previewFingerprint: requirement.previewFingerprint, createdAt: now(),
+    ...(requirement.kind === 'submission_email_verification'
+      && validatedVerificationSession(requirement.verificationSession)
+      ? {verificationSession: validatedVerificationSession(requirement.verificationSession)} : {})
   };
   confirmation.presentation = buildPresentation(confirmation);
   state.confirmations.push(confirmation);
   recordWorkflowStage(state, { actorId: "system-confirmation", profileId: application.profileId },
     application.id, "owner_hold", { campaignId: application.campaignId,
       applicationId: application.id, outcome: confirmation.kind });
+}
+
+function validatedVerificationSession(value) {
+  const keys = ['profileId','applicationId','attemptId','destination','previewFingerprint'];
+  if (!value || typeof value.id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(value.id)
+    || !Number.isFinite(value.expiresAt) || value.expiresAt <= Date.now()
+    || value.expiresAt > Date.now() + 15 * 60_000
+    || !keys.every(key => typeof value[key] === 'string' && value[key].length > 0 && value[key].length < 2000)
+    || !/^[a-f0-9]{64}$/i.test(value.previewFingerprint)) return null;
+  return {id:value.id, expiresAt:value.expiresAt, ...Object.fromEntries(keys.map(key => [key,value[key]]))};
+}
+
+function verificationAuthorityHash(application, profile, opportunity) {
+  return createHash('sha256').update(JSON.stringify({
+    contact: profile?.contact, links: profile?.links, applicationAnswers: profile?.applicationAnswers,
+    answers: application?.answers, role: {id:opportunity?.id,title:opportunity?.title,
+      company:opportunity?.company,applyUrl:opportunity?.applyUrl,description:opportunity?.description}
+  })).digest('hex');
 }
 
 function buildPresentation(confirmation) {

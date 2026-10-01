@@ -238,3 +238,20 @@ Run `jobctl record-recruiter APPLICATION_ID` with a JSON object on stdin. It sav
 ```
 
 Omit unknown optional contact fields. The recruiter object is a complete replacement, so retain previously verified contact fields when updating it. Omit outreach to save contacts only. Draft punctuation is validated. `sent_by_owner` records an owner-reported manual send, never a request to send. Source is required. The endpoint is authenticated and application/profile scoped.
+
+
+### Live post-submit email verification (release8dae8ee)
+
+A pending submission_email_verification may contain a verificationSession with expiry and exact profile/application/attempt/destination/fingerprint binding. Only a still-live supported Greenhouse code form can continue. Use existing confirm with a transient JSON stdin body containing only approved:true and verificationCode (eight alphanumeric characters). Retrieve the code only from the exact employer message for this current attempt. Never write a real code to a file, profile answers, audit packet, idempotency cache, or logs. Do not use answers.retry, new apply, or another original Submit.
+
+Synthetic schema only: {"approved":true,"verificationCode":"TEST1234"}. This is not a real code.
+
+The server rechecks the consumed original permit, current policy and profile/answer authority. Changed, expired, closed, restarted, or already-used sessions remain outcome holds. The worker performs one verification-only action and records a receipt only after employer success. Successful contexts close; idle sessions expire within15minutes. The historical closed Tavily session cannot be recovered by this release. Ordinary CAPTCHA/anti-spam holds still require outcome review and never authorize stealth or transport changes.
+
+### Employer frequency review
+
+For an `employer_frequency_review` before form preparation, review the exact current role and the value of another application to that employer. Confirm a distinct suitable opening using the ordinary exact-confirmation payload `{ "approved": true }`. This confirmation has no named fields or `manual_review` action; do not invent `answers.retry` or owner approval. Delegated routine review may resolve it within existing authority. The server still requires complete exact final-submission preview approval for this application. This does not change employer history, policy, caps, or uncertain-final protection.
+
+A supported email-code challenge can retain the original application form. The worker selects only explicit labeled verification/security-code controls, preserves all other input values, and refuses ambiguous controls or changed original answers. A closed session still cannot resume or replay the original Submit action. Production3949cc5 passed611full and35installed-runtime staging tests; this is functional fixture evidence, not a recovered historical application or a new verified employer receipt.
+
+Verified factual answer aliases do not themselves change the browser preview fingerprint. Review a current unchanged complete final-policy-hold preview through normal confirm against current exact saved values. The server checks profile identity, standing-policy version, role, destination, fingerprint and each saved answer value. Do not force refresh-preview on this hold or assume a prior review survives changed answers or policy. Unanswered optional legal controls do not imply consent; required blanks and filled legal answers retain their separate gates.

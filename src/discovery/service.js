@@ -972,7 +972,11 @@ export class DiscoveryService {
       .filter((title) => typeof title === "string" && /\b(engineer|developer|scientist|architect)\b/i.test(title));
     const handledMatches = new Set();
     const isHandled = (role) => {
-      if (!isHandledRole(role, handledKeys)) return false;
+      // Review-only ATS queries must skip an unchanged reviewed posting before
+      // the adapter result cap. Identity alone cannot prove it is unchanged.
+      const unchanged = input.reviewOnly === true && typeof role.description === "string"
+        && unchangedIrrelevantRole(normalizeOpportunity(role, { source: role.source }), irrelevant);
+      if (!unchanged && !isHandledRole(role, handledKeys)) return false;
       handledMatches.add([...roleKeys(role)][0] ?? role.applyUrl ?? role.listingUrl);
       const sourceId = role.source;
       if (sourceYield.has(sourceId)) {
