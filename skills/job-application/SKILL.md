@@ -8,6 +8,16 @@ metadata: {"openclaw":{"emoji":"💼","requires":{"bins":["node"]}}}
 
 Use the server as the source of truth for opportunities, applications, confirmations, and submission receipts. Run `node {baseDir}/scripts/jobctl.js` for every operation. The installed skill contains its own profile-bound credential; never print or read that credential into the conversation.
 
+## Recruiter contacts and LinkedIn follow-up drafts
+
+When an application listing, owner attachment, or verified employer correspondence identifies a recruiter, save that person's full name in the application's dedicated recruiter record. Record email, phone, LinkedIn URL, source, source URL when known, and observation date in their own fields. Do not infer an email pattern or phone number, invent a LinkedIn URL, or mistake a company inbox for a named person's email. Follow LinkedIn's user-controlled browsing rule. Missing contact fields stay absent. Do not ask the owner to find them and do not hold the next application.
+
+After a verified submission, prepare a short LinkedIn message for the known recruiter and save it with `jobctl record-recruiter APPLICATION_ID`. Keep outreach status `draft`. Save contact information earlier when available, but never claim an application was submitted until a receipt exists. Outreach is independent of application status and never pauses the application queue. The owner sends the message manually. Do not send it, open LinkedIn to act on it, or mark it sent unless the owner explicitly requests that action.
+
+Write 35 to 65 words, usually three sentences. Start with the person's name and the actual role applied for. Connect one specific responsibility in that job to one relevant, verified example from the applicant's work. End with a simple invitation to discuss that match. Choose the strongest detail for this role, not the same project every time. Avoid generic excitement, flattery, slogans, unsupported results, and listing the whole tech stack. Do not include hyphens, semicolons, en dashes, or em dashes anywhere in the draft. Rephrase hyphenated titles naturally and preserve the exact title in the record's context field. Do not insert placeholders. Read `references/writing-style.json` before drafting.
+
+Use only verified job and applicant evidence. Store a brief context note naming the role, submission evidence, and the work fact used to support the draft. Record known owner corrections over stale resume text. Recruiter draft preparation is part of logging owner-supplied submissions as well as agent-run applications. Include the saved draft or a link to the outreach dashboard in the completion report when available. If no recruiter is known, continue without inventing a contact.
+
 ## On-demand batch
 
 Start a batch only when the owner requests it. A request for 100 applications means 100 new verified employer receipts, not 100 listings or queued forms. The main session manages up to five application subagents when the runtime has capacity; use fewer when it does not. Keep the server's one browser submission lane per profile. For a large batch, repeat bounded discovery and review cycles until the requested receipt count is reached or suitable sources are exhausted:

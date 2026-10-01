@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import { normalizeRecruiterOutreach as normalize } from '../src/recruiter-outreach.js';
+const recruiter={fullName:'Alex Smith',source:'Owner supplied listing'};
+test('omits unknown contacts rather than guessing them',()=>{const r=normalize({recruiter});assert.equal(r.recruiter.email,undefined);assert.equal(r.outreach,undefined);});
+test('rejects unsafe links and invalid contact values',()=>{for(const extra of [{linkedinUrl:'https://linkedin.com.evil.test/in/alex'},{sourceUrl:'javascript:alert(1)'},{email:'invalid'}])assert.throws(()=>normalize({recruiter:{...recruiter,...extra}}));});
+test('enforces draft punctuation and context without authorizing sending',()=>{for(const draft of ['hello-world','hello; world','hello—world','hello–world'])assert.throws(()=>normalize({recruiter,outreach:{draft,context:'Relevant role'}}));assert.throws(()=>normalize({recruiter,outreach:{draft:'Hello',context:'Role',status:'send_now'}}));});

@@ -257,6 +257,10 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
           manualSubmission[1], await jsonBody(request), identity
         ));
       }
+      const recruiterOutreach = url.pathname.match(/^\/v1\/applications\/([^/]+)\/recruiter-outreach$/);
+      if (request.method === "POST" && recruiterOutreach) {
+        return send(response, 200, await service.recordRecruiterOutreach(recruiterOutreach[1], await jsonBody(request), identity));
+      }
       const employerStatus = url.pathname.match(/^\/v1\/applications\/([^/]+)\/employer-status$/);
       if (request.method === "POST" && employerStatus) {
         return send(response, 200, await service.recordEmployerStatus(

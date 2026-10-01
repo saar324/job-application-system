@@ -228,3 +228,13 @@ After the owner explicitly approves the exact complete previews listed in a batc
 ```bash
 printf '%s' '{"entries":[{"applicationId":"APPLICATION_UUID","previewFingerprint":"64_HEX_CHARACTERS"}]}' | $JOBCLI approve-batch
 ```
+
+## Recruiter and outreach record
+
+Run `jobctl record-recruiter APPLICATION_ID` with a JSON object on stdin. It saves metadata without changing application state or performing outreach:
+
+```json
+{"recruiter":{"fullName":"Alex Smith","linkedinUrl":"https://www.linkedin.com/in/verified-person/","email":"alex@example.com","phone":"+123456789","source":"Owner supplied job listing","sourceUrl":"https://employer.example/job","observedAt":"2026-10-01T00:00:00Z"},"outreach":{"draft":"A specific short message for the named recruiter.","context":"Exact role, verified submission evidence, and the applicant fact used.","status":"draft"}}
+```
+
+Omit unknown optional contact fields. The recruiter object is a complete replacement, so retain previously verified contact fields when updating it. Omit outreach to save contacts only. Draft punctuation is validated. `sent_by_owner` records an owner-reported manual send, never a request to send. Source is required. The endpoint is authenticated and application/profile scoped.

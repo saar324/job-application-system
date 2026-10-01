@@ -27,6 +27,11 @@ export function fitReviewContext(profile, mode = "full_time") {
         : { jobTitles: preferences.jobTitles ?? [],
           secondaryJobTitles: preferences.secondaryJobTitles ?? [] })
     },
-    verifiedExamples: examples, experienceFacts
+    verifiedExamples: examples, experienceFacts,
+    experienceDates: Object.fromEntries(Object.entries(profile?.applicationAnswers ?? {})
+      .filter(([key, value]) => /professional (experience |)start (year|date)$/i.test(key)
+        && !/authorization|visa|birth|legal|privacy|consent|phone|email/i.test(key)
+        && /^(19|20)\d{2}(-\d{2}(-\d{2})?)?$/.test(String(value)))
+      .slice(0, 50))
   };
 }
