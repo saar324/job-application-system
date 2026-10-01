@@ -110,3 +110,14 @@ The official scan, destination verification, and current-role revalidation SHALL
 #### Scenario: Contradictory or generic evidence remains held
 - **WHEN** the flag is false, workplace is hybrid/onsite, wording requires office work, or only company prose mentions remote
 - **THEN** the missing-flag/header fallback does not authorize the role
+
+### Requirement: Preserve the original form during email verification
+The worker SHALL retain a supported explicit employer email-code challenge when the original application form remains visible. It SHALL scope only the labeled security or verification code control, preserve and recheck all other application input values, reject ambiguous code controls, and use the unchanged exact challenge form and button. Closed attempts SHALL remain non-retryable.
+
+#### Scenario: Original form remains visible
+- **WHEN** the employer adds one labeled eight-character security code input to the existing application form
+- **THEN** the worker retains the live attempt and permits only verification of that code with unchanged original inputs
+
+#### Scenario: Application values change during verification
+- **WHEN** an original non-code input changes or a second code input appears
+- **THEN** no verification click or receipt occurs

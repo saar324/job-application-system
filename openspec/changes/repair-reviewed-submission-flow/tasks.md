@@ -60,4 +60,10 @@ Verification-only release8dae8ee:592 full tests, privacy339trackedfiles, strict 
 - [x] Reproduce Camunda null remote flag and PlanetScale escaped leading remote header against unchanged deployed baseline.
 - [x] Share narrow remote predicates across scan, destination verification and revalidation without extending policy or country eligibility.
 - [x] Verify positive current metadata, negative contradictions and existing changed-posting/profile/dedupe continuation protections.
-- [ ] Complete fresh full/strict checks, paired staging verification and idle paired production release with resources.
+- [x] Complete fresh full/strict checks, paired staging verification and idle paired production release with resources. cd78278: 608 full tests, 44 staged cases, both release health identities, two resource samples; durable paired-release-cd78278-audit.json.
+
+## Retained original form verification correction
+- [x] Diagnose PlanetScale saved original-form-plus-code challenge; preserve the ended attempt hold.
+- [x] Scope exact labeled code controls and bind original input values.
+- [x] Verify six Chromium cases including retained form, changed contact, and ambiguous code.
+- [ ] Run full checks and paired staging/production release with idle preflight.
