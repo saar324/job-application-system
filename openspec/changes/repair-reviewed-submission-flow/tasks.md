@@ -55,3 +55,9 @@ Teamtailor initial release b2712ef:573 full tests;19 installed Chromium/API fixt
 Canonical CV release evidence:690c423 passed579 full tests,25 immutable staged Chromium/API cases and strict OpenSpec; production API/worker690c423 paired with idle preflight, authentication negatives and two resource samples. Actual Equitable employer receipt followed one final action and was reconciled through the normal receipt API. The automatic detector missed an ancillary Connect form; the bounded exact-route detector correction is included in the pending verification-only release. The first10-real-receipt pilot remains outstanding.
 
 Verification-only release8dae8ee:592 full tests, privacy339trackedfiles, strict OpenSpec and52 actual Chromium/API fixtures under the immutable deployed staging runtime passed. Production API/worker8dae8ee paired healthy15:44:50Z; consumed-attempt verification ingress authentication403/401 verified. Current closed Tavily remains unrecoverable; legitimate future live email verification proof and first10real receipts remain outstanding.
+
+## Official remote metadata correction
+- [x] Reproduce Camunda null remote flag and PlanetScale escaped leading remote header against unchanged deployed baseline.
+- [x] Share narrow remote predicates across scan, destination verification and revalidation without extending policy or country eligibility.
+- [x] Verify positive current metadata, negative contradictions and existing changed-posting/profile/dedupe continuation protections.
+- [ ] Complete fresh full/strict checks, paired staging verification and idle paired production release with resources.
