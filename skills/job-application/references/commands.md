@@ -238,3 +238,12 @@ Run `jobctl record-recruiter APPLICATION_ID` with a JSON object on stdin. It sav
 ```
 
 Omit unknown optional contact fields. The recruiter object is a complete replacement, so retain previously verified contact fields when updating it. Omit outreach to save contacts only. Draft punctuation is validated. `sent_by_owner` records an owner-reported manual send, never a request to send. Source is required. The endpoint is authenticated and application/profile scoped.
+
+
+### Live post-submit email verification (release8dae8ee)
+
+A pending submission_email_verification may contain a verificationSession with expiry and exact profile/application/attempt/destination/fingerprint binding. Only a still-live supported Greenhouse code form can continue. Use existing confirm with a transient JSON stdin body containing only approved:true and verificationCode (eight alphanumeric characters). Retrieve the code only from the exact employer message for this current attempt. Never write a real code to a file, profile answers, audit packet, idempotency cache, or logs. Do not use answers.retry, new apply, or another original Submit.
+
+Synthetic schema only: {"approved":true,"verificationCode":"TEST1234"}. This is not a real code.
+
+The server rechecks the consumed original permit, current policy and profile/answer authority. Changed, expired, closed, restarted, or already-used sessions remain outcome holds. The worker performs one verification-only action and records a receipt only after employer success. Successful contexts close; idle sessions expire within15minutes. The historical closed Tavily session cannot be recovered by this release. Ordinary CAPTCHA/anti-spam holds still require outcome review and never authorize stealth or transport changes.
