@@ -76,3 +76,8 @@ The executor SHALL distinguish a Teamtailor remote resume success preview from i
 - **WHEN** the native resume input is replaced after this worker acknowledged the current document
 - **THEN** private live-page evidence MAY reuse only the same document content hash, size, filename and acknowledged remote URL hash, without a second upload
 - **AND** an unknown preexisting attachment SHALL remain held
+
+#### Scenario: Exact approval survives a fresh storage URL
+- **WHEN** a new worker context uploads the same reviewed document bytes under a different ephemeral storage URL
+- **THEN** canonical approval SHALL bind the unchanged document content SHA, name and size, while the new live URL SHALL be independently acknowledged and guarded
+- **AND** changed document content, owner facts, question or destination SHALL invalidate approval
