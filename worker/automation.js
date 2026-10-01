@@ -55,8 +55,22 @@ async function emailVerificationContinuation(page, application, profile, artifac
   if (!application.finalPermit?.previewFingerprint || !application.claim?.attemptId) return null;
   const body = await page.locator('body').innerText();
   if (!await greenhouseEmailCodeChallenge(page, body)) return null;
-  const inputs = page.locator('input:visible:not([type="hidden"]):not([type="submit"])');
-  const lengths = await inputs.evaluateAll(rows => rows.map(row => row.maxLength));
+  const visibleInputs = page.locator('input:visible:not([type="hidden"]):not([type="submit"])');
+  const controlMetadata = () => visibleInputs.evaluateAll(rows => rows.map((row,index) => ({index,maxLength:row.maxLength,
+    code:/(?:verification|security|one.?time)\s*code|one-time-code/i.test([row.name,row.id,row.placeholder,
+      row.getAttribute('aria-label'),row.getAttribute('autocomplete'),
+      ...[...(row.labels ?? [])].map(label=>label.textContent)].filter(Boolean).join(' '))})));
+  const metadata = await controlMetadata();
+  let selected = metadata.filter(row => row.code && row.maxLength === 8);
+  if (!selected.length) selected = metadata.filter(row => row.maxLength === 1);
+  if (!selected.length && metadata.length === 1 && metadata[0].maxLength === 8) selected = metadata;
+  if (!selected.length) return null;
+  let inputs = visibleInputs.nth(selected[0].index);
+  for (const row of selected.slice(1)) inputs = inputs.or(visibleInputs.nth(row.index));
+  const lengths = selected.map(row => row.maxLength);
+  const otherValues = () => visibleInputs.evaluateAll((rows,indices) => rows.filter((_,index)=>!indices.includes(index))
+    .map(row=>({name:row.name,id:row.id,type:row.type,value:row.value})),selected.map(row=>row.index));
+  const existingValues = JSON.stringify(await otherValues());
   if (!(lengths.length === 1 && lengths[0] === 8 || lengths.length === 8 && lengths.every(n => n === 1))) return null;
   const form = inputs.first().locator('xpath=ancestor::form[1]');
   if (await form.count() !== 1) return null;
@@ -68,12 +82,15 @@ async function emailVerificationContinuation(page, application, profile, artifac
   const destination = page.url();
   return {binding:{profileId:profile.id,applicationId:application.id,attemptId:application.claim.attemptId,
     destination,previewFingerprint:application.finalPermit.previewFingerprint},continueVerification:async code => {
-    if(page.url() !== destination || await page.locator('body').innerText() !== body
+    if(page.url() !== destination || JSON.stringify(await controlMetadata()) !== JSON.stringify(metadata)
+      || JSON.stringify(await otherValues()) !== existingValues || await page.locator('body').innerText() !== body
       || await buttons.count() !== 1 || JSON.stringify(await readButton()) !== JSON.stringify(descriptor)) return {status:'needs_human'};
     for(let n=0;n<lengths.length;n++) await inputs.nth(n).fill(lengths.length===1?code:code[n]);
     if(page.url() !== destination || await buttons.count() !== 1
       || JSON.stringify(await readButton()) !== JSON.stringify(descriptor)
       || await inputs.count() !== lengths.length
+      || JSON.stringify(await controlMetadata()) !== JSON.stringify(metadata)
+      || JSON.stringify(await otherValues()) !== existingValues
       || await page.locator('body').innerText() !== body
       || (await inputs.evaluateAll(rows=>rows.map(row=>row.value))).join('') !== code) return {status:'needs_human'};
     await buttons.first().click({noWaitAfter:true});
