@@ -70,7 +70,7 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "GET" && url.pathname === "/v1/session-context") {
         const profile = await profiles.get(identity.profileId);
         return send(response, 200, Object.fromEntries(["displayName", "contact", "links", "documents", "skills",
-          "experience", "workHistory", "education", "applicationAnswers", "verifiedExamples", "preferences"]
+          "experience", "workHistory", "education", "applicationAnswers", "approvedAnswers", "verifiedExamples", "preferences"]
           .filter(key => profile?.[key] !== undefined).map(key => [key, profile[key]])));
       }
       if (request.method === "GET" && url.pathname === "/v1/session-resume") {
