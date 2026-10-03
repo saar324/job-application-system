@@ -59,4 +59,4 @@ systemctl daemon-reload
 systemctl enable job-application-server.service
 systemctl start job-application-server.service
 
-echo "Deployment complete. Install applicant skills separately with scripts/bootstrap-openclaw.js."
+echo "Deployment complete. Update the existing applicant skill as described in docs/client-installation.md."

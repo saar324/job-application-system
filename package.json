@@ -10,7 +10,6 @@
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/index.js",
-    "openclaw:bootstrap": "node scripts/bootstrap-openclaw.js",
     "state:migrate": "node scripts/migrate-state-to-sqlite.js",
     "eval:ranking": "node scripts/evaluate-ranking.js",
     "dev": "node --env-file-if-exists=.env --watch src/index.js",

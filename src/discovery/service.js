@@ -991,12 +991,7 @@ export class DiscoveryService {
       if (sourceYield.has(discoverySourceOf(scored)) && !scored.applicationDestinationPending) {
         sourceYield.get(discoverySourceOf(scored)).selected += 1;
       }
-      const opportunity = await this.applicationService.addOpportunity({
-        ...scored, ...(input.campaignId ? { lastCampaignId: input.campaignId } : {}),
-        ...(input.reserveOnly && scored.applicationDestinationVerified
-          ? { reserveObservedAt: new Date().toISOString(),
-            reserveExpiresAt: new Date(Date.now() + 45 * 60_000).toISOString() } : {})
-      }, identity, { serverVerifiedDiscovery: true,
+      const opportunity = await this.applicationService.addOpportunity(scored, identity, { serverVerifiedDiscovery: true,
         advisoryDiscovery: scored.discoveryRelease });
       const entry = { opportunity };
       if (opportunity.applicationDestinationPending) entry.applicationBlockedBySource = "employer_application_url_required";
@@ -1019,6 +1014,10 @@ export class DiscoveryService {
           && parsed && `${parsed.source}:${parsed.board}` === key;
       }).flatMap((role) => [...roleKeys(role)].filter((roleKey) => roleKey.startsWith(`${key}:`)))).size
     }));
+    await this.applicationService.store.mutate((state) => state.audit.push({ id: randomUUID(),
+      at: new Date().toISOString(), actorId: identity.actorId, profileId: identity.profileId,
+      action: "discovery.scan_completed", subjectId: randomUUID(),
+      details: { sources: [...new Set(requests.map(({ source }) => source.id))] } }));
     return {
       mode,
       sources: requestedSources,
@@ -1067,7 +1066,9 @@ function completedSourceCycles(audit, profileId, sourceIds) {
     [...starts].filter(([campaignId, event]) => completedPrimary.has(campaignId)
       && event.details?.sources?.includes(sourceId)).length
     + [...starts].filter(([campaignId, event]) => event.details?.fallbackSources?.includes(sourceId)
-      && completedBrowser.has(`${campaignId}:${sourceId}`)).length]));
+      && completedBrowser.has(`${campaignId}:${sourceId}`)).length
+    + audit.filter((event) => event.profileId === profileId
+      && event.action === "discovery.scan_completed" && event.details?.sources?.includes(sourceId)).length]));
 }
 
 function redactedError(item, credentialSets) {
@@ -1119,7 +1120,7 @@ function importedCandidate(candidate, sourceId) {
     tags: Array.isArray(candidate.tags) ? candidate.tags.slice(0, 100).map((item) => String(item).slice(0, 100)) : [],
     compensation: candidate.compensation && typeof candidate.compensation === "object"
       ? candidate.compensation : undefined,
-    provenance: { importedBy: "campaign_browser_fallback", sourceUrl: capped(candidate.sourceUrl, 2000),
+    provenance: { importedBy: "chrome_session_discovery", sourceUrl: capped(candidate.sourceUrl, 2000),
       employerLinkObserved: destinationObserved },
     uncertainties: Array.isArray(candidate.uncertainties)
       ? candidate.uncertainties.slice(0, 50).map((item) => String(item).slice(0, 200)) : []
