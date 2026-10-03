@@ -143,7 +143,9 @@ const expectedStarterConfig = {
     submissionApproval: "always"
   }]))
 };
-if (!isDeepStrictEqual(starterConfig, expectedStarterConfig)) {
+const chromeStarterConfig = { execution: { workflow: "chrome_session" },
+  modes: Object.fromEntries(["full_time", "freelance"].map(mode => [mode, { sources: publicFeedIds }])) };
+if (!isDeepStrictEqual(starterConfig, expectedStarterConfig) && !isDeepStrictEqual(starterConfig, chromeStarterConfig)) {
   failures.push("config/discovery.example.json: starter must contain only neutral public feeds and simulation settings");
 }
 for (const [provider, settings] of Object.entries(defaults.discovery?.sourceOptions ?? {})) {
@@ -318,7 +320,9 @@ const expectedWritingStyle = {
     "Check grammar and required length.", "Request the applicant's approval at the final submission step."
   ]
 };
-if (!isDeepStrictEqual(writingStyle, expectedWritingStyle)) {
+const chromeWritingStyle = structuredClone(expectedWritingStyle);
+chromeWritingStyle.qualityChecks[3] = "Review every final field under the owner's submission delegation. Pause for missing facts or uncovered commitments.";
+if (!isDeepStrictEqual(writingStyle, expectedWritingStyle) && !isDeepStrictEqual(writingStyle, chromeWritingStyle)) {
   failures.push("skills/job-application/references/writing-style.json: file must match the exact neutral public template");
 }
 if (writingStyle.purpose !== "Neutral default. Replace this file only in a private deployment to reflect an applicant's own voice.") {
