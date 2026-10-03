@@ -51,14 +51,9 @@ test("requested mode controls readiness without changing the stored default", as
   assert.equal((await store.status("applicant-one", "freelance")).readyToSearch, false);
 });
 
-test("profile submission approval supports automatic or always only", async () => {
+test("retired submission approval settings cannot be reintroduced through profile updates", async () => {
   const { store } = await fixture();
-  await store.patch("applicant-one", { preferences: { fullTime: { submissionApproval: "always" } } });
-  assert.equal((await store.get("applicant-one")).preferences.fullTime.submissionApproval, "always");
-  await assert.rejects(
-    store.patch("applicant-one", { preferences: { fullTime: { submissionApproval: "sometimes" } } }),
-    /must be automatic or always/
-  );
+  await assert.rejects(store.patch("applicant-one", { preferences: { fullTime: { submissionApproval: "always" } } }), /retired/);
 });
 
 test("profile application cap overrides are bounded and zero disables them", async () => {

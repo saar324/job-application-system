@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { createHttpServer } from "../src/http.js";
 import { ProfileStore } from "../src/profile-store.js";
-import { buildEvidencePacket } from "../src/service.js";
+import { selectVerifiedExamples } from "../src/verified-examples.js";
 
 const ownerOne = { actorId: "owner-one", profileId: "profile-one", roles: ["owner"] };
 const ownerTwo = { actorId: "owner-two", profileId: "profile-two", roles: ["owner"] };
@@ -66,7 +66,7 @@ test("draft evidence includes only current examples relevant to the role and emp
   const opportunity = { company: "Example Co", title: "Senior Back-end Engineer",
     description: "Build services with PostgreSQL and TypeScript.",
     listingUrl: "https://example.test/jobs/backend" };
-  const packet = buildEvidencePacket({}, opportunity, profile);
+  const packet = { applicant: { examples: selectVerifiedExamples(profile, opportunity) } };
   assert.deepEqual(packet.applicant.examples.map((item) => item.id), ["backend-api"]);
   assert.deepEqual(packet.applicant.examples[0].facts,
     ["Built a fictional production API using TypeScript and PostgreSQL."]);
@@ -74,11 +74,11 @@ test("draft evidence includes only current examples relevant to the role and emp
   const stale = { ...profile, verifiedExamples: profile.verifiedExamples.map((item) => ({
     ...item, reviewAfter: new Date(Date.now() - 1_000).toISOString()
   })) };
-  assert.deepEqual(buildEvidencePacket({}, opportunity, stale).applicant.examples, []);
+  assert.deepEqual(selectVerifiedExamples(stale, opportunity), []);
   const unverified = { ...profile, verifiedExamples: profile.verifiedExamples.map((item) => ({
     ...item, ownerActorId: undefined
   })) };
-  assert.deepEqual(buildEvidencePacket({}, opportunity, unverified).applicant.examples, []);
+  assert.deepEqual(selectVerifiedExamples(unverified, opportunity), []);
 });
 
 test("verified-example HTTP routes require owner authority and keep profiles isolated", async () => {

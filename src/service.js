@@ -2,7 +2,6 @@ import { ChromeQueue } from "./chrome-queue.js";
 import { normalizeRecruiterOutreach } from "./recruiter-outreach.js";
 import { randomUUID } from "node:crypto";
 import { roleKeys } from "./discovery/handled-roles.js";
-import { selectVerifiedExamples } from "./verified-examples.js";
 import { CLOSED_RETRY_MS, PENDING_RETRY_MS, PENDING_TTL_MS, retryDelay } from "./discovery/candidate-state.js";
 const now = () => new Date().toISOString();
 const inactive = item => ["skipped", "rejected", "failed"].includes(item.status);
@@ -17,20 +16,6 @@ export class ApplicationService {
   executionHealth() { return { active: 0, waitingForCapacity: 0, queued: 0 }; }
   list(collection, profileId) {
     return this.store.snapshot()[collection].filter((item) => item.profileId === profileId);
-  }
-
-  async recordStandingPolicyChange(policy, identity) {
-    return this.store.mutate((state) => {
-      if (!state.audit.some((item) => item.profileId === identity.profileId
-        && item.action === "standing_policy.changed" && item.subjectId === policy.id
-        && item.details?.version === policy.version)) {
-        audit(state, identity, "standing_policy.changed", policy.id, {
-          version: policy.version, mode: policy.mode, dailyCap: policy.dailyCap,
-          campaignCap: policy.campaignCap
-        });
-      }
-      return { version: policy.version };
-    });
   }
 
   applicationLog(profileId) {
@@ -345,27 +330,6 @@ export class ApplicationService {
   }
 
   async recover() { return this.chromeQueue.recover(); }
-}
-
-export function buildEvidencePacket(application, opportunity, profile) {
-  const packet = {
-    version: 1,
-    company: String(opportunity.company ?? "").slice(0, 200),
-    title: String(opportunity.title ?? "").slice(0, 200),
-    listing: String(opportunity.description ?? "").slice(0, 8000),
-    listingUrl: opportunity.listingUrl ?? opportunity.applyUrl,
-    research: (application.researchEvidence ?? []).slice(0, 4).map((item) => ({
-      url: item.url, excerpt: item.excerpt, sourceHash: item.sourceHash
-    })),
-    applicant: {
-      skills: (profile?.skills ?? []).slice(0, 30),
-      examples: selectVerifiedExamples(profile, opportunity),
-      links: Object.fromEntries(["linkedin", "github", "portfolio"]
-        .filter((key) => /^https:\/\//i.test(profile?.links?.[key] ?? ""))
-        .map((key) => [key, String(profile.links[key]).slice(0, 500)]))
-    }
-  };
-  return packet;
 }
 
 function audit(state, identity, action, subjectId, details) {
