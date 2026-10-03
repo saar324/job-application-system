@@ -142,17 +142,7 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         if (request.method === "GET") {
           return send(response, 200, { policy: (await profiles.get(identity.profileId))?.standingSubmissionPolicy ?? null });
         }
-        if (request.method === "PUT") {
-          if (!identity.roles?.includes("owner")) return send(response, 403, { error: "owner authority required" });
-          const policy = await profiles.setStandingSubmissionPolicy(
-            identity.profileId, await jsonBody(request), identity);
-          // The profile write atomically includes its versioned owner history.
-          // The state audit is secondary and must not turn a successful policy
-          // mutation into an ambiguous HTTP failure.
-          await service.recordStandingPolicyChange(policy, identity).catch((error) =>
-            console.error("secondary standing policy audit failed", error));
-          return send(response, 200, { policy });
-        }
+        return send(response, 410, { error: "Worker standing permits are retired. Set daily limits in profile preferences." });
       }
       if (request.method === "POST" && ["/v1/discovery/scan", "/v1/discovery/query", "/v1/discovery/consider"].includes(url.pathname)
         && service.chromeQueue.list(identity.profileId).waiting) return send(response, 409, { error: "The current application needs owner help or an outcome check. Wait before discovery." });
