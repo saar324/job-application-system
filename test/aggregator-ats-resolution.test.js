@@ -7,7 +7,6 @@ import { DiscoveryService } from "../src/discovery/service.js";
 import { ProfileStore } from "../src/profile-store.js";
 import { ApplicationService } from "../src/service.js";
 import { JsonStore } from "../src/store.js";
-import { SimulationAdapter } from "../src/adapters/simulation.js";
 
 const identity = { actorId: "agent", profileId: "person" };
 const roleId = "11111111-1111-4111-8111-111111111111";
@@ -37,7 +36,7 @@ async function fixture(fetchImpl, officialRequestPaceMs = 0) {
       requireConfirmationFor: [], dailyApplicationCap: 10 } } };
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   const service = new ApplicationService({ store, config, profiles,
-    adapter: new SimulationAdapter() });
+    adapter: { name: "chrome_session" } });
   service.enqueue = () => {};
   const discovery = new DiscoveryService({ applicationService: service, profiles, config, fetchImpl,
     officialRequestPaceMs });
@@ -87,35 +86,6 @@ test("an official board rate limit cancels later queued requests on its origin",
   await discovery.scan({ sources: ["ashby"], prepareApplications: false }, identity);
   assert.equal(requested.length, 2);
   assert.match(requested[1], /sample-two$/);
-});
-
-test("two aggregator sources resolve one Ashby role, re-score official evidence, and queue once", async () => {
-  let officialFetches = 0;
-  const { service, discovery } = await fixture(async (url) => {
-    const value = String(url);
-    if (value.includes("jobicy.com/api/")) return new Response(JSON.stringify({ jobs: [jobicyRow(ashbyUrl)] }));
-    if (value.includes("himalayas.app/jobs/api/")) return new Response(JSON.stringify({ jobs: [himalayasRow(ashbyUrl)] }));
-    if (value.includes("api.ashbyhq.com/")) {
-      officialFetches += 1;
-      return new Response(JSON.stringify({ jobs: [officialAshby] }));
-    }
-    throw new Error(`unexpected fetch ${value}`);
-  });
-  const campaign = await discovery.startCampaign({ target: 1, reserve: 0,
-    sources: ["jobicy", "himalayas"] }, identity);
-  assert.equal(officialFetches, 1);
-  assert.equal(campaign.applications.length, 1);
-  assert.equal(campaign.applications[0].status, "queued");
-  const opportunities = service.list("opportunities", "person");
-  assert.equal(opportunities.length, 1);
-  assert.equal(opportunities[0].source, "ashby");
-  assert.equal(opportunities[0].externalId, `example:${roleId}`);
-  assert.equal(opportunities[0].company, "example");
-  assert.equal(opportunities[0].location, "Bulgaria");
-  assert.equal(opportunities[0].applicationDestinationVerified, true);
-  assert.equal(opportunities[0].discoverySource, "jobicy");
-  assert.equal(campaign.scan.sourceYield
-    .reduce((sum, row) => sum + row.selected, 0), 1);
 });
 
 test("handled public-board redirects do not use the new-role ATS verification cap", async () => {
@@ -223,7 +193,7 @@ test("Himalayas explicit description link promotes only the matching current emp
   assert.equal(result.items.length, 1);
   assert.equal(result.items[0].opportunity.source, "ashby");
   assert.equal(result.items[0].opportunity.applicationDestinationVerified, true);
-  assert.equal(service.list("applications", "person").length, 1);
+  assert.equal(service.list("applications", "person").length, 0);
   assert.equal(requested.filter((url) => url.includes("api.ashbyhq.com/")).length, 1);
   assert.ok(requested.every((url) => url.includes("himalayas.app/jobs/api/")
     || url.includes("api.ashbyhq.com/")), "the board page and arbitrary employer sites are not fetched");

@@ -1,3 +1,5 @@
+> Historical record. The campaign and server browser workflow described below was retired. Follow [the current workflow](agent-led-workflow.md).
+
 # Discovery coverage and application quality rollout
 
 ## Two release stages

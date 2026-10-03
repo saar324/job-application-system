@@ -1,3 +1,5 @@
+> Historical record. The campaign and server browser workflow described below was retired. Follow [the current workflow](agent-led-workflow.md).
+
 # Production rollout record — 2026-09-21
 
 ## Result

@@ -1,6 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { nextStandingPolicy } from "./standing-policy.js";
 import { answerEvidenceFingerprint, approvedAnswerFingerprint } from "./approved-answers.js";
 import { verifiedExamplesForStorage } from "./verified-examples.js";
 
@@ -88,14 +87,8 @@ export class ProfileStore {
         throw Object.assign(new Error("defaultMode must be full_time or freelance"), { status: 400 });
       }
       for (const section of ["fullTime", "freelance"]) {
-        const approval = updated.preferences?.[section]?.submissionApproval;
-        if (approval && !["automatic", "always"].includes(approval)) {
-          throw Object.assign(new Error(`${section}.submissionApproval must be automatic or always`), { status: 400 });
-        }
-        const dailyApplicationCap = updated.preferences?.[section]?.dailyApplicationCap;
-        if (dailyApplicationCap !== undefined
-          && (!Number.isInteger(dailyApplicationCap) || dailyApplicationCap < 0 || dailyApplicationCap > 100)) {
-          throw Object.assign(new Error(`${section}.dailyApplicationCap must be an integer from 0 to 100, where 0 disables the cap`), { status: 400 });
+        if (Object.hasOwn(input.preferences?.[section] ?? {}, "submissionApproval")) {
+          throw Object.assign(new Error("submissionApproval is retired; final review belongs to the Chrome session"), { status: 400 });
         }
       }
       const maxApplicationsPerDay = updated.preferences?.maxApplicationsPerDay;
@@ -107,30 +100,6 @@ export class ProfileStore {
       else document.profiles.push(updated);
       await this.#write(document);
       return this.status(profileId);
-    });
-    this.#pending = operation.catch(() => undefined);
-    return operation;
-  }
-
-  async setStandingSubmissionPolicy(profileId, input, identity) {
-    if (identity?.profileId !== profileId || !identity?.roles?.includes("owner")) {
-      throw Object.assign(new Error("owner authority required for this profile"), { status: 403 });
-    }
-    const operation = this.#pending.then(async () => {
-      const document = await this.#read();
-      const index = document.profiles.findIndex((profile) => profile.id === profileId);
-      const current = index >= 0 ? document.profiles[index] : { id: profileId };
-      const standingSubmissionPolicy = nextStandingPolicy(current.standingSubmissionPolicy, input, identity);
-      const updated = { ...current, standingSubmissionPolicy,
-        standingPolicyHistory: [...(current.standingPolicyHistory ?? []).slice(-99), {
-          policyId: standingSubmissionPolicy.id, version: standingSubmissionPolicy.version,
-          mode: standingSubmissionPolicy.mode, ownerActorId: identity.actorId,
-          recordedAt: standingSubmissionPolicy.updatedAt
-        }] };
-      if (index >= 0) document.profiles[index] = updated;
-      else document.profiles.push(updated);
-      await this.#write(document);
-      return standingSubmissionPolicy;
     });
     this.#pending = operation.catch(() => undefined);
     return operation;

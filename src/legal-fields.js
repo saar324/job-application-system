@@ -1,0 +1,1 @@
+export const LEGAL_ATTESTATION_FIELD = /\b(?:legal(?:ly)?|authori[sz](?:ed|ation)|consent|certif(?:y|ication)|agree|privacy policy|terms of (?:use|service)|work (?:eligib(?:le|ility)|permit|authori[sz]ation)|right to work|visa|sponsorship|sponsor|citizen(?:ship)?|immigration|background check|export control|security clearance)\b/i;

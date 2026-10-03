@@ -16,6 +16,6 @@
     "Answer the exact prompt.",
     "Remove unsupported claims and placeholders.",
     "Check grammar and required length.",
-    "Request the applicant's approval at the final submission step."
+    "Review every final field under the owner's submission delegation. Pause for missing facts or uncovered commitments."
   ]
 }

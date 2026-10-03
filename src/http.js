@@ -4,6 +4,7 @@ import { telemetry } from "./telemetry.js";
 import { handleMcpRequest } from "./mcp.js";
 import { runIdempotent } from "./idempotency.js";
 import { fitReviewContext } from "./discovery/fit-context.js";
+import { readSessionResume } from "./documents.js";
 
 async function jsonBody(request) {
   const chunks = [];
@@ -44,20 +45,49 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         return send(response, 200, {
           ok: true, adapter: service.adapter.name,
           storage: service.store.kind ?? "json", schemaVersion: service.store.schemaVersion?.(),
-          telemetry: telemetry.health()
+          telemetry: telemetry.health(), execution: service.executionHealth(),
+          release: process.env.JOB_RELEASE_ID ?? "unknown"
         });
       }
-      if (url.pathname === "/v1/internal/final-decision" || url.pathname === "/v1/internal/final-commit") {
-        if (request.method !== "POST" || !config.execution?.workerCallbackToken
-          || request.headers.authorization !== `Bearer ${config.execution.workerCallbackToken}`) {
-          return send(response, 403, { error: "worker authority required" });
-        }
-        const input = await jsonBody(request);
-        return send(response, 200, url.pathname.endsWith("final-decision")
-          ? await service.prepareFinalSubmission(input) : await service.commitFinalSubmission(input));
-      }
+      if (url.pathname.startsWith("/v1/internal/")) return send(response, 410, { error: "Server browser execution is retired. Use the passive Chrome queue." });
       const identity = authenticate(request);
       if (!identity) return send(response, 401, { error: "invalid or missing bearer token" });
+
+      if (request.method === "GET" && url.pathname === "/v1/chrome-queue") {
+        return send(response, 200, service.chromeQueue.list(identity.profileId));
+      }
+      if (request.method === "POST" && url.pathname === "/v1/chrome-queue") {
+        return send(response, 201, await service.chromeQueue.add(await jsonBody(request), identity));
+      }
+      if (request.method === "POST" && url.pathname === "/v1/chrome-queue/next") {
+        return send(response, 200, await service.chromeQueue.claim(await jsonBody(request), identity));
+      }
+      const queueAction = url.pathname.match(/^\/v1\/chrome-queue\/([^/]+)\/(checkpoint|resume|review|submit-start|receipt|skip|validation-error|takeover)$/);
+      if (request.method === "POST" && queueAction) {
+        const action = ({ "submit-start": "startSubmission", "validation-error": "validationError" })[queueAction[2]] ?? queueAction[2];
+        return send(response, 200, await service.chromeQueue[action](queueAction[1], await jsonBody(request), identity));
+      }
+      if (request.method === "GET" && url.pathname === "/v1/session-context") {
+        const profile = await profiles.get(identity.profileId);
+        return send(response, 200, Object.fromEntries(["displayName", "contact", "links", "documents", "skills",
+          "experience", "workHistory", "education", "applicationAnswers", "approvedAnswers", "verifiedExamples", "preferences"]
+          .filter(key => profile?.[key] !== undefined).map(key => [key, profile[key]])));
+      }
+      if (request.method === "GET" && url.pathname === "/v1/session-resume") {
+        try {
+          const document = await readSessionResume(await profiles.get(identity.profileId));
+          response.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-store",
+            "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(document.filename)}` });
+          return response.end(document.bytes);
+        } catch { return send(response, 409, { error: "Current resume is unavailable or outside approved document roots" }); }
+      }
+      if (request.method === "POST" && ![
+        "/mcp", "/v1/discovery/scan", "/v1/discovery/consider", "/v1/discovery/filter", "/v1/discovery/query",
+        "/v1/direct-applications", "/v1/opportunities"
+      ].includes(url.pathname) && !/^\/v1\/opportunities\/[^/]+\/apply$/.test(url.pathname)
+        && !/^\/v1\/applications\/[^/]+\/(recruiter-outreach|employer-status)$/.test(url.pathname)) {
+        return send(response, 410, { error: "Automatic campaigns and form workers are retired. Use the Chrome queue." });
+      }
 
       if (url.pathname === "/mcp") {
         if (request.method !== "POST") return send(response, 405, { error: "method not allowed" });
@@ -112,20 +142,13 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         if (request.method === "GET") {
           return send(response, 200, { policy: (await profiles.get(identity.profileId))?.standingSubmissionPolicy ?? null });
         }
-        if (request.method === "PUT") {
-          if (!identity.roles?.includes("owner")) return send(response, 403, { error: "owner authority required" });
-          const policy = await profiles.setStandingSubmissionPolicy(
-            identity.profileId, await jsonBody(request), identity);
-          // The profile write atomically includes its versioned owner history.
-          // The state audit is secondary and must not turn a successful policy
-          // mutation into an ambiguous HTTP failure.
-          await service.recordStandingPolicyChange(policy, identity).catch((error) =>
-            console.error("secondary standing policy audit failed", error));
-          return send(response, 200, { policy });
-        }
+        return send(response, 410, { error: "Worker standing permits are retired. Set daily limits in profile preferences." });
       }
+      if (request.method === "POST" && ["/v1/discovery/scan", "/v1/discovery/query", "/v1/discovery/consider"].includes(url.pathname)
+        && service.chromeQueue.list(identity.profileId).waiting) return send(response, 409, { error: "The current application needs owner help or an outcome check. Wait before discovery." });
       if (request.method === "POST" && url.pathname === "/v1/discovery/scan") {
-        return send(response, 200, await discovery.scan(await jsonBody(request), identity));
+        const body = await jsonBody(request);
+        return send(response, 200, await discovery.scan({ ...body, reviewOnly: true }, identity));
       }
       if (request.method === "POST" && url.pathname === "/v1/discovery/consider") {
         const body = await jsonBody(request);
@@ -136,12 +159,6 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "POST" && url.pathname === "/v1/discovery/filter") {
         return send(response, 200, await discovery.filterCandidates(await jsonBody(request), identity));
       }
-      if (request.method === "POST" && url.pathname === "/v1/discovery/reserve/refresh") {
-        const body = await jsonBody(request);
-        const saved = await idempotentHttp(service, request, identity, "reserve_refresh", body,
-          async () => ({ status: 200, body: await discovery.refreshReserve(body, identity) }));
-        return send(response, saved.status, saved.body);
-      }
       if (request.method === "GET" && url.pathname === "/v1/discovery/sources") {
         return send(response, 200, await discovery.describeSources(identity));
       }
@@ -149,39 +166,6 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         const body = await jsonBody(request);
         const saved = await idempotentHttp(service, request, identity, "discovery_query", body,
           async () => ({ status: 200, body: await discovery.query(body, identity) }));
-        return send(response, saved.status, saved.body);
-      }
-      if (request.method === "POST" && url.pathname === "/v1/campaigns") {
-        const body = await jsonBody(request);
-        const saved = await idempotentHttp(service, request, identity, "start_campaign", body,
-          async () => ({ status: 202, body: await discovery.startCampaign(body, identity) }));
-        return send(response, saved.status, saved.body);
-      }
-      if (request.method === "GET" && url.pathname === "/v1/campaigns") {
-        return send(response, 200, { items: service.listCampaigns(identity.profileId) });
-      }
-      const campaign = url.pathname.match(/^\/v1\/campaigns\/([^/]+)$/);
-      if (request.method === "GET" && campaign) {
-        return send(response, 200, service.campaignStatus(campaign[1], identity.profileId));
-      }
-      const campaignWorkflowReport = url.pathname.match(/^\/v1\/campaigns\/([^/]+)\/workflow-report$/);
-      if (request.method === "GET" && campaignWorkflowReport) {
-        return send(response, 200, service.campaignWorkflowReport(campaignWorkflowReport[1], identity.profileId));
-      }
-      const campaignApproval = url.pathname.match(/^\/v1\/campaigns\/([^/]+)\/approve$/);
-      if (request.method === "POST" && campaignApproval) {
-        const body = await jsonBody(request);
-        const saved = await idempotentHttp(service, request, identity, "approve_campaign", body,
-          async () => ({ status: 200,
-            body: await service.approveCampaign(campaignApproval[1], body.entries, identity) }));
-        return send(response, saved.status, saved.body);
-      }
-      const campaignSource = url.pathname.match(/^\/v1\/campaigns\/([^/]+)\/source-results$/);
-      if (request.method === "POST" && campaignSource) {
-        const body = await jsonBody(request);
-        const saved = await idempotentHttp(service, request, identity, "campaign_source_results", body,
-          async () => ({ status: 200,
-            body: await discovery.addCampaignSourceResults(campaignSource[1], body, identity) }));
         return send(response, saved.status, saved.body);
       }
       if (request.method === "POST" && url.pathname === "/v1/direct-applications") {
@@ -206,35 +190,10 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "GET" && url.pathname === "/v1/application-metrics") {
         return send(response, 200, service.applicationMetrics(identity.profileId));
       }
-      const skipApplication = url.pathname.match(/^\/v1\/applications\/([^/]+)\/skip$/);
-      if (request.method === "POST" && skipApplication) {
-        const body = await jsonBody(request);
-        const saved = await idempotentHttp(service, request, identity, "skip_application",
-          { applicationId: skipApplication[1], body },
-          async () => ({ status: 200,
-            body: await service.skipApplication(skipApplication[1], body, identity) }));
-        return send(response, saved.status, saved.body);
-      }
       if (request.method === "GET" && url.pathname === "/v1/confirmations") {
         const items = service.list("confirmations", identity.profileId);
         return send(response, 200, { items: items.filter((item) => item.status === "pending") });
       }
-      if (request.method === "POST" && url.pathname === "/v1/confirmations/approve-batch") {
-        const body = await jsonBody(request);
-        const saved = await idempotentHttp(service, request, identity, "approve_prepared_batch", body,
-          async () => ({ status: 200, body: await service.approvePreparedBatch(body.entries, identity) }));
-        return send(response, saved.status, saved.body);
-      }
-      const refreshPreview = url.pathname.match(/^\/v1\/applications\/([^/]+)\/refresh-preview$/);
-      if (request.method === "POST" && refreshPreview) {
-        const body = await jsonBody(request);
-        const saved = await idempotentHttp(service, request, identity, "refresh_final_preview",
-          { applicationId: refreshPreview[1], body },
-          async () => ({ status: 202,
-            body: await service.refreshFinalPreview(refreshPreview[1], identity, body) }));
-        return send(response, saved.status, saved.body);
-      }
-
       const apply = url.pathname.match(/^\/v1\/opportunities\/([^/]+)\/apply$/);
       if (request.method === "POST" && apply) {
         const body = await jsonBody(request);
@@ -242,20 +201,6 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
           { opportunityId: apply[1], body },
           async () => ({ status: 202, body: await service.requestApplication(apply[1], body, identity) }));
         return send(response, saved.status, saved.body);
-      }
-      const confirmation = url.pathname.match(/^\/v1\/confirmations\/([^/]+)$/);
-      if (request.method === "POST" && confirmation) {
-        const body = await jsonBody(request);
-        const saved = await idempotentHttp(service, request, identity, "resolve_confirmation",
-          { confirmationId: confirmation[1], body },
-          async () => ({ status: 200, body: await service.resolveConfirmation(confirmation[1], body, identity) }));
-        return send(response, saved.status, saved.body);
-      }
-      const manualSubmission = url.pathname.match(/^\/v1\/applications\/([^/]+)\/manual-submission$/);
-      if (request.method === "POST" && manualSubmission) {
-        return send(response, 200, await service.recordManualSubmission(
-          manualSubmission[1], await jsonBody(request), identity
-        ));
       }
       const recruiterOutreach = url.pathname.match(/^\/v1\/applications\/([^/]+)\/recruiter-outreach$/);
       if (request.method === "POST" && recruiterOutreach) {
@@ -266,14 +211,6 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         return send(response, 200, await service.recordEmployerStatus(
           employerStatus[1], await jsonBody(request), identity
         ));
-      }
-      const research = url.pathname.match(/^\/v1\/applications\/([^/]+)\/research$/);
-      if (request.method === "POST" && research) {
-        const body = await jsonBody(request);
-        const saved = await idempotentHttp(service, request, identity, "attach_research",
-          { applicationId: research[1], body },
-          async () => ({ status: 200, body: await service.attachResearch(research[1], body, identity) }));
-        return send(response, saved.status, saved.body);
       }
       return send(response, 404, { error: "route not found" });
     } catch (error) {

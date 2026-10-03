@@ -1,3 +1,5 @@
+> Historical record. The campaign and server browser workflow described below was retired. Follow [the current workflow](agent-led-workflow.md).
+
 # Application efficiency upgrade: implementation guide
 
 The [OpenSpec change](../openspec/changes/single-lane-application-efficiency/proposal.md) records the design and acceptance criteria. This guide records the implemented contracts and remaining rollout evidence. Live pilot records and applicant-specific measurements are kept outside the public repository. A comparable steady-state speed improvement has not been established.

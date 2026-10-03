@@ -48,6 +48,7 @@ export const lever = {
         }));
     const selected = prescreened.filter(({ site, job }) =>
       !isHandled({ source: "lever", externalId: `${site.slug}:${job.id}`,
+          title: job.text, company: site.company, description: descriptionOf(job),
           applyUrl: job.applyUrl, listingUrl: job.hostedUrl }))
       .sort((left, right) => Date.parse(right.job.createdAt ?? "") - Date.parse(left.job.createdAt ?? ""));
     onStats({ rawRows: rows.length, adapterPrescreenRejected: rows.length - prescreened.length,

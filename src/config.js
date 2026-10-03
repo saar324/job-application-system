@@ -32,16 +32,10 @@ export async function loadConfig(env = process.env) {
   if (!config.modes?.[config.defaultMode]) {
     throw new Error(`defaultMode ${config.defaultMode} is not defined in modes`);
   }
-  if (!config.execution?.adapter) throw new Error("execution.adapter is required");
-  if (!["simulation", "webhook"].includes(config.execution.adapter)) {
-    throw new Error(`unsupported execution adapter: ${config.execution.adapter}`);
-  }
-  if (!Number.isInteger(config.execution.concurrency ?? 1) || (config.execution.concurrency ?? 1) < 1
-    || (config.execution.concurrency ?? 1) > 32) {
-    throw new Error("execution.concurrency must be an integer from 1 to 32");
-  }
-  if (!Number.isInteger(config.execution.claimLeaseMs ?? 60_000) || (config.execution.claimLeaseMs ?? 60_000) < 1_000) {
-    throw new Error("execution.claimLeaseMs must be an integer of at least 1000");
+  if (config.execution.workflow !== "chrome_session") throw new Error("execution.workflow must be chrome_session");
+  for (const key of ["adapter", "concurrency", "claimLeaseMs", "workerCallbackToken"]) delete config.execution[key];
+  for (const settings of Object.values(config.modes)) {
+    for (const key of ["autoApply", "autoApplyDiscovered", "submissionApproval", "requireConfirmationFor"]) delete settings[key];
   }
   if (!["1", "2"].includes(String(config.discovery?.scorerVersion ?? "2"))) {
     throw new Error("discovery.scorerVersion must be 1 or 2");
@@ -74,9 +68,6 @@ export async function loadConfig(env = process.env) {
       throw new Error(`${mode}.dailyApplicationCap must be a positive integer`);
     }
     if (!Array.isArray(settings.sources)) throw new Error(`${mode}.sources must be an array`);
-    if (!["automatic", "always"].includes(settings.submissionApproval ?? "automatic")) {
-      throw new Error(`${mode}.submissionApproval must be automatic or always`);
-    }
   }
   return config;
 }

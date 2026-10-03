@@ -39,6 +39,7 @@ export const arbeitnow = {
         if (!row?.slug || !row?.title) { adapterPrescreenRejected += 1; continue; }
         if (unique.has(row.slug)
           || isHandled({ source: "arbeitnow", externalId: row.slug,
+            title: row.title, company: row.company_name || "Unknown company", description: plainText(row.description),
             applyUrl: row.url, listingUrl: row.url })) continue;
         unique.set(row.slug, row);
       }

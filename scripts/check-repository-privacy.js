@@ -137,14 +137,13 @@ for (const [mode, settings] of Object.entries(defaults.modes ?? {})) {
 const starterConfig = JSON.parse(await readFile(path.join(root, "config/discovery.example.json"), "utf8"));
 const publicFeedIds = ["remoteok", "arbeitnow", "jobicy", "himalayas"];
 const expectedStarterConfig = {
-  execution: { adapter: "simulation" },
+  execution: { workflow: "chrome_session" },
   modes: Object.fromEntries(["full_time", "freelance"].map((mode) => [mode, {
-    sources: publicFeedIds, autoApply: false, autoApplyDiscovered: false,
-    submissionApproval: "always"
+    sources: publicFeedIds
   }]))
 };
 if (!isDeepStrictEqual(starterConfig, expectedStarterConfig)) {
-  failures.push("config/discovery.example.json: starter must contain only neutral public feeds and simulation settings");
+  failures.push("config/discovery.example.json: starter must contain only neutral public feeds and passive Chrome settings");
 }
 for (const [provider, settings] of Object.entries(defaults.discovery?.sourceOptions ?? {})) {
   for (const [key, value] of Object.entries(settings)) {
@@ -315,7 +314,7 @@ const expectedWritingStyle = {
   },
   qualityChecks: [
     "Answer the exact prompt.", "Remove unsupported claims and placeholders.",
-    "Check grammar and required length.", "Request the applicant's approval at the final submission step."
+    "Check grammar and required length.", "Review every final field under the owner's submission delegation. Pause for missing facts or uncovered commitments."
   ]
 };
 if (!isDeepStrictEqual(writingStyle, expectedWritingStyle)) {
