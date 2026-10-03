@@ -1,7 +1,6 @@
 ---
 name: job-application
 description: Search for jobs and apply through one interactive Chrome session, with a durable ordered queue, verified applicant facts, submission receipts, and immediate pauses for owner help.
-metadata: {"openclaw":{"emoji":"💼","requires":{"bins":["node"]}}}
 ---
 
 # Job Application

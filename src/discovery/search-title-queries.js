@@ -43,7 +43,7 @@ function lexicalVariants(title) {
 
 /**
  * Produce a bounded lexical plan. `cycle` is a durable, zero-based per-profile
- * campaign ordinal supplied by the caller, not a random campaign identifier.
+ * completed source-scan ordinal supplied by the caller.
  * A software-role plan reserves a broad probe. Three-phase ordering covers
  * up to three times the remaining specific slots in three cycles.
  */
