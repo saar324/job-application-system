@@ -1,4 +1,4 @@
 interface:
   display_name: "Job Application"
-  short_description: "Run an on-demand job application batch"
-  default_prompt: "Use $job-application for the batch I request. Count only verified employer receipts, continue past safely checkpointed blockers, and then handle the review backlog with me one application at a time."
+  short_description: "Apply in Chrome with one session and a saved queue"
+  default_prompt: "Use $job-application to search and apply in Chrome, process my queued links in order, submit after your review, and stop to wait whenever you need my help."

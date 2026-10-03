@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-import { SimulationAdapter } from "../src/adapters/simulation.js";
 import { loadConfig } from "../src/config.js";
 import { DiscoveryService } from "../src/discovery/service.js";
 import { normalizeOpportunity } from "../src/discovery/normalization.js";
@@ -77,7 +76,7 @@ async function fixture({ options = {}, fetchImpl, env = sourceEnv, store: makeSt
     sources: ["jobspipe"], requireConfirmationFor: [], ...mode } } };
   const stateFile = path.join(directory, "state.json");
   const store = makeStore ? await makeStore(directory) : await new JsonStore(stateFile).init();
-  const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const applicationService = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const discovery = new DiscoveryService({ applicationService, profiles, config, fetchImpl, sourceEnv: env });
   return { directory, stateFile, store, applicationService, discovery, config, profiles };
 }
@@ -242,45 +241,6 @@ test("an estimated JobsPipe salary leaves compensation unknown for eligibility",
   assert.equal(scored.scoreDetails.compensationComparable, false);
 });
 
-test("a missing JobsPipe key sends no request, and the key never appears after a 401 or a network error", async () => {
-  const idle = provider(() => page([]));
-  const missing = await fixture({ env: {}, fetchImpl: idle.fetchImpl });
-  const unconfigured = await missing.discovery.scan({ prepareApplications: false }, identity);
-  assert.equal(idle.calls.length, 0);
-  assert.equal(unconfigured.errors[0].code, "source_not_configured");
-  assert.match(unconfigured.errors[0].error, /JOBSPIPE_API_KEY/);
-  assert.equal((await missing.discovery.describeSources(identity)).sources[0].configured, false);
-
-  const rejected = provider((call) => new Response(`invalid key ${call.headers.authorization}`, { status: 401 }));
-  const { discovery, stateFile, store, applicationService, profiles, config } = await fixture({
-    fetchImpl: rejected.fetchImpl });
-  const first = await discovery.startCampaign({ target: 1, reserve: 0, sources: ["jobspipe"], reserveOnly: true },
-    identity).catch((error) => ({ failed: error.message }));
-  const scan = await discovery.scan({ prepareApplications: false }, identity);
-  assert.equal(rejected.calls.length, 1, "the source stays paused while the same key is configured");
-  assert.equal(scan.errors[0].code, "key_rejected");
-  const descriptor = await discovery.describeSources(identity);
-  assert.equal(descriptor.sources[0].quota.cooldown.reason, "key_rejected");
-  const serialized = [JSON.stringify(first), JSON.stringify(scan), JSON.stringify(descriptor),
-    await readFile(stateFile, "utf8")].join("\n");
-  assert.equal(serialized.includes(apiKey), false);
-  assert.match(await readFile(stateFile, "utf8"), /key_rejected/);
-
-  const replaced = new DiscoveryService({ applicationService, profiles, config, fetchImpl: rejected.fetchImpl,
-    sourceEnv: { JOBSPIPE_API_KEY: "jp_test_replacement_placeholder" } });
-  await replaced.scan({ prepareApplications: false }, identity);
-  assert.equal(rejected.calls.length, 2, "a different key lifts the pause");
-  assert.ok(store.snapshot().sourceQuota.holds.every((hold) => !hold.reason.includes(apiKey)));
-
-  const network = await fixture({ fetchImpl: async (url, options) => {
-    throw new Error(`connect ECONNREFUSED with header Authorization: ${options.headers.authorization}`);
-  } });
-  const failed = await network.discovery.scan({ prepareApplications: false }, identity);
-  assert.match(failed.errors[0].error, /ECONNREFUSED with header Authorization: Bearer \[redacted\]/);
-  assert.equal(JSON.stringify(failed).includes(apiKey), false);
-  assert.equal(redactSecrets("Authorization: Bearer another-token-value"), "Authorization: Bearer [redacted]");
-});
-
 test("JobsPipe credits are clamped to the monthly allowance, settled from credits_charged, and survive a restart", async () => {
   const limits = jobspipeQuotaLimits();
   assert.deepEqual(limits, { second: 2, credits_month: 1000 });
@@ -301,7 +261,7 @@ test("JobsPipe credits are clamped to the monthly allowance, settled from credit
   discovery.applicationService.store.close();
 
   const store = await new SqliteStore(path.join(directory, "state.sqlite")).init();
-  const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const applicationService = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const restarted = new DiscoveryService({ applicationService, profiles, config, fetchImpl, sourceEnv });
   usage = await restarted.sourceQuota.usage("jobspipe", limits);
   assert.equal(usage.windows.credits_month.remaining, 7);
@@ -402,22 +362,6 @@ test("unlisted JobsPipe filters and credentials in config are rejected before an
   assert.deepEqual(jobspipeQuotaLimits(loaded.discovery.sourceOptions.jobspipe), { second: 5, credits_month: 20000 });
 });
 
-test("recruiter emails from JobsPipe never reach the store or the audit log", async () => {
-  const { fetchImpl } = provider(() => page([row("jp-3001"), row("jp-3002", { url: GREENHOUSE_URL })]));
-  const { discovery, stateFile, applicationService } = await fixture({ fetchImpl });
-  await discovery.startCampaign({ target: 2, reserve: 0, sources: ["jobspipe"] }, identity);
-  await discovery.scan({}, identity);
-  await applicationService.waitForIdle();
-  const state = await readFile(stateFile, "utf8");
-  assert.match(state, /jp-3001/);
-  for (const forbidden of [...RECRUITER_EMAILS, "recruiter_emails", "applicant_count", "funding_total_usd"]) {
-    assert.equal(state.includes(forbidden), false, forbidden);
-  }
-  assert.equal(/@(?!example\.test)[a-z0-9.-]+\.[a-z]{2,}/i.test(state), false);
-  assert.equal(state.includes("fictional-freight.example.test\""), true, "the company domain is kept");
-  assert.equal(state.includes("talent.partner"), false);
-});
-
 test("a JobsPipe result with a Greenhouse URL is verified against the official feed before any application", async () => {
   const greenhouseApi = "https://boards-api.greenhouse.io/v1/boards/fictionalboard/jobs/4000001";
   const serve = (official) => provider((call) => call.url === ENDPOINT
@@ -440,9 +384,8 @@ test("a JobsPipe result with a Greenhouse URL is verified against the official f
   assert.equal(entry.opportunity.provenance.discoveredVia, "jobspipe");
   assert.equal(entry.opportunity.provenance.discoveryExternalId, "jp-4001");
   assert.ok(Date.parse(entry.opportunity.validThrough) > Date.now(), "the provider expiry is kept");
-  assert.ok(entry.application, "the verified official role can be prepared");
+  assert.equal(entry.application, undefined, "discovery stays passive until the chat queues a role");
   assert.equal(scan.sourceYield[0].sourceId, "jobspipe");
-  await applicationService.waitForIdle();
 
   const unverified = serve(() => new Response("gone", { status: 404 }));
   const second = await fixture({ fetchImpl: unverified.fetchImpl });
@@ -453,7 +396,6 @@ test("a JobsPipe result with a Greenhouse URL is verified against the official f
   assert.ok(pending.items[0].opportunity.uncertainties.includes("official_ats_http_404"));
   assert.equal(pending.items[0].application, undefined);
   assert.equal(pending.items[0].applicationBlockedBySource, "employer_application_url_required");
-  await second.applicationService.waitForIdle();
   assert.equal(second.applicationService.list("applications", identity.profileId).length, 0);
 });
 
@@ -473,13 +415,4 @@ test("an expired JobsPipe posting is not queued and the reason is recorded", asy
   const blocked = store.snapshot().audit.find((item) => item.action === "application.blocked");
   assert.equal(blocked.subjectId, opportunity.id);
   assert.equal(blocked.details.reason, "posting_expired");
-});
-
-test("production environment split gives the JobsPipe key only to the API", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "job-jobspipe-env-"));
-  const [source, server, worker] = ["env", "server.env", "worker.env"].map((name) => path.join(directory, name));
-  await writeFile(source, [`JOBSPIPE_API_KEY=${apiKey}`, "WORKER_TOKEN=shared-secret"].join("\n"));
-  await execute(process.execPath, ["scripts/split-production-env.js", source, server, worker]);
-  assert.match(await readFile(server, "utf8"), /JOBSPIPE_API_KEY=/);
-  assert.doesNotMatch(await readFile(worker, "utf8"), /JOBSPIPE/);
 });

@@ -3,7 +3,6 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SimulationAdapter } from "../src/adapters/simulation.js";
 import { DiscoveryService } from "../src/discovery/service.js";
 import { handledRoleIndex, isHandledRole, knownRoleIndex, relatedApplicationRole,
   roleKeys } from "../src/discovery/handled-roles.js";
@@ -89,7 +88,7 @@ test("unresolved listings stay retriable and a verified destination updates the 
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-pending-discovery-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   const config = { defaultMode: "full_time", modes: { full_time: { minimumScore: 0 } } };
-  const service = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const service = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const identity = { actorId: "owner", profileId: "owner" };
   const pending = await service.addOpportunity({ source: "board", externalId: "role-1",
     title: "Platform Engineer", company: "Example", score: 80,
@@ -123,7 +122,7 @@ test("an observed direct URL without employer verification remains retriable", a
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-unverified-discovery-"));
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   const config = { defaultMode: "full_time", modes: { full_time: { minimumScore: 0 } } };
-  const service = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const service = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const identity = { actorId: "owner", profileId: "owner" };
   const lead = await service.addOpportunity({ source: "board", externalId: "role-2",
     title: "Platform Engineer", company: "Example",
@@ -149,7 +148,7 @@ test("official board search excludes handled and previously seen roles before ap
     boards: [{ slug: "example", company: "Example" }] } } }, modes: { full_time: {
     minimumScore: 0, sources: ["ashby"], autoApplyDiscovered: false
   } } };
-  const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const applicationService = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
   const fetchImpl = async () => new Response(JSON.stringify({ jobs: ids.map((id, index) => ({
     id, title: "Engineer", isRemote: true, location: "Europe, Remote",

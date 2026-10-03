@@ -45,7 +45,7 @@ test("jobctl lets the server decide whether a missing credential is allowed", as
   assert.equal(JSON.parse(stdout).profileId, "local-profile");
 });
 
-test("jobctl forwards a supplied campaign idempotency key", async (context) => {
+test("jobctl forwards a supplied queue idempotency key", async (context) => {
   let key;
   const server = createServer((request, response) => {
     key = request.headers["idempotency-key"];
@@ -58,9 +58,9 @@ test("jobctl forwards a supplied campaign idempotency key", async (context) => {
   }));
 
   const address = server.address();
-  await executeWithInput(process.execPath, ["bin/jobctl.js", "campaign-start"], {
+  await executeWithInput(process.execPath, ["bin/jobctl.js", "queue-add"], {
     env: { ...process.env, JOB_SERVER_URL: `http://127.0.0.1:${address.port}`, JOB_SERVER_TOKEN: "token" }
-  }, '{"target":10,"idempotencyKey":"campaign-request-1"}');
+  }, '{"url":"https://example.test/apply","idempotencyKey":"campaign-request-1"}');
   assert.equal(key, "campaign-request-1");
 });
 

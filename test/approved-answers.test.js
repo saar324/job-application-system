@@ -7,7 +7,6 @@ import { ProfileStore } from "../src/profile-store.js";
 import { reusableApprovedAnswer } from "../src/approved-answers.js";
 import { JsonStore } from "../src/store.js";
 import { ApplicationService } from "../src/service.js";
-import { SimulationAdapter } from "../src/adapters/simulation.js";
 import { createHttpServer } from "../src/http.js";
 
 test("only the profile owner can approve a current employer-scoped answer", async () => {
@@ -46,7 +45,7 @@ test("HTTP approval route rejects the agent credential and ordinary profile PATC
   const profiles = await new ProfileStore(path.join(directory, "profiles.json"), { allowMissing: true }).init();
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   const config = { defaultMode: "full_time", modes: { full_time: { minimumScore: 0 } } };
-  const service = new ApplicationService({ store, profiles, config, adapter: new SimulationAdapter() });
+  const service = new ApplicationService({ store, profiles, config, adapter: { name: "chrome_session" } });
   const server = createHttpServer({ service, profiles, config, discovery: {},
     authenticate: (request) => request.headers.authorization === "Bearer owner-token"
       ? { actorId: "owner", profileId: "person", roles: ["owner"] }
