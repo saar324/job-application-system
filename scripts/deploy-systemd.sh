@@ -53,7 +53,6 @@ chown -R root:root "$runtime_root"
 node "$runtime_root/scripts/update-production-env.js" "$environment_file"
 chown jobapp-api:jobapply "$profiles_file" "$tokens_file" "$config_file"
 chmod 0600 "$profiles_file" "$tokens_file" "$config_file"
-runuser -u jobapp-api -- node "$runtime_root/scripts/migrate-profile-settings.js" "$profiles_file"
 install -o root -g root -m 0600 "$environment_file" "$config_root/server.env"
 install -o root -g root -m 0644 "$runtime_root/deploy/systemd/job-application-server.service" /etc/systemd/system/
 systemctl daemon-reload

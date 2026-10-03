@@ -8,20 +8,6 @@ import test from "node:test";
 
 const execute = promisify(execFile);
 
-test("deployment migrates the profile as its owning service account", async () => {
-  const script = await readFile("scripts/deploy-systemd.sh", "utf8");
-  assert.match(
-    script,
-    /runuser -u jobapp-api -- node "\$runtime_root\/scripts\/migrate-profile-settings\.js"/,
-    "running the migration as root would replace the private profile with a root-owned file"
-  );
-  assert.ok(
-    script.indexOf('chown jobapp-api:jobapply "$profiles_file"')
-      < script.indexOf('runuser -u jobapp-api -- node "$runtime_root/scripts/migrate-profile-settings.js"'),
-    "the private profile must be readable by the service account before migration"
-  );
-});
-
 test("production environment updater replaces development paths with isolated absolute paths", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-production-env-test-"));
   const environment = path.join(directory, "env");
