@@ -50,7 +50,7 @@ test("jobctl forwards a supplied queue idempotency key", async (context) => {
   const server = createServer((request, response) => {
     key = request.headers["idempotency-key"];
     response.writeHead(202, { "content-type": "application/json" });
-    response.end('{"campaignId":"11111111-1111-4111-8111-111111111111"}\n');
+    response.end('{"applicationId":"11111111-1111-4111-8111-111111111111"}\n');
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(() => new Promise((resolve, reject) => {
@@ -60,8 +60,8 @@ test("jobctl forwards a supplied queue idempotency key", async (context) => {
   const address = server.address();
   await executeWithInput(process.execPath, ["bin/jobctl.js", "queue-add"], {
     env: { ...process.env, JOB_SERVER_URL: `http://127.0.0.1:${address.port}`, JOB_SERVER_TOKEN: "token" }
-  }, '{"url":"https://example.test/apply","idempotencyKey":"campaign-request-1"}');
-  assert.equal(key, "campaign-request-1");
+  }, '{"url":"https://example.test/apply","idempotencyKey":"queue-request-1"}');
+  assert.equal(key, "queue-request-1");
 });
 
 test("skill backlog and handoff expose one paused form and flag uncertain outcomes", async (context) => {
