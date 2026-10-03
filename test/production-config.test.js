@@ -8,29 +8,6 @@ import test from "node:test";
 
 const execute = promisify(execFile);
 
-test("production environment splitter withholds API and vault authority from worker", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "job-env-test-"));
-  const source = path.join(directory, "legacy.env");
-  const server = path.join(directory, "server.env");
-  const worker = path.join(directory, "worker.env");
-  await writeFile(source, [
-    "JOB_SERVER_TOKENS_FILE=/secret/tokens.json",
-    "JOB_SERVER_PROFILES_FILE=/secret/profiles.json",
-    "APPLICATION_WEBHOOK_TOKEN=shared-secret",
-    "APPLICATION_WEBHOOK_URL=http://127.0.0.1:4320/v1/submit",
-    "WORKER_TOKEN=shared-secret",
-    "WORKER_ARTIFACTS=/worker/artifacts",
-    "JOB_SERVER_CREDENTIAL_VAULTS=/secret/vaults"
-  ].join("\n"));
-  await execute(process.execPath, ["scripts/split-production-env.js", source, server, worker]);
-  const serverRaw = await readFile(server, "utf8");
-  const workerRaw = await readFile(worker, "utf8");
-  assert.match(serverRaw, /JOB_SERVER_TOKENS_FILE/);
-  assert.match(serverRaw, /JOB_SERVER_CREDENTIAL_VAULTS/);
-  assert.match(workerRaw, /WORKER_TOKEN/);
-  assert.doesNotMatch(workerRaw, /TOKENS_FILE|PROFILES_FILE|CREDENTIAL_VAULTS|APPLICATION_WEBHOOK_TOKEN/);
-});
-
 test("deployment migrates the profile as its owning service account", async () => {
   const script = await readFile("scripts/deploy-systemd.sh", "utf8");
   assert.match(
@@ -67,14 +44,10 @@ test("production environment updater replaces development paths with isolated ab
   assert.match(output, /JOB_SERVER_ALLOWED_DOCUMENT_ROOTS=\/srv\/private-applicant-documents/);
 });
 
-test("compose keeps private API state away from the worker and avoids host IPC", async () => {
-  const compose = await readFile("compose.yaml", "utf8");
-  assert.match(compose, /JOB_SERVER_CONFIG: \/app\/config\/local\.json/);
-  assert.match(compose, /job-documents:\/app\/data\/documents:ro/);
-  assert.match(compose, /WORKER_DOCUMENT_ROOT: \/app\/data\/documents/);
-  assert.match(compose, /shm_size: "1gb"/);
-  assert.doesNotMatch(compose, /ipc:\s*host/);
-  const workerSection = compose.split("\n  application-worker:")[1].split("\nvolumes:")[0];
-  assert.doesNotMatch(workerSection, /^\s*- \.\/data:\/app\/data\s*$/m);
-  assert.doesNotMatch(workerSection, /^\s*env_file:/m);
+test("compose runs only the passive loopback API", async () => {
+ const compose=await readFile("compose.yaml","utf8");
+ assert.match(compose,/127\.0\.0\.1:4310:4310/);
+ assert.doesNotMatch(compose,/application-worker|WEBHOOK|WORKER_|depends_on/);
+ const unit=await readFile("deploy/systemd/job-application-server.service","utf8");
+ assert.doesNotMatch(unit,/job-application-worker|LoadCredential/);
 });

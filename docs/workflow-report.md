@@ -1,3 +1,5 @@
+> Historical record. The campaign and server browser workflow described below was retired. Follow [the current workflow](agent-led-workflow.md).
+
 # Campaign workflow trace
 
 Run `jobctl campaign-report CAMPAIGN_ID` or `GET /v1/campaigns/CAMPAIGN_ID/workflow-report` with the profile's bearer token. The response uses durable `workflow.stage` events in the application state. Events contain UTC timestamps, stage names, IDs, counts, and measured durations. They do not contain form answers, names, email addresses, job text, URLs, or document paths.

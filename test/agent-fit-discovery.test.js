@@ -3,7 +3,6 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SimulationAdapter } from "../src/adapters/simulation.js";
 import { DiscoveryService } from "../src/discovery/service.js";
 import { acceptedFit, fitPassesGate, postingFingerprint,
   reviewedEligibility } from "../src/discovery/fit-assessment.js";
@@ -40,7 +39,7 @@ async function setup() {
       requireConfirmationFor: [] } } };
   const store = await new JsonStore(path.join(directory, "state.json")).init();
   const applicationService = new ApplicationService({ store, config,
-    adapter: new SimulationAdapter(), profiles });
+    adapter: { name: "chrome_session" }, profiles });
   const fetchImpl = async () => new Response(JSON.stringify({ jobs: [row] }),
     { status: 200, headers: { "content-type": "application/json" } });
   const discovery = new DiscoveryService({ applicationService, profiles, config,
@@ -56,8 +55,7 @@ test("agent review receives unhandled low-score roles and a relevant verdict can
   assert.equal(applicationService.list("opportunities", identity.profileId).length, 0);
   const result = await discovery.considerCandidate({ candidate: scan.candidates[0],
     fit: { decision: "relevant", reason: "The role matches verified TypeScript service work." } }, identity);
-  assert.equal(result.status, "queued");
-  await applicationService.waitForIdle();
+  assert.equal(result.status, "pending");
   assert.equal(applicationService.list("applications", identity.profileId).length, 1);
   const second = await discovery.scan({ reviewOnly: true }, identity);
   assert.equal(second.candidates.length, 0);

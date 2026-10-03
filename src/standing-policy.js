@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 
-const HOLD_KINDS = new Set(["missing_answer", "legal_attestation", "compensation_conflict",
-  "location_conflict", "rate_conflict", "scope_conflict", "identity_change"]);
 export const LEGAL_ATTESTATION_FIELD = /\b(?:legal(?:ly)?|authori[sz](?:ed|ation)|consent|certif(?:y|ication)|agree|privacy policy|terms of (?:use|service)|work (?:eligib(?:le|ility)|permit|authori[sz]ation)|right to work|visa|sponsorship|sponsor|citizen(?:ship)?|immigration|background check|export control|security clearance)\b/i;
 
 export function validateStandingPolicy(input) {
@@ -38,32 +36,6 @@ export function nextStandingPolicy(current, input, identity) {
     enabledAt: body.mode === "automatic" ? new Date().toISOString() : null,
     revokedAt: body.mode === "always" ? new Date().toISOString() : null,
     ownerActorId: identity.actorId, updatedAt: new Date().toISOString() };
-}
-
-export function policyCovers(policy, opportunity, mode, at = Date.now()) {
-  if (!policy || policy.mode !== "automatic" || policy.revokedAt
-    || policy.expiresAt && Date.parse(policy.expiresAt) <= at) return false;
-  let host;
-  try { host = new URL(opportunity.applyUrl).hostname.toLowerCase(); } catch { return false; }
-  return policy.modes.includes(mode) && policy.sources.includes(opportunity.source)
-    && policy.destinationHosts.some((allowed) => host === allowed || allowed === "*");
-}
-
-export function hardPolicyHolds({ opportunity, mode, answers = {}, profile }) {
-  const holds = [];
-  for (const question of opportunity.requiredQuestions ?? []) {
-    if (answers[question.key] === undefined || answers[question.key] === "") {
-      holds.push({ kind: "missing_answer", message: question.label, fields: [question.key] });
-    }
-  }
-  for (const declaration of opportunity.legalAttestations ?? []) {
-    // Ordinary profile answers are agent-writable and cannot establish owner authority.
-    holds.push({ kind: "legal_attestation", message: declaration.label, fields: [declaration.key] });
-  }
-  for (const kind of opportunity.conflicts ?? []) {
-    if (HOLD_KINDS.has(kind)) holds.push({ kind, message: `Resolve ${kind.replaceAll("_", " ")}` });
-  }
-  return holds;
 }
 
 function bad(message) { return Object.assign(new Error(message), { status: 400 }); }

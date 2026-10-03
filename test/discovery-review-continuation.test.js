@@ -14,7 +14,6 @@ import { postingFingerprint } from "../src/discovery/fit-assessment.js";
 import { ProfileStore } from "../src/profile-store.js";
 import { ApplicationService } from "../src/service.js";
 import { JsonStore } from "../src/store.js";
-import { SimulationAdapter } from "../src/adapters/simulation.js";
 
 const adapters = { ashby, greenhouse, lever, remoteok, arbeitnow };
 const identity = { actorId: "review-agent", profileId: "person", roles: ["agent"] };
@@ -47,7 +46,7 @@ async function fixture(t, source, { changed = false, seedProfile = "person", app
     : { boards: [{ [source === "greenhouse" ? "token" : "slug"]: "fixture", company: "Fixture" }] };
   const config = { defaultMode: "full_time", discovery: { sourceOptions: { [source]: sourceConfig } },
     modes: { full_time: { minimumScore: 0, autoApply: false, dailyApplicationCap: 10, sources: [source], requireConfirmationFor: [] } } };
-  const service = new ApplicationService({ store, profiles, config, adapter: new SimulationAdapter() });
+  const service = new ApplicationService({ store, profiles, config, adapter: { name: "chrome_session" } });
   service.enqueue = () => {};
   const oldRows = await adapters[source].search({ sourceConfig, fetchImpl: async () => new Response(JSON.stringify(feed(source))) });
   for (const raw of oldRows.slice(0, 2)) {

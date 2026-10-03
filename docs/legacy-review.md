@@ -1,3 +1,5 @@
+> Historical record. The campaign and server browser workflow described below was retired. Follow [the current workflow](agent-led-workflow.md).
+
 # Review of `openclaw-skill-job-hunter`
 
 The old project is a strong discovery prototype. Its reusable parts are the platform-adapter boundary, normalized listing model, URL/platform deduplication, evidence-based scoring, salary samples, lifecycle tracking, follow-up scheduling, structured JSON output, and optional Notion reporting.

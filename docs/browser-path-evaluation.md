@@ -1,3 +1,5 @@
+> Historical record. The campaign and server browser workflow described below was retired. Follow [the current workflow](agent-led-workflow.md).
+
 # Final browser path evaluation (controlled fixture)
 
 The worker now waits for delayed form saves and reads every visible current-step value again before requesting a final
