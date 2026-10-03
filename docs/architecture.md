@@ -1,74 +1,23 @@
 # Architecture
 
-The API is the durable system of record and agents are its primary clients. Codex, OpenClaw, custom agents, and other runtimes are replaceable adapters that use the same profile-bound credentials. The included `jobctl` command-line program is the reference transport, test client, and manual recovery tool; it is not the production orchestrator.
-
 ```text
-applicant agent A ----- token for profile A ----+
-                                                |
-applicant agent B ----- token for profile B ----+--> Job API
-                                                      |-- MCP + HTTP adapters
-                                                      |-- profile store
-public job APIs --------------------------------------|-- discovery + scoring
-                                                      |-- policy + daily caps
-                                                      |-- transactional SQLite state
-                                                      |-- confirmation inbox
-                                                      |-- receipts + audit events
-                                                      |
-                                                      +--> isolated browser worker
+Owner <-> one interactive session <-> Chrome <-> official job and employer forms
+                    |
+                 jobctl
+                    |
+             profile-bound API
+                    |
+        SQLite queue, facts, logs and receipts
 ```
 
-## Agent contract
+The interactive session owns browsing, fit review, form filling, original prose and submission. The API is passive: it never starts application forms or advances the queue after an owner blocker. A job belongs to one chat session until completion or explicitly authorized session recovery.
 
-- Agents run on owner request: recover existing work, discover or add opportunities, request applications, observe bounded progress, and handle the review backlog after independent work is done.
-- The agent runtime owns bounded polling, backoff, and user notification. Scheduling is optional and requires an explicit owner request.
-- Every request is authenticated to one profile; an agent cannot select another applicant in its payload.
-- Queue delivery and application creation are idempotent so retries do not duplicate submissions.
-- Unknown facts, legal attestations, CAPTCHAs, sensitive answers, and final approval become durable confirmation items for the person.
-- Agents resume the same application after confirmation or visible-browser handoff and report only verified submission receipts. A paused field checkpoint helps reconstruct a fresh form and does not prove that the employer retained a value.
-- Agent runtimes never need direct access to the state database, credential vault, or unrestricted document storage.
+Links and reviewed opportunities append in durable order. New messages can add links while a job is active or waiting. Atomic claims allow only one current application per applicant. Checkpoints preserve safe observed values and provenance. Browser tabs stay visible during owner help; state survives tab loss and chat changes.
 
-## Trust boundaries
+Before Submit, the session saves the complete live preview and real reviewer provenance. The API checks required fields, applicable legal facts and consent, current applicant authority, daily capacity and a matching review fingerprint. It records one final attempt before the click. Retries require an explicit employer validation rejection and fresh review; unknown outcomes never authorize a replay.
 
-- Authentication maps a bearer token to a fixed `profileId`; request bodies cannot select another profile.
-- Profile data, tokens, resumes, application state, credential vaults, and receipts are private runtime data, not repository content.
-- The API validates and stages only allowed documents for the current application.
-- The browser worker receives one application and one matching profile at a time. It cannot read the API state directory or original document roots.
-- Every browser attempt runs in a fresh context and closes all pages before returning.
-- Navigation is restricted to HTTPS and an allowlist. Add employer-specific domains through private environment configuration.
-- A click is not a receipt. Production submission requires a timestamp, final URL, and visual receipt hash.
+An employer success receipt must match the recorded attempt, destination and observation time, with success text and a visual evidence hash. Only verified employer receipts count toward a request. Historical records, manual reconciliation, employer statuses and recruiter drafts remain separate evidence.
 
-## State model
+Authentication derives the applicant from the profile credential. Credentials, verification codes and cookies never enter queue previews or checkpoints. Source catalogs and applicant facts remain private. Existing source adapters, known-role filtering, source budgets, official destination verification and historical log inspection continue to work.
 
-```text
-opportunity
-  -> application queued
-  -> preparing
-  -> waiting_confirmation | submitted | failed | manual_review
-```
-
-Queue claims and execution attempts are durable. Different profiles have independent serial lanes under a global concurrency limit. A claim interrupted before browser execution can be recovered; an interruption after the execution boundary always becomes manual review.
-
-Confirmation items are durable and idempotent. Unknown questions, legal attestations, final approval, CAPTCHA handoffs, and ambiguous outcomes never become silent guesses.
-
-## Opportunity understanding
-
-Discovery normalizes provider data into a versioned canonical opportunity with field-level provenance. Public ATS data and Schema.org `JobPosting` metadata take precedence over deterministic text parsing. Skill matching uses token boundaries and aliases. Optional structured extraction and embeddings can enrich unresolved public job fields and ranking, but deterministic location, authorization, employment-type, compensation, and exclusion gates always win.
-
-## Adaptive execution
-
-Known Playwright adapters remain the default. An optional HTTP-backed adaptive provider can propose a small typed action set for unsupported forms. Worker-owned code validates every action, resolves values only from authoritative profile or approved application data, applies origin and budget limits, and enforces the same preview fingerprint and receipt rules. Before an observation leaves the worker, URL query/fragment data and known applicant, answer, and credential values are removed. Page content is untrusted and cannot authorize submission or request secrets, and success text is accepted only when newly observed after an approved final-submit action. The feature is disabled by default and has global, profile, mode, and domain kill switches.
-
-## Credential isolation
-
-Each profile has a separate AES-256-GCM credential-vault file and key. Entries are bound to an HTTPS origin. Passwords are excluded from application state, audit events, confirmation payloads, logs, and worker receipts.
-
-## Production layout
-
-The included systemd deployment uses:
-
-- `/opt/job-application-system`: root-owned application code
-- `/etc/job-application`: root-owned environment files and vault keys
-- `/var/lib/job-application`: API state, private profiles, and encrypted profile vaults
-- `/var/lib/job-application-worker`: staged documents, browser binaries, artifacts, and receipts
-
-The API runs as `jobapp-api`; Chromium runs as `jobapply-worker`. A narrow `jobapply` group permits access only to staged documents.
+The default runtime exposes passive queue APIs. Automatic campaign mutation, server browser callbacks and batch approval execution are retired. Retired browser workers and campaign runners have been removed. Historical state remains readable.

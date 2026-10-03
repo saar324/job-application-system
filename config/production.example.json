@@ -1,6 +1,6 @@
 {
   "execution": {
-    "adapter": "webhook",
-    "maxApplicationsPerDay": 10
+    "maxApplicationsPerDay": 10,
+    "workflow": "chrome_session"
   }
 }

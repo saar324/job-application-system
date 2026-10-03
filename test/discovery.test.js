@@ -3,7 +3,6 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SimulationAdapter } from "../src/adapters/simulation.js";
 import { DiscoveryService } from "../src/discovery/service.js";
 import { scoreOpportunity } from "../src/discovery/scoring.js";
 import { discoveryTitleRelevant } from "../src/discovery/title-preferences.js";
@@ -19,7 +18,7 @@ import { remoteok } from "../src/discovery/sources/remoteok.js";
 import { arbeitnow } from "../src/discovery/sources/arbeitnow.js";
 import { needsEmployerApplyUrl } from "../src/discovery/application-destination.js";
 
-test("full-time discovery scores, ingests, and applies to qualifying jobs", async () => {
+test("full-time discovery scores and saves jobs without executing an application", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-discovery-test-"));
   const profiles = await new ProfileStore(path.join(directory, "profiles.json"), { allowMissing: true }).init();
   await profiles.patch("applicant-one", {
@@ -46,7 +45,7 @@ test("full-time discovery scores, ingests, and applies to qualifying jobs", asyn
     }
   };
   const store = await new JsonStore(path.join(directory, "state.json")).init();
-  const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const applicationService = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const roleId = "11111111-1111-4111-8111-111111111111";
   const applyUrl = `https://jobs.ashbyhq.com/sample/${roleId}/application`;
   const fetchImpl = async () => new Response(JSON.stringify({ jobs: [{
@@ -60,9 +59,8 @@ test("full-time discovery scores, ingests, and applies to qualifying jobs", asyn
   assert.equal(result.found, 1);
   assert.deepEqual(result.sources, ["ashby"]);
   assert.equal(result.qualifying, 1);
-  assert.equal(result.items[0].application.status, "queued");
-  await applicationService.waitForIdle();
-  assert.equal(applicationService.list("applications", "applicant-one")[0].status, "submitted");
+  assert.equal(result.items[0].application, undefined);
+  assert.equal(applicationService.list("applications", "applicant-one").length, 0);
   assert.equal(result.items[0].opportunity.mode, "full_time");
 });
 
@@ -74,7 +72,7 @@ test("discovery refuses to search before profile onboarding is complete", async 
     modes: { full_time: { minimumScore: 75, sources: ["remoteok"] } }
   };
   const store = await new JsonStore(path.join(directory, "state.json")).init();
-  const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const applicationService = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const discovery = new DiscoveryService({ applicationService, profiles, config });
   await assert.rejects(
     discovery.scan({}, { actorId: "applicant-one-openclaw", profileId: "applicant-one" }),
@@ -100,7 +98,7 @@ test("discovery can find jobs but does not apply with an incomplete application 
     }
   };
   const store = await new JsonStore(path.join(directory, "state.json")).init();
-  const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const applicationService = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const fetchImpl = async () => new Response(JSON.stringify([
     { legal: "metadata" },
     {
@@ -323,7 +321,7 @@ test("opportunistic roles require explicit acceptable pay and strong technical f
     }
   ];
   const store = await new JsonStore(path.join(directory, "state.json")).init();
-  const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const applicationService = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const discovery = new DiscoveryService({
     applicationService, profiles, config,
     fetchImpl: async () => new Response(JSON.stringify(rows))
@@ -631,7 +629,7 @@ test("Himalayas listings wait for an employer application URL before auto-apply"
     sources: ["himalayas"], requireConfirmationFor: []
   } } };
   const store = await new JsonStore(path.join(directory, "state.json")).init();
-  const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const applicationService = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const fetchImpl = async () => new Response(JSON.stringify({ jobs: [
     { guid: "board-job", title: "Engineer One", companyName: "Example One",
       applicationLink: "https://himalayas.app/companies/example/jobs/engineer-one",
@@ -647,7 +645,6 @@ test("Himalayas listings wait for an employer application URL before auto-apply"
   assert.equal(result.items[0].applicationBlockedBySource, "employer_application_url_required");
   assert.equal(result.items[1].application, undefined);
   assert.equal(result.items[1].applicationBlockedBySource, "employer_application_url_required");
-  await applicationService.waitForIdle();
   assert.equal(applicationService.list("applications", "applicant-one").length, 0);
 });
 

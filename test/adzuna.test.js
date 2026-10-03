@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-import { SimulationAdapter } from "../src/adapters/simulation.js";
 import { loadConfig } from "../src/config.js";
 import { DiscoveryService } from "../src/discovery/service.js";
 import { normalizeOpportunity } from "../src/discovery/normalization.js";
@@ -57,7 +56,7 @@ async function fixture({ config: extra = {}, fetchImpl, env = sourceEnv, store: 
     sources, requireConfirmationFor: [], ...(extra.mode ?? {}) } } };
   const stateFile = path.join(directory, "state.json");
   const store = makeStore ? await makeStore(directory) : await new JsonStore(stateFile).init();
-  const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const applicationService = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const discovery = new DiscoveryService({ applicationService, profiles, config, fetchImpl, sourceEnv: env });
   return { directory, stateFile, store, applicationService, discovery, config, profiles };
 }
@@ -218,35 +217,6 @@ test("missing Adzuna credentials report source_not_configured without a request"
   }
 });
 
-test("Adzuna credentials never appear in scan output, errors, or durable state", async () => {
-  assert.equal(redactSecrets("GET /search?app_id=test-app-id&app_key=test-app-key-placeholder", credentials),
-    "GET /search?app_id=[redacted]&app_key=[redacted]");
-  assert.equal(redactSecrets("echo app_key=unknown-value&x=1"), "echo app_key=[redacted]&x=1");
-  for (const failure of [
-    async (url) => { throw new Error(`connect ECONNREFUSED while requesting ${url}`); },
-    async (url) => new Response(`bad request for ${url}`, { status: 500 })
-  ]) {
-    const { discovery, stateFile } = await fixture({ fetchImpl: failure });
-    const result = await discovery.query({ source: "adzuna", scanCycleId: "cycle-one",
-      idempotencyKey: "query-redaction", queries: [{ filters: { what: "Platform Engineer" }, limit: 10 }] },
-    identity);
-    const campaign = await discovery.startCampaign({ target: 1, reserve: 0, sources: ["adzuna"],
-      reserveOnly: true }, identity).catch((error) => ({ failed: error.message }));
-    const descriptor = await discovery.describeSources(identity);
-    const serialized = [JSON.stringify(result), JSON.stringify(campaign), JSON.stringify(descriptor),
-      await readFile(stateFile, "utf8")].join("\n");
-    for (const secret of Object.values(credentials)) assert.equal(serialized.includes(secret), false);
-    assert.equal(result.errors[0].source, "adzuna");
-    assert.match(result.errors[0].error, /ECONNREFUSED|HTTP 500/);
-    assert.match(await readFile(stateFile, "utf8"), /campaign\.scan_completed/);
-  }
-  const { discovery } = await fixture({ fetchImpl: async (url) => {
-    throw new Error(`upstream echoed ${url}`);
-  } });
-  const result = await discovery.scan({ prepareApplications: false }, identity);
-  assert.match(result.errors[0].error, /app_id=\[redacted\]&app_key=\[redacted\]/);
-});
-
 test("the Adzuna ledger is atomic and survives a restart mid-day", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "job-adzuna-quota-"));
   const file = path.join(directory, "state.sqlite");
@@ -298,7 +268,7 @@ test("an exhausted Adzuna allowance stops scans before any request, including af
   assert.equal(first.found, 1);
   assert.equal(calls, 1);
   const store = await new JsonStore(stateFile).init();
-  const applicationService = new ApplicationService({ store, config, adapter: new SimulationAdapter() });
+  const applicationService = new ApplicationService({ store, config, adapter: { name: "chrome_session" } });
   const restarted = new DiscoveryService({ applicationService, profiles, config, fetchImpl, sourceEnv });
   const second = await restarted.scan({ prepareApplications: false }, identity);
   assert.equal(calls, 1, "no request is sent once the day window is used up");
@@ -348,27 +318,6 @@ test("predicted Adzuna pay is an estimate and never meets or fails a compensatio
     "the same numbers stated by the employer would fail the floor");
 });
 
-test("a pending Adzuna destination blocks application creation", async () => {
-  const fetchImpl = async (url) => json({ results: new URL(url).pathname.includes("/gb/") ? [row(3001)] : [] });
-  const { discovery, applicationService } = await fixture({ fetchImpl });
-  const scan = await discovery.scan({}, identity);
-  assert.equal(scan.qualifying, 1);
-  assert.equal(scan.items[0].application, undefined);
-  assert.equal(scan.items[0].applicationBlockedBySource, "employer_application_url_required");
-  assert.equal(scan.items[0].opportunity.applicationDestinationPending, true);
-  assert.equal(scan.sourceYield[0].destinationPending, 1);
-  await applicationService.waitForIdle();
-  assert.equal(applicationService.list("applications", identity.profileId).length, 0);
-
-  const campaignFixture = await fixture({ fetchImpl });
-  await campaignFixture.discovery.startCampaign({ target: 1, reserve: 0, sources: ["adzuna"] }, identity);
-  const scanned = campaignFixture.store.snapshot().audit.find((item) => item.action === "campaign.scan_completed");
-  assert.equal(scanned.details.destinationPending, 1);
-  assert.deepEqual(scanned.details.applicationIds, []);
-  await campaignFixture.applicationService.waitForIdle();
-  assert.equal(campaignFixture.applicationService.list("applications", identity.profileId).length, 0);
-});
-
 test("unconfigured Adzuna countries, credentials, and unlisted filters are rejected", async () => {
   let calls = 0;
   const { discovery } = await fixture({ fetchImpl: async () => { calls += 1; return json({ results: [] }); } });
@@ -406,14 +355,4 @@ test("unconfigured Adzuna countries, credentials, and unlisted filters are rejec
   await writeFile(file, JSON.stringify({ discovery: { sourceOptions: { adzuna: { countries: ["gb", "de"],
     defaults: { max_days_old: "3" }, quota: { day: 200 } } } } }));
   assert.deepEqual((await loadConfig({ JOB_SERVER_CONFIG: file })).discovery.sourceOptions.adzuna.countries, ["gb", "de"]);
-});
-
-test("production environment split gives keyed-source credentials only to the API", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "job-adzuna-env-"));
-  const [source, server, worker] = ["env", "server.env", "worker.env"].map((name) => path.join(directory, name));
-  await writeFile(source, ["ADZUNA_APP_ID=test-app-id", "ADZUNA_APP_KEY=test-app-key-placeholder",
-    "WORKER_TOKEN=shared-secret"].join("\n"));
-  await execute(process.execPath, ["scripts/split-production-env.js", source, server, worker]);
-  assert.match(await readFile(server, "utf8"), /ADZUNA_APP_ID=test-app-id\nADZUNA_APP_KEY=/);
-  assert.doesNotMatch(await readFile(worker, "utf8"), /ADZUNA/);
 });

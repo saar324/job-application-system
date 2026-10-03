@@ -1,52 +1,38 @@
 {
   "defaultMode": "full_time",
   "execution": {
-    "adapter": "simulation",
-    "maxApplicationsPerDay": 10,
-    "concurrency": 2,
-    "claimLeaseMs": 60000
+    "workflow": "chrome_session",
+    "maxApplicationsPerDay": 10
   },
   "discovery": {
     "limitPerSource": 50,
     "scorerVersion": "2",
     "broadenedSources": {},
-    "semantic": { "maxCandidates": 20 },
+    "semantic": {
+      "maxCandidates": 20
+    },
     "sourceOptions": {
-      "ashby": { "boards": [] },
-      "greenhouse": { "boards": [] },
-      "lever": { "sites": [] }
+      "ashby": {
+        "boards": []
+      },
+      "greenhouse": {
+        "boards": []
+      },
+      "lever": {
+        "sites": []
+      }
     }
   },
   "modes": {
     "full_time": {
       "minimumScore": 75,
-      "autoApply": false,
-      "autoApplyDiscovered": false,
-      "submissionApproval": "always",
       "sources": [],
-      "dailyApplicationCap": 8,
-      "requireConfirmationFor": [
-        "missing_answer",
-        "legal_attestation",
-        "compensation_conflict",
-        "location_conflict",
-        "identity_change"
-      ]
+      "dailyApplicationCap": 8
     },
     "freelance": {
       "minimumScore": 70,
-      "autoApply": false,
-      "autoApplyDiscovered": false,
-      "submissionApproval": "always",
       "sources": [],
-      "dailyApplicationCap": 5,
-      "requireConfirmationFor": [
-        "missing_answer",
-        "legal_attestation",
-        "rate_conflict",
-        "scope_conflict",
-        "identity_change"
-      ]
+      "dailyApplicationCap": 5
     }
   }
 }
