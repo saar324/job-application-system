@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { LEGAL_ATTESTATION_FIELD } from './standing-policy.js';
+import { LEGAL_ATTESTATION_FIELD } from './legal-fields.js';
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const key = field => `${field.step ?? 0}:${field.key}`;
 const equal = (a, b) => hash(a) === hash(b);
