@@ -74,7 +74,9 @@ test("skill backlog and handoff expose one paused form and flag uncertain outcom
     { applicationId: "uncertain", status: "waiting_confirmation",
       updatedAt: "2026-09-27T11:00:00Z", pause: { phase: "final_action_started" },
       pendingReview: [{ kind: "submission_unverified" }], pausedFields: [] },
-    { applicationId: "done", status: "submitted", updatedAt: "2026-09-27T09:00:00Z" }
+    { applicationId: "done", status: "submitted", updatedAt: "2026-09-27T09:00:00Z" },
+    { applicationId: "chrome-uncertain", status: "submission_unverified", updatedAt: "2026-09-27T12:00:00Z", pendingReview: [] },
+    { applicationId: "chrome-started", status: "submission_started", updatedAt: "2026-09-27T13:00:00Z", pendingReview: [] }
   ];
   const server = createServer((request, response) => {
     requests.push(request.url);
@@ -89,10 +91,12 @@ test("skill backlog and handoff expose one paused form and flag uncertain outcom
     JOB_SERVER_TOKEN: "test-token" };
   const backlog = JSON.parse((await execute(process.execPath,
     ["skills/job-application/scripts/jobctl.js", "backlog"], { env })).stdout);
-  assert.equal(backlog.total, 2);
-  assert.deepEqual(backlog.items.map((item) => item.applicationId), ["blocked", "uncertain"]);
+  assert.equal(backlog.total, 4);
+  assert.deepEqual(backlog.items.map((item) => item.applicationId), ["blocked", "uncertain", "chrome-uncertain", "chrome-started"]);
   assert.equal(backlog.items[0].savedFieldCount, 1);
   assert.equal(backlog.items[1].requiresOutcomeCheck, true);
+  assert.equal(backlog.items[2].requiresOutcomeCheck, true);
+  assert.equal(backlog.items[3].requiresOutcomeCheck, true);
   const handoff = JSON.parse((await execute(process.execPath,
     ["skills/job-application/scripts/jobctl.js", "handoff", "blocked"], { env })).stdout);
   assert.equal(handoff.pausedFields[0].value, "ada@example.test");

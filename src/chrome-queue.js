@@ -164,13 +164,25 @@ export class ChromeQueue {
   }
 
   async resume(id, input, identity) {
+    const ownerAnswers = safe(input.ownerAnswers ?? []);
+    if (!Array.isArray(ownerAnswers) || ownerAnswers.length > 200 || ownerAnswers.some(field => !field || typeof field !== 'object'
+      || !field.key || !field.label || field.value === undefined || typeof field.sourceReference !== 'string' || !field.sourceReference.trim())) fail(400, "exact owner answers and source references required");
+    const answerKeys = new Set();
+    for (const field of ownerAnswers) {
+      text(field.key, "owner answer field key", 300); text(field.label, "owner answer question", 3000);
+      text(field.sourceReference, "owner answer source reference", 1000);
+      if (!Number.isInteger(field.step ?? 0) || (field.step ?? 0) < 0) fail(400, "owner answer step must be a nonnegative integer");
+      const key = `${field.step ?? 0}:${field.key}`;
+      if (answerKeys.has(key)) fail(400, "ambiguous duplicate owner answer");
+      answerKeys.add(key);
+    }
     return this.store.mutate(state => {
       const item = this.#item(state, id, input, identity);
       if (item.finalAction || item.legacyOutcomeHold || ["submission_started", "submission_unverified"].includes(item.status)) fail(409, "check the employer outcome; do not repeat Submit");
       if (item.status !== "waiting_owner") fail(409, "application is not waiting for owner input");
       const resolution = text(input.resolution, "owner resolution", 3000);
       item.resolutions ??= [];
-      item.resolutions.push({ kind: item.blocker?.kind, resolution, at: timestamp() });
+      item.resolutions.push({ kind: item.blocker?.kind, resolution, ownerAnswers, at: timestamp() });
       item.status = "in_progress";
       delete item.blocker;
       delete item.review;
