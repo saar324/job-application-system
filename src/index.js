@@ -11,8 +11,14 @@ const store = await initializeStore();
 const profiles = await new ProfileStore(process.env.JOB_SERVER_PROFILES_FILE ?? "./config/profiles.json", { allowMissing: true }).init();
 const service = new ApplicationService({ store, config, profiles });
 await service.recover();
+await service.reconcileInactivity();
+const inactivityTimer = setInterval(() => {
+  service.reconcileInactivity().catch(() => console.error('application inactivity reconciliation failed'));
+}, 60_000);
+inactivityTimer.unref();
 const discovery = new DiscoveryService({ applicationService: service, profiles, config, enricher: semanticEnricherFromEnv() });
 const server = createHttpServer({ service, discovery, profiles, authenticate: createAuthenticator(), config });
+server.on('close', () => clearInterval(inactivityTimer));
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? 4310);
 server.listen(port, host, () => console.log('job-application-server listening on http://' + host + ':' + port + ' (chrome_session)'));

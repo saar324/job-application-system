@@ -182,9 +182,11 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         return send(response, 201, await service.addOpportunity(await jsonBody(request), identity));
       }
       if (request.method === "GET" && url.pathname === "/v1/applications") {
+        await service.reconcileInactivity();
         return send(response, 200, { items: service.list("applications", identity.profileId) });
       }
       if (request.method === "GET" && url.pathname === "/v1/application-log") {
+        await service.reconcileInactivity();
         return send(response, 200, { items: service.applicationLog(identity.profileId) });
       }
       if (request.method === "GET" && url.pathname === "/v1/application-metrics") {

@@ -1,6 +1,7 @@
 import { ChromeQueue } from "./chrome-queue.js";
 import { normalizeRecruiterOutreach } from "./recruiter-outreach.js";
 import { randomUUID } from "node:crypto";
+import { inactivityDeadline, trackingStatus, MEANINGFUL_REPLY_STATUSES } from './application-lifecycle.js';
 import { roleKeys } from "./discovery/handled-roles.js";
 import { CLOSED_RETRY_MS, PENDING_RETRY_MS, PENDING_TTL_MS, retryDelay } from "./discovery/candidate-state.js";
 const now = () => new Date().toISOString();
@@ -15,7 +16,8 @@ export class ApplicationService {
   }
   executionHealth() { return { active: 0, waitingForCapacity: 0, queued: 0 }; }
   list(collection, profileId) {
-    return this.store.snapshot()[collection].filter((item) => item.profileId === profileId);
+    return this.store.snapshot()[collection].filter((item) => item.profileId === profileId)
+      .map(item => collection === 'applications' ? { ...item, trackingStatus: trackingStatus(item) } : item);
   }
 
   applicationLog(profileId) {
@@ -317,6 +319,14 @@ export class ApplicationService {
         ...(sender ? { sender } : {}),
         ...(note ? { note } : {})
       };
+      if (MEANINGFUL_REPLY_STATUSES.has(state)) {
+        application.lastEmployerFollowupAt = observedAt;
+        if (application.lifecycle?.status === 'auto_closed') {
+          application.lifecycle = { ...application.lifecycle, status: 'reopened', reopenedAt: now(),
+            responseObservedAt: observedAt };
+          audit(storeState, identity, 'application.inactivity_reopened', application.id, { observedAt, sourceId });
+        }
+      }
       application.updatedAt = now();
       audit(storeState, identity, "application.employer_status_recorded", application.id, {
         status: state, observedAt, source, sourceId
@@ -330,6 +340,27 @@ export class ApplicationService {
   }
 
   async recover() { return this.chromeQueue.recover(); }
+
+  async reconcileInactivity(at = now()) {
+    const timestamp = Date.parse(at);
+    if (!Number.isFinite(timestamp)) throw new ClientError(400, 'invalid inactivity timestamp');
+    const eligible = item => item.lifecycle?.status !== 'auto_closed' &&
+      inactivityDeadline(item) && timestamp > Date.parse(inactivityDeadline(item));
+    if (!this.store.snapshot().applications.some(eligible)) return { closed: 0 };
+    return this.store.mutate(storeState => {
+      let closed = 0;
+      for (const application of storeState.applications) {
+        if (!eligible(application)) continue;
+        application.lifecycle = { status: 'auto_closed', reason: 'no_response',
+          closedAt: new Date(timestamp).toISOString(), deadlineAt: inactivityDeadline(application) };
+        application.updatedAt = new Date(timestamp).toISOString();
+        audit(storeState, { actorId: 'system:application-inactivity', profileId: application.profileId },
+          'application.inactivity_closed', application.id, application.lifecycle);
+        closed++;
+      }
+      return { closed };
+    });
+  }
 }
 
 function audit(state, identity, action, subjectId, details) {
@@ -426,6 +457,9 @@ function buildApplicationLogEntry(application, opportunity = {}, confirmations =
     decision: application.decision,
     error: application.error,
     employerStatus: application.employerStatus,
+    trackingStatus: trackingStatus(application),
+    lifecycle: application.lifecycle,
+    lastEmployerFollowupAt: application.lastEmployerFollowupAt,
     recruiter: application.recruiter,
     outreach: application.outreach,
     skip: application.skip,
