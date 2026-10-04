@@ -133,6 +133,33 @@ test('scoped saved recruitment consent passes, unrelated consent and Terms do no
   await assert.rejects(review(queue, id, { preview: p, fieldEvidence }), /legal field/);
 });
 
+test('an exact owner answer resolves a new legal question only on the current waiting application', async t => {
+  const { queue } = await fixture(t);
+  const id = (await add(queue, 1)).application.id; await add(queue, 2); await queue.claim(input, owner);
+  const field = { key: 'terms', label: 'I accept the employer application Terms', value: true, required: true, source: 'current owner answer' };
+  const p = preview(); p.filled.push(field);
+  const fieldEvidence = [{ key: 'terms', sourceKind: 'current_owner_answer', resolutionIndex: 0, sourceReference: 'Owner explicitly accepted this exact question in the current chat' }];
+  await assert.rejects(review(queue, id, { preview: p, fieldEvidence }), /legal field/);
+  await queue.checkpoint(id, { ...input, kind: 'legal_question', message: field.label }, owner);
+  await queue.resume(id, { ...input, resolution: 'Owner accepted the exact application Terms', ownerAnswers: [{ ...field, sourceReference: fieldEvidence[0].sourceReference }] }, owner);
+  await queue.checkpoint(id, { ...input, kind: 'captcha', message: 'Complete the visible CAPTCHA' }, owner);
+  await queue.resume(id, { ...input, resolution: 'Owner completed CAPTCHA' }, owner);
+  const r = await review(queue, id, { preview: p, fieldEvidence });
+  const changed = structuredClone(p); changed.filled[1].label += ' and a liability waiver';
+  await assert.rejects(review(queue, id, { preview: changed, fieldEvidence }), /scope/);
+  const attempt = await queue.startSubmission(id, { ...input, previewFingerprint: r.previewFingerprint }, owner);
+  await queue.receipt(id, { ...input, attemptId: attempt.attemptId, receipt: evidence() }, owner);
+  const next = (await queue.claim(input, owner)).application;
+  await assert.rejects(review(queue, next.id, { preview: p, fieldEvidence }), /legal field/);
+});
+
+test('credit-check authorization cannot bypass scoped review through its wording', async t => {
+  const { queue } = await fixture(t);
+  const id = (await add(queue, 1)).application.id; await queue.claim(input, owner);
+  const p = preview(); p.filled.push({ key: 'credit_check', label: 'I authorize a credit check', value: true, required: true, source: 'previous application' });
+  await assert.rejects(review(queue, id, { preview: p }), /legal field/);
+});
+
 test('pending queue entries do not consume capacity; actual final actions do', async t => {
   const { queue } = await fixture(t, 'sqlite', 1);
   const id = (await add(queue, 1)).application.id; await add(queue, 2); await add(queue, 3); await queue.claim(input, owner);

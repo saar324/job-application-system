@@ -92,7 +92,8 @@ if (command === "backlog" || command === "handoff") {
   const log = await request("GET", "/v1/application-log");
   const pending = log.items.filter((item) => ["waiting_owner", "submission_started", "submission_unverified", "waiting_confirmation", "waiting_research"].includes(item.status))
     .sort((left, right) => String(left.updatedAt).localeCompare(String(right.updatedAt)));
-  const needsOutcomeCheck = (item) => item.pause?.phase === "final_action_started"
+  const needsOutcomeCheck = (item) => ["submission_started", "submission_unverified"].includes(item.status)
+    || item.pause?.phase === "final_action_started"
     || item.pendingReview?.some((review) => /submission_unverified|submission_recovery|submission_email_verification|submission_blocked/.test(review.kind));
   if (command === "backlog") {
     process.stdout.write(`${JSON.stringify({ total: pending.length,

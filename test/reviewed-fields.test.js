@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createFieldReview, reviewedField } from "../src/reviewed-fields.js";
+import { createFieldReview } from "../src/reviewed-fields.js";
 
 function fixture(field = { step: 0, key: "experience", label: "Python experience", value: "5", source: "application answer" }) {
   const fingerprint = "a".repeat(64);
@@ -14,17 +14,14 @@ function fixture(field = { step: 0, key: "experience", label: "Python experience
   return { field, fingerprint, application, profile, opportunity, preview, identity, review };
 }
 
-test("exact field evidence binds actual authenticated reviewer, value, policy, role and destination", () => {
+test("exact field evidence binds actual authenticated reviewer, value, role and destination", () => {
   const f = fixture();
   const saved = createFieldReview(f);
   assert.equal(saved.reviewerId, "actual-agent");
-  assert.equal(reviewedField(f.field, { ...f, review: saved }), true);
-  for (const overrides of [
-    { fingerprint: "b".repeat(64) }, { application: { ...f.application, profileId: "other" } },
-    { opportunity: { id: "other-role" } }, { profile: { ...f.profile, standingSubmissionPolicy: { ...f.profile.standingSubmissionPolicy, version: 2 } } },
-    { preview: { ...f.preview, destination: "https://example.test/other" } }
-  ]) assert.equal(reviewedField(f.field, { ...f, review: saved, ...overrides }), false);
-  assert.equal(reviewedField({ ...f.field, value: "6" }, { ...f, review: saved }), false);
+  assert.equal(saved.opportunityId, f.opportunity.id);
+  assert.equal(saved.destination, f.preview.destination);
+  assert.throws(() => createFieldReview({ ...f, fingerprint: 'b'.repeat(64) }), /invalid exact/);
+  assert.throws(() => createFieldReview({ ...f, preview: { ...f.preview, filled: [{ ...f.field, value: '6' }] } }), /does not match/);
   assert.throws(() => createFieldReview({ ...f, identity: { ...f.identity, profileId: "other" } }));
   assert.throws(() => createFieldReview({ ...f, profile: { ...f.profile, applicationAnswers: { experience: "4" } } }), /does not match/);
 });
@@ -35,24 +32,24 @@ test("legal facts require the exact saved question rather than unrelated affirma
   assert.throws(() => createFieldReview(f), /scope does not match/);
   f.profile.applicationAnswers[f.field.label] = "Yes";
   f.review.fields[0].profileAnswerKey = f.field.label;
-  assert.equal(reviewedField(f.field, { ...f, review: createFieldReview(f) }), true);
+  assert.ok(createFieldReview(f));
 });
 
 test("recruitment consent covers affirmative privacy but not terms, liability or false answers", () => {
-  const f = fixture({ step: 0, key: "privacy", label: "I consent to recruitment privacy retention", value: "Yes" });
+  const f = fixture({ step: 0, key: "privacy", label: "I consent to recruitment privacy policy", value: "Yes" });
   f.review.fields[0] = { step: 0, key: "privacy", sourceKind: "saved_recruitment_consent", sourceReference: "synthetic approved recruitment privacy", profileAnswerKey: "recruitmentPrivacy" };
-  assert.equal(reviewedField(f.field, { ...f, review: createFieldReview(f) }), true);
+  assert.ok(createFieldReview(f));
   for (const label of ["I accept contractual terms and privacy", "I waive all claims", "I accept unlimited liability"]) {
     assert.throws(() => createFieldReview({ ...f, preview: { ...f.preview, filled: [{ ...f.field, label }] } }), /scope does not match/);
   }
   assert.throws(() => createFieldReview({ ...f, preview: { ...f.preview, filled: [{ ...f.field, value: "No" }] } }));
 });
 
-test("grounded prose needs standing class authority and never approves legal text", () => {
+test("grounded prose follows the current delegation and never approves legal text", () => {
   const f = fixture({ step: 0, key: "motivation", label: "Why this role?", value: "A grounded example" });
   f.review.fields[0] = { step: 0, key: "motivation", sourceKind: "reviewed_grounded_prose", sourceReference: "synthetic verified project evidence" };
   assert.ok(createFieldReview(f));
-  assert.throws(() => createFieldReview({ ...f, profile: { ...f.profile, standingSubmissionPolicy: { version: 1, answerClasses: ["profile_fact"] } } }), /not authorized/);
+  assert.ok(createFieldReview({ ...f, profile: { ...f.profile, standingSubmissionPolicy: undefined } }));
   assert.throws(() => createFieldReview({ ...f, preview: { ...f.preview, filled: [{ ...f.field, label: "I agree to contract terms" }] } }), /not authorized/);
 });
 
@@ -103,4 +100,45 @@ test("an exact saved binding agreement answer is not factual legal authority", (
   f.profile.applicationAnswers[f.field.label] = "Yes";
   f.review.fields[0].profileAnswerKey = f.field.label;
   assert.throws(() => createFieldReview(f), /scope|legal|agreement|commitment/i);
+});
+
+test("saved privacy approval does not cover a background check or recruitment contact", () => {
+  for (const label of ["I accept recruitment privacy and authorize a background check",
+    "I accept privacy and consent to future recruitment contact"]) {
+    const f = fixture({ key: "privacy", label, value: true });
+    f.review.fields[0] = { key: "privacy", sourceKind: "saved_recruitment_consent",
+      sourceReference: "Owner approved the recruitment privacy policy only", profileAnswerKey: "recruitmentPrivacy" };
+    assert.throws(() => createFieldReview(f), /scope/);
+  }
+});
+
+test("a previous background-check consent is not a reusable factual answer", () => {
+  const f = fixture({ key: 'background', label: 'I authorize a background check', value: 'Yes' });
+  f.profile.applicationAnswers[f.field.label] = 'Yes';
+  f.review.fields[0].profileAnswerKey = f.field.label;
+  assert.throws(() => createFieldReview(f), /commitment/);
+});
+
+test("combined recruitment consent needs saved approval for every requested scope", () => {
+  const f = fixture({ key: 'privacy', label: 'I consent to recruitment privacy, data retention and future recruitment contact', value: true });
+  f.profile.applicationAnswers.job_application_future_recruitment_data_retention_consent_approved = true;
+  f.profile.applicationAnswers.job_application_future_recruitment_contact_consent_approved = true;
+  f.review.fields[0] = { key: 'privacy', sourceKind: 'saved_recruitment_consent', sourceReference: 'Owner approved all three recruitment scopes',
+    profileAnswerKeys: ['recruitmentPrivacy', 'job_application_future_recruitment_data_retention_consent_approved', 'job_application_future_recruitment_contact_consent_approved'] };
+  const saved = createFieldReview(f);
+  assert.deepEqual(saved.fields[0].profileAnswerKeys, f.review.fields[0].profileAnswerKeys);
+  f.profile.applicationAnswers.job_application_future_recruitment_contact_consent_approved = false;
+  assert.throws(() => createFieldReview(f), /scope/);
+});
+
+test("saved retention and contact consent covers equivalent recruitment wording", () => {
+  for (const [label, answerKey] of [
+    ['I agree to storing my application for future job opportunities', 'job_application_future_recruitment_data_retention_consent_approved'],
+    ['I consent to being contacted about future job opportunities', 'job_application_future_recruitment_contact_consent_approved']
+  ]) {
+    const f = fixture({ key: 'future_opportunities', label, value: true });
+    f.profile.applicationAnswers[answerKey] = true;
+    f.review.fields[0] = { key: f.field.key, sourceKind: 'saved_recruitment_consent', sourceReference: 'Verified owner recruitment consent', profileAnswerKey: answerKey };
+    assert.ok(createFieldReview(f));
+  }
 });
