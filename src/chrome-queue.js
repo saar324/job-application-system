@@ -1,3 +1,4 @@
+import { ownerSubmissionSentAt } from '../dashboard/owner-submission.mjs';
 import { createHash, randomUUID } from "node:crypto";
 import { ClientError, manualDailyCaps } from "./service.js";
 import { createFieldReview, requiresLegalReview } from "./reviewed-fields.js";
@@ -249,7 +250,7 @@ export class ChromeQueue {
         || Date.now() - Date.parse(item.review.at) > 10 * 60_000) fail(409, "complete current review required; facts or preview changed");
       const today = timestamp().slice(0, 10);
       const counted = state.applications.filter(i => i.profileId === identity.profileId &&
-        (i.finalAction?.startedAt?.startsWith(today) || i.finalActions?.some(a => a.startedAt.startsWith(today)) || i.receipt?.submittedAt?.startsWith(today)
+        (i.finalAction?.startedAt?.startsWith(today) || i.finalActions?.some(a => a.startedAt.startsWith(today)) || i.receipt?.submittedAt?.startsWith(today) || ownerSubmissionSentAt(i)?.startsWith(today)
           || i.finalSubmissionDecision?.consumedAt?.startsWith(today)
           || i.finalSubmissionDecision?.status === "reserved" && Date.parse(i.finalSubmissionDecision.expiresAt) > Date.now()
           || i.finalSubmissionApproval?.approvedAt?.startsWith(today) && !["skipped", "rejected"].includes(i.status)) && i.receipt?.simulated !== true);

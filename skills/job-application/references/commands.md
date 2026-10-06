@@ -58,6 +58,10 @@ After explicit employer success, use `queue-receipt ID`:
 
 The receipt must match the recorded destination and attempt. Do not record simulated success or a pre-submit screenshot. A lost response does not prove failure: read queue state before doing anything else. An uncertain attempt stays held for outcome investigation.
 
+## Owner submitted LinkedIn applications
+
+`record-external-submission` records owner-provided LinkedIn success evidence on the server, with optional `jobUrl:null`. See [external-submissions.md](external-submissions.md). It does not operate a form, record an agent attempt, promote profile answers or advance the queue.
+
 ## Discovery and records
 
 `sources`, `scan`, `query`, `filter` and `consider` preserve configured source selection and known-role filtering. Scans are review-only in this workflow. Use `consider` with a full `candidate`, evidence-based `fit` verdict and `apply:false` to review without queueing; relevant verified roles otherwise enter the passive queue. For unsupported employer forms, follow the official Apply link in Chrome and register the reviewed opportunity with `add`, then use `queue-add` with its ID. Do not mislabel a discovered role as owner-supplied.

@@ -36,6 +36,7 @@ if (command === "resume-download") {
 
 const routes = {
   config: ["GET", "/v1/config"], "standing-policy": ["GET", "/v1/standing-submission-policy"],
+  "record-external-submission": ["POST", "/v1/external-submissions"],
   queue: ["GET", "/v1/chrome-queue"], "queue-add": ["POST", "/v1/chrome-queue"],
   "queue-next": ["POST", "/v1/chrome-queue/next"], "session-context": ["GET", "/v1/session-context"],
   ...Object.fromEntries(["checkpoint", "resume", "review", "submit-start", "receipt", "skip", "validation-error", "takeover"].map(action =>
