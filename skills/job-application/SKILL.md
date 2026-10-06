@@ -13,6 +13,10 @@ Run `health`, `profile`, `fit-context` and `queue`. Use `session-context` for th
 
 Use the current chat ID as `sessionId` in queue actions. Recover the current application before taking another job. An open tab is not durable state. Keep its checkpoint, non-secret answers and outcome evidence on the server. If a previous final action may have run, check the employer outcome before any further Submit action.
 
+## Owner LinkedIn confirmations
+
+When the owner pastes a LinkedIn “Application submitted” confirmation, call `record-external-submission` immediately, including when no URL is supplied. The server log must succeed before saying the dashboard will count it. Read [external-submissions.md](references/external-submissions.md) for evidence, deduplication and historical answers. A private archive alone does not update the dashboard. Keep listings and review screens separate from confirmed sends. This passive logging does not resolve or advance the current application blocker.
+
 ## Queue and search
 
 Save each new owner URL immediately with `queue-add` (or `direct`). New messages can add links while this session searches, applies or waits. Record duplicates without creating another attempt. Appending links does not interrupt the current application or resolve its blocker. Process the queue in recorded order. Do not start a second application while the current one needs owner help or an outcome check.

@@ -1,3 +1,4 @@
+import { ExternalSubmissions } from './external-submissions.js';
 import { ChromeQueue } from "./chrome-queue.js";
 import { AccountAccess } from './account-access.js';
 import { normalizeRecruiterOutreach } from "./recruiter-outreach.js";
@@ -14,6 +15,7 @@ export class ApplicationService {
     this.adapter = { name: "chrome_session" };
     this.sessionControlled = true;
     this.chromeQueue = new ChromeQueue(this);
+    this.externalSubmissions = new ExternalSubmissions(this);
     this.accountAccess = new AccountAccess(this, credentialVault);
   }
   executionHealth() { return { active: 0, waitingForCapacity: 0, queued: 0 }; }
@@ -433,6 +435,8 @@ function buildApplicationLogEntry(application, opportunity = {}, confirmations =
     createdAt: application.createdAt,
     updatedAt: application.updatedAt,
     submittedAt: application.receipt?.submittedAt,
+    ownerSubmission: application.ownerSubmission,
+    ownerSubmissionEvidence: application.ownerSubmissionEvidence,
     questionsAndAnswers: [...answered.values()],
     ...(paused ? {
       pause: checkpoint ? { step: checkpoint.step, origin: checkpoint.origin,

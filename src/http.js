@@ -53,6 +53,10 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       const identity = authenticate(request);
       if (!identity) return send(response, 401, { error: "invalid or missing bearer token" });
 
+      if (request.method === 'POST' && url.pathname === '/v1/external-submissions') {
+        return send(response, 200, await service.externalSubmissions.record(await jsonBody(request), identity));
+      }
+
       const accountAction = url.pathname.match(/^\/v1\/chrome-queue\/([^/]+)\/account\/(status|access|store)$/);
       if (request.method === 'POST' && accountAction) {
         response.setHeader('cache-control', 'no-store');
