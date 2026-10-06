@@ -23,7 +23,7 @@ const updates = {
 for (const [key, value] of Object.entries(updates)) values.set(key, value);
 for (const key of [...values.keys()]) {
   if (/^(WORKER_|APPLICATION_WEBHOOK_|APPLICATION_WORKER_|PLAYWRIGHT_)/.test(key)
-    || ["JOB_SERVER_DOCUMENT_STAGING", "JOB_SERVER_CREDENTIAL_VAULTS", "JOB_SERVER_VAULT_KEYS_FILE", "JOB_SERVER_INTERNAL_URL"].includes(key)) values.delete(key);
+    || ["JOB_SERVER_DOCUMENT_STAGING", "JOB_SERVER_INTERNAL_URL"].includes(key)) values.delete(key);
 }
 if (!values.get("JOB_SERVER_ALLOWED_DOCUMENT_ROOTS")) {
   throw new Error("JOB_SERVER_ALLOWED_DOCUMENT_ROOTS must point to a private document directory");

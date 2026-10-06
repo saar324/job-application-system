@@ -5,7 +5,7 @@ description: Search for jobs and apply through one interactive Chrome session, w
 
 # Job Application
 
-Use one session with the owner. This session searches, reviews, fills and submits in Chrome. Do not create application subagents, a manager, parallel workers or background campaigns. Use `node {baseDir}/scripts/jobctl.js` to save and retrieve state; the server is the source of truth for the queue, answers, history and receipts. Never read or print the installed profile credential.
+Use one session with the owner in the Codex internal browser. Keep the owner's Chrome independent. Do not create application subagents, a manager, parallel workers or background campaigns. Use `node {baseDir}/scripts/jobctl.js` to save and retrieve state; the server is the source of truth for the queue, answers, history and receipts. Never read or print the installed profile credential.
 
 ## Start and recover
 
@@ -24,6 +24,8 @@ Server source retrieval remains available through `sources`, `scan` with `review
 When queued work exists, work on it before continuing discovery. Search for another suitable role when the queue is empty and the owner's search request remains active. Runs are on demand. Do not create schedules.
 
 ## Apply in Chrome
+
+For sign-in or registration, read [accounts.md](references/accounts.md). Check the encrypted, applicant and origin bound vault before asking the owner for credentials. Reuse a saved login through the private browser handoff. Never create or reset a password, accept new Terms or complete a CAPTCHA autonomously. An account-access blocker can be resolved by a verified saved login without another owner question; keep all other queue holds intact.
 
 1. Call `queue-next` with this chat's `sessionId`. Use one session-owned Chrome application tab and reuse it for the current job. Preserve owner-owned tabs. Follow the official Apply link to the employer's actual application form.
 2. Review fit and the current posting. Fill contact details, links and verified facts. Upload the verified current CV. Retrieve prior answers with `scripts/find-prior-answer.js` before asking the owner to repeat a fact. Reuse factual answers only when meaning, jurisdiction, contract type and circumstances still match. Owner corrections override stale history. Keep narrative answers application-specific.

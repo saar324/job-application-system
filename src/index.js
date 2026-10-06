@@ -6,10 +6,12 @@ import { initializeStore } from "./storage.js";
 import { ProfileStore } from "./profile-store.js";
 import { DiscoveryService } from "./discovery/service.js";
 import { semanticEnricherFromEnv } from "./discovery/enrichment.js";
+import { credentialVaultFromEnv } from './credential-vault.js';
 const config = await loadConfig();
 const store = await initializeStore();
 const profiles = await new ProfileStore(process.env.JOB_SERVER_PROFILES_FILE ?? "./config/profiles.json", { allowMissing: true }).init();
-const service = new ApplicationService({ store, config, profiles });
+const credentialVault = await credentialVaultFromEnv();
+const service = new ApplicationService({ store, config, profiles, credentialVault });
 await service.recover();
 await service.reconcileInactivity();
 const inactivityTimer = setInterval(() => {
