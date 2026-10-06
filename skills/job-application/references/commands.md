@@ -70,6 +70,8 @@ Automatic campaigns, approve-batch, final-approval buttons and server browser wo
 
 ## Browser file and session recovery
 
+For encrypted job-site accounts, read [accounts.md](accounts.md). `account-status ID` accepts `sessionId` and the observed HTTPS `origin` and returns only configured/available metadata. `account-download ID` accepts the same scope and writes a private, short-lived credential handoff for consumption inside `cua_repl`; never print its contents. `account-store ID` takes the same scope, an absolute `credentialFile` and explicit `storageAuthorization`; it saves an authorized existing password without overwriting another record. These commands neither operate the browser nor advance the application queue.
+
 Use `resume-download /absolute/local/output.pdf` to retrieve the current authenticated resume to a new private local file for Chrome's file chooser. It never uploads a file or prints its contents. Verify that Chrome shows the actual uploaded CV before review.
 
 For a confirmed live employer validation rejection, use `queue-validation-error ID` with `sessionId`, the current `attemptId`, `employerExplicitlyRejected:true` and the exact `errors` array. Repair only known answers, review the complete live form again and obtain a new final attempt. This path allows at most three known-rejected attempts; it cannot clear an uncertain result.

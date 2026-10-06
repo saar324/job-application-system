@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import os from 'node:os';
+import { readPrivateAccountFile } from './account-file.js';
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,9 +56,9 @@ const routes = {
   "record-employer-status": ["POST", `/v1/applications/${id}/employer-status`],
 
 };
-if ((!routes[command] && !["backlog", "handoff"].includes(command))
+if ((!routes[command] && !["backlog", "handoff", "account-status", "account-download", "account-store"].includes(command))
   || ((command.startsWith("queue-") && !["queue-add", "queue-next"].includes(command)
-    || ["apply", "record-employer-status", "record-recruiter", "handoff"].includes(command)) && !id)) {
+    || ["apply", "record-employer-status", "record-recruiter", "handoff", "account-status", "account-download", "account-store"].includes(command)) && !id)) {
   console.error("usage: jobctl <queue|queue-add|queue-next|queue-checkpoint ID|queue-resume ID|queue-review ID|queue-submit-start ID|queue-receipt ID|queue-skip ID|session-context|health|profile|fit-context|profile-update|sources|scan|filter|consider|query|direct|applications|application-log|backlog|handoff ID|config|standing-policy|record-recruiter ID|record-employer-status ID>");
   process.exit(2);
 }
@@ -82,7 +84,17 @@ async function request(method, pathname, body) {
   });
   const text = await response.text();
   if (!response.ok) {
-    process.stdout.write(text);
+    // Do not echo an account response body, including on an unexpected server failure.
+    if (command.startsWith('account-')) {
+      let message = 'account request failed';
+      const safeErrors = new Set(['current applicant application not found', 'session does not own this application',
+        'account origin does not match the current official application', 'account origin must be public HTTPS',
+        'encrypted account vault is not configured for this applicant', 'encrypted account vault could not be unlocked',
+        'no saved account credential for this origin', 'explicit owner storage authorization is required',
+        'existing account credential requires owner-managed update', 'account access cannot clear an uncertain application outcome']);
+      try { const e = JSON.parse(text).error; if (safeErrors.has(e)) message = e; } catch {}
+      process.stdout.write(JSON.stringify({ error: message, status: response.status }) + '\n');
+    } else process.stdout.write(text);
     process.exit(1);
   }
   return text ? JSON.parse(text) : {};
@@ -108,6 +120,29 @@ if (command === "backlog" || command === "handoff") {
   if (!item) throw new Error("application is not in this profile's review backlog");
   process.stdout.write(`${JSON.stringify({ ...item,
     requiresOutcomeCheck: Boolean(needsOutcomeCheck(item)) })}\n`);
+  process.exit(0);
+}
+
+if (command.startsWith('account-')) {
+  const input = await readStdin();
+  if (command === 'account-status') {
+    const result = await request('POST', `/v1/chrome-queue/${id}/account/status`, input);
+    process.stdout.write(JSON.stringify(result) + '\n');
+  } else if (command === 'account-download') {
+    const result = await request('POST', `/v1/chrome-queue/${id}/account/access`, input);
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'job-account-'));
+    const file = path.join(dir, 'login.json');
+    await writeFile(file, JSON.stringify(result), { mode: 0o600, flag: 'wx' });
+    process.stdout.write(JSON.stringify({ path: file, origin: result.origin, expiresAt: result.expiresAt }) + '\n');
+  } else {
+    const { credentialFile, ...scope } = input;
+    const value = await readPrivateAccountFile(credentialFile);
+    const result = await request('POST', `/v1/chrome-queue/${id}/account/store`, {
+      ...scope, username: value.username, password: value.password
+    });
+    await rm(credentialFile);
+    process.stdout.write(JSON.stringify(result) + '\n');
+  }
   process.exit(0);
 }
 

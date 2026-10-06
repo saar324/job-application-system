@@ -34,6 +34,8 @@ Keep tokens and environment files, applicant profiles, resumes, runtime state, s
 
 The installed skill's profile credential fixes applicant identity. Payloads cannot select another applicant. SQLite persists applications, checkpoints, review fingerprints, attempts, receipts and audit events. Recruiter records and employer-status updates remain available. Existing logs and historical submitted answers are preserved.
 
+Optional job-site passwords live in a separate AES-256-GCM vault. Original encrypted records remain compatible. The current claimed session can check or retrieve only the current employer origin for its authenticated applicant. The CLI transfers an existing login through a private, two-minute file consumed by the internal browser runtime, without printing passwords. Registration, password creation and new legal commitments retain their owner gates. Read [accounts](skills/job-application/references/accounts.md).
+
 Review [discovery](docs/discovery.md), [configuration](docs/configuration.md), and [deployment](docs/deployment.md) when working on those parts. Old campaign and worker reports describe historical releases, not the current interactive workflow. Their execution APIs and approval buttons are not exposed by the Chrome-session client.
 
 ## Validate

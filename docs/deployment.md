@@ -17,3 +17,15 @@ On an existing immutable-release host, stop discovery/application execution befo
 Verify `/health` reports `chrome_session`, authenticated queue reads are profile-bound and retired worker/campaign mutation routes return 410. Check application counts and source/profile hashes. If checks fail, restore the prior code and units immediately. This queue rollout adds payload fields only; it does not drop or rename database columns. Rollback changes code, not existing SQLite records.
 
 Install the client skill after service validation. Preserve its private sources, writing style and credential. Keep the SSH tunnel to loopback available. Do not publish the API or grant broader access.
+
+## Encrypted accounts
+
+Restore the original vault directory and keys together. The code reads the original
+version-1 encrypted format without rewriting records during a status check or login.
+Set `JOB_SERVER_CREDENTIAL_VAULTS` to the existing private directory. Supply keys via
+`JOB_SERVER_VAULT_KEYS_FILE` or systemd `LoadCredential=job-vault-keys:/etc/job-application/vault-keys.json`.
+Keep the key file private and encrypted records mode 0600. For a sandboxed systemd
+service, retain read/write access only to its existing vault directory. Use an isolated
+copy for staging; do not write synthetic records into a real applicant vault. The
+environment upgrade helper preserves vault configuration. No key generation, rotation,
+database migration or background browser worker is part of this restoration.

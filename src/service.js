@@ -1,4 +1,5 @@
 import { ChromeQueue } from "./chrome-queue.js";
+import { AccountAccess } from './account-access.js';
 import { normalizeRecruiterOutreach } from "./recruiter-outreach.js";
 import { randomUUID } from "node:crypto";
 import { roleKeys } from "./discovery/handled-roles.js";
@@ -7,11 +8,12 @@ const now = () => new Date().toISOString();
 const inactive = item => ["skipped", "rejected", "failed"].includes(item.status);
 
 export class ApplicationService {
-  constructor({ store, config, profiles }) {
+  constructor({ store, config, profiles, credentialVault }) {
     this.store = store; this.config = config; this.profiles = profiles;
     this.adapter = { name: "chrome_session" };
     this.sessionControlled = true;
     this.chromeQueue = new ChromeQueue(this);
+    this.accountAccess = new AccountAccess(this, credentialVault);
   }
   executionHealth() { return { active: 0, waitingForCapacity: 0, queued: 0 }; }
   list(collection, profileId) {
