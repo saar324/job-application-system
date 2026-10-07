@@ -1,4 +1,5 @@
 import { ExternalSubmissions } from './external-submissions.js';
+import { SearchCoordinator } from "./discovery/search-coordinator.js";
 import { ChromeQueue } from "./chrome-queue.js";
 import { AccountAccess } from './account-access.js';
 import { normalizeRecruiterOutreach } from "./recruiter-outreach.js";
@@ -15,6 +16,7 @@ export class ApplicationService {
     this.adapter = { name: "chrome_session" };
     this.sessionControlled = true;
     this.chromeQueue = new ChromeQueue(this);
+    this.searchCoordinator = new SearchCoordinator(this);
     this.externalSubmissions = new ExternalSubmissions(this);
     this.accountAccess = new AccountAccess(this, credentialVault);
   }

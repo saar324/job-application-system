@@ -57,6 +57,18 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         return send(response, 200, await service.externalSubmissions.record(await jsonBody(request), identity));
       }
 
+      if (request.method === "GET" && url.pathname === "/v1/discovery/search") {
+        return send(response, 200, service.searchCoordinator.status(identity));
+      }
+      const searchAction = url.pathname.match(/^\/v1\/discovery\/search\/(start|claim|progress|finish|stop|enqueue|scan|query)$/);
+      if (request.method === "POST" && searchAction) {
+        const action = searchAction[1], body = await jsonBody(request);
+        const result = ["enqueue", "scan", "query"].includes(action)
+          ? await service.searchCoordinator[action === "query" ? "scan" : action](body, identity, discovery, action === "query")
+          : await service.searchCoordinator[action](body, identity);
+        return send(response, 200, result);
+      }
+
       const accountAction = url.pathname.match(/^\/v1\/chrome-queue\/([^/]+)\/account\/(status|access|store)$/);
       if (request.method === 'POST' && accountAction) {
         response.setHeader('cache-control', 'no-store');

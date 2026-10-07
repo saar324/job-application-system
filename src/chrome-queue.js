@@ -66,7 +66,7 @@ export class ChromeQueue {
     submitted: items.filter(item => item.status === "submitted" && item.receipt?.simulated !== true).length, items };
   }
 
-  async add(input, identity) {
+  async add(input, identity, { authorize } = {}) {
     let opportunity;
     if (input.opportunityId) {
       opportunity = this.store.snapshot().opportunities.find(item => item.id === input.opportunityId && item.profileId === identity.profileId);
@@ -86,6 +86,7 @@ export class ChromeQueue {
       throw Object.assign(new ClientError(409, closed), { code: closed });
     }
     return this.store.mutate(state => {
+      authorize?.(state);
       const previous = state.applications.find(item => item.profileId === identity.profileId && item.opportunityId === opportunity.id);
       if (previous) {
         if (!owned(previous) && !["submitted", "skipped", "rejected"].includes(previous.status)) {

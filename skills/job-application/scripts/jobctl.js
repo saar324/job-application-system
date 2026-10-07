@@ -35,6 +35,9 @@ if (command === "resume-download") {
 }
 
 const routes = {
+  "search-status": ["GET", "/v1/discovery/search"],
+  ...Object.fromEntries(["start", "claim", "progress", "finish", "stop", "enqueue", "scan", "query"].map(action =>
+    [`search-${action}`, ["POST", `/v1/discovery/search/${action}`]])),
   config: ["GET", "/v1/config"], "standing-policy": ["GET", "/v1/standing-submission-policy"],
   "record-external-submission": ["POST", "/v1/external-submissions"],
   queue: ["GET", "/v1/chrome-queue"], "queue-add": ["POST", "/v1/chrome-queue"],
@@ -81,7 +84,7 @@ async function request(method, pathname, body) {
     ...(body ? { "content-type": "application/json" } : {})
   },
   ...(body ? { body: JSON.stringify(body) } : {}),
-    signal: AbortSignal.timeout(["scan", "query"].includes(command) ? 90_000 : 30_000)
+    signal: AbortSignal.timeout(["scan", "query", "search-scan", "search-query", "search-enqueue"].includes(command) ? 90_000 : 30_000)
   });
   const text = await response.text();
   if (!response.ok) {

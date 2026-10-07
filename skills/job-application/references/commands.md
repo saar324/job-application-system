@@ -81,3 +81,7 @@ Use `resume-download /absolute/local/output.pdf` to retrieve the current authent
 For a confirmed live employer validation rejection, use `queue-validation-error ID` with `sessionId`, the current `attemptId`, `employerExplicitlyRejected:true` and the exact `errors` array. Repair only known answers, review the complete live form again and obtain a new final attempt. This path allows at most three known-rejected attempts; it cannot clear an uncertain result.
 
 When the owner explicitly requests recovery in a new chat, use `queue-takeover ID` with the new `sessionId` and `ownerRecoveryReference`. It records the transfer, invalidates a pre-submit review and keeps a prior final action held for outcome inspection. Do not use it to race a still-working session.
+
+## Coordinated search
+
+Read [search-workers.md](search-workers.md) for payloads. `search-status`, `search-start`, `search-claim`, `search-progress`, `search-finish`, `search-scan`, `search-query`, `search-enqueue` and `search-stop` manage two exclusive search leases and passive queue additions. Source IDs and mode are fixed by the main session; only the main session uses application execution commands. Source state resets on the next operation after each Europe/Sofia midnight.
