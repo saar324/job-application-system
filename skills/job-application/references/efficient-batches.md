@@ -12,3 +12,7 @@ One main chat controls the internal browser and one application at a time. Exact
 - Count only real employer receipts. Historical applications and simulations are separate from the current request.
 
 The queue is the working ledger. Existing application logs, recruiter records, source configuration and old batch audit files remain historical evidence; do not restart an old campaign or reconstruct live work from an abandoned browser tab.
+
+## Buffered preparation
+
+Use the 20/30 search-control cycle and one draft packet per job. Load and correct the packet before entering answers, then batch deterministic matching fields in the Codex internal browser. Custom dropdown selections, actual CV/letter uploads and post-fill verification still require browser observation. A packet does not prove live insertion or submission. Read application-drafts.md.

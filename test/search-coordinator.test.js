@@ -8,6 +8,8 @@ import { SqliteStore } from '../src/sqlite-store.js';
 import { ApplicationService } from '../src/service.js';
 import { SearchCoordinator } from '../src/discovery/search-coordinator.js';
 import { createHttpServer } from '../src/http.js';
+import { draftProfileFingerprint } from '../src/application-drafts.js';
+import { draftPacket } from './fixtures/draft-packet.js';
 
 const owner = { actorId: 'owner-runtime', profileId: 'fixture' };
 const other = { actorId: 'owner-runtime', profileId: 'other-fixture' };
@@ -28,7 +30,8 @@ async function fixture(t, kind = 'sqlite') {
     return { status: 'ready', opportunityId: opportunity.id };
   } };
   t.after(async () => { store.close?.(); await rm(dir, { recursive: true, force: true }); });
-  return { store, service, coordinator, config, discovery, file, setTime: value => { time = Date.parse(value); } };
+  const enqueue = (input, identity, provider = discovery) => coordinator.enqueue({ ...input, draft: draftPacket(input.candidate.applyUrl), profileFingerprint: draftProfileFingerprint({}) }, identity, provider);
+  return { store, service, coordinator, config, discovery, file, enqueue, setTime: value => { time = Date.parse(value); } };
 }
 
 for (const kind of ['json', 'sqlite']) {
@@ -105,21 +108,21 @@ test('both sources enqueue the same official role once while the application rem
   await f.service.chromeQueue.checkpoint(current.id,{ ...main,kind:'captcha',message:'Owner CAPTCHA required',checkpoint:{ fields:[] } },owner);
   const leases = await Promise.all(['search-1','search-2'].map(workerId=>f.coordinator.claim({ ...main,workerId },owner)));
   const candidate = { title:'Engineer',company:'Fixture Employer',description:'Remote Python software role.',applyUrl:'https://employer.example/new',remote:true,mode:'full_time' };
-  const results = await Promise.all(leases.map(({lease},i)=>f.coordinator.enqueue({ ...scope(lease,`search-${i+1}`),
+  const results = await Promise.all(leases.map(({lease},i)=>f.enqueue({ ...scope(lease,`search-${i+1}`),
     officialPostingReviewed:true,candidate:{ ...candidate,source:lease.sourceId },fit:{ decision:'relevant',reason:'Matches verified core experience' } },owner,f.discovery)));
   assert.equal(new Set(results.map(i=>i.applicationId)).size,1);
   assert.equal(f.service.chromeQueue.list(owner.profileId).pending,1);
   assert.equal(f.service.chromeQueue.list(owner.profileId).current.id,current.id);
   assert.equal(f.service.chromeQueue.list(owner.profileId).current.status,'waiting_owner');
   assert.equal(f.store.snapshot().attempts.length,0);
-  await assert.rejects(f.coordinator.enqueue({ ...scope(leases[0].lease,'search-1'),officialPostingReviewed:true,candidate:{ ...candidate,source:'gamma' },fit:{ decision:'relevant' } },owner,f.discovery), /bind/);
+  await assert.rejects(f.enqueue({ ...scope(leases[0].lease,'search-1'),officialPostingReviewed:true,candidate:{ ...candidate,source:'gamma' },fit:{ decision:'relevant' } },owner,f.discovery), /bind/);
 });
 
 test('revoked lease during role verification cannot enqueue or claim an application', async t => {
   const f = await fixture(t); await f.coordinator.start(start,owner);
   const lease = (await f.coordinator.claim({ ...main,workerId:'search-1' },owner)).lease;
   const discovery = { considerCandidate:async input => { const considered = await f.discovery.considerCandidate(input); await f.coordinator.stop(main,owner); return considered; } };
-  await assert.rejects(f.coordinator.enqueue({ ...scope(lease,'search-1'),officialPostingReviewed:true,
+  await assert.rejects(f.enqueue({ ...scope(lease,'search-1'),officialPostingReviewed:true,
     candidate:{ source:'alpha',title:'Engineer',company:'Fixture',description:'Full remote role',applyUrl:'https://employer.example/new' },
     fit:{ decision:'relevant',reason:'Verified fit' } },owner,discovery), /not active/);
   assert.equal(f.store.snapshot().applications.length,0);

@@ -91,3 +91,9 @@ When the owner explicitly requests recovery in a new chat, use `queue-takeover I
 ## Coordinated search
 
 Read [search-workers.md](search-workers.md) for payloads. `search-status`, `search-start`, `search-claim`, `search-progress`, `search-finish`, `search-scan`, `search-query`, `search-enqueue` and `search-stop` manage two exclusive search leases and passive queue additions. Source IDs and mode are fixed by the main session; only the main session uses application execution commands. Source state resets on the next operation after each Europe/Sofia midnight.
+
+## Queue buffer and draft packets
+
+`search-control` persists the 20/30 refill decision. `draft-context` returns verified applicant facts and their fingerprint. `search-prepare-claim` / `search-prepare-save` lease and draft existing pending jobs during refill. `search-enqueue` now requires `profileFingerprint` and `draft`, and appends atomically with a high watermark check.
+
+`queue-draft ID` loads the full packet, current facts, revision and freshness metadata in one response. `queue-draft-review ID` accepts `{sessionId,revision,fingerprint,packet}` from that response with corrected values after main-session inspection of the live form. It saves corrected suggestions only, never a live preview or final-action permit. Use `scripts/draft-fill-plan.js PRIVATE_JSON_FILE` to map corrected answers to observed input locators. The planner never operates a browser. See [application-drafts.md](application-drafts.md).
