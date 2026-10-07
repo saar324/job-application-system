@@ -18,7 +18,7 @@ export function createChromeSessionMcp({ service, discovery, profiles, config, i
   server.registerTool("next_application", { description: "Claim the next queued role for this chat. A blocker holds the queue.",
     inputSchema: { sessionId: z.string().min(1).max(100) } }, async input => result(await service.chromeQueue.claim(input, identity)));
   server.registerTool("update_current_application", { description: "Save a checkpoint, resume after owner help, review, begin one final action, record its receipt, or skip with evidence. Never operates Chrome.",
-    inputSchema: { applicationId: z.string().uuid(), action: z.enum(["checkpoint", "resume", "review", "startSubmission", "receipt", "skip", "validationError", "takeover"]),
+    inputSchema: { applicationId: z.string().uuid(), action: z.enum(["checkpoint", "resume", "review", "startSubmission", "receipt", "ownerReceipt", "skip", "validationError", "takeover"]),
       input: z.record(z.string(), z.unknown()) } }, async ({ applicationId, action, input }) => result(await service.chromeQueue[action](applicationId, input, identity)));
   return server;
 }

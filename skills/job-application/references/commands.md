@@ -58,6 +58,8 @@ After explicit employer success, use `queue-receipt ID`:
 
 The receipt must match the recorded destination and attempt. Do not record simulated success or a pre-submit screenshot. A lost response does not prove failure: read queue state before doing anything else. An uncertain attempt stays held for outcome investigation.
 
+If the owner completed Submit without a registered final attempt, use `queue-owner-receipt ID` after explicit exact-role employer confirmation. Do not resume, review or create a retrospective attempt. Payload: `sessionId`, `ownerSubmitted:true`, stable `recordKey`, exact `finalUrl`, actual `observedAt`, Sofia `submissionDate`, and `evidence:{source:"owner_provided_employer_confirmation",successText,reference,sha256}`. Hash the actual preserved confirmation text or screenshot and identify the owner message or live observation. This imports an owner-reported send, clears that completed hold, counts once and preserves existing applicant facts. Review pages, clicks and prepared forms are not success. The URL must identify the same official role. Repeating identical evidence is idempotent; different evidence conflicts. This path cannot replace an existing agent final attempt or an uncertain legacy outcome; those still require `queue-receipt` for their recorded attempt.
+
 ## Owner submitted LinkedIn applications
 
 `record-external-submission` records owner-provided LinkedIn success evidence on the server, with optional `jobUrl:null`. See [external-submissions.md](external-submissions.md). It does not operate a form, record an agent attempt, promote profile answers or advance the queue.

@@ -42,7 +42,7 @@ const routes = {
   "record-external-submission": ["POST", "/v1/external-submissions"],
   queue: ["GET", "/v1/chrome-queue"], "queue-add": ["POST", "/v1/chrome-queue"],
   "queue-next": ["POST", "/v1/chrome-queue/next"], "session-context": ["GET", "/v1/session-context"],
-  ...Object.fromEntries(["checkpoint", "resume", "review", "submit-start", "receipt", "skip", "validation-error", "takeover"].map(action =>
+  ...Object.fromEntries(["checkpoint", "resume", "review", "submit-start", "receipt", "owner-receipt", "skip", "validation-error", "takeover"].map(action =>
     [`queue-${action}`, ["POST", `/v1/chrome-queue/${id}/${action}`]])),
   health: ["GET", "/health"], me: ["GET", "/v1/me"], opportunities: ["GET", "/v1/opportunities"],
   profile: ["GET", "/v1/profile/status"], "profile-update": ["PATCH", "/v1/profile"],

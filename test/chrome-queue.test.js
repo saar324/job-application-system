@@ -249,3 +249,87 @@ test('current queue answers and blockers appear in existing logs; prior employer
  await service.recordEmployerStatus(id,{status:'under_review',observedAt:new Date().toISOString(),sourceId:'synthetic-message'},owner);
  assert.equal(service.applicationLog(owner.profileId)[0].employerStatus.status,'under_review');
 });
+
+function ownerProof(n = 1) {
+  const observedAt = new Date().toISOString();
+  return { ...input, ownerSubmitted: true, recordKey: `owner-confirmation-${n}`,
+    finalUrl: `https://employer.example/jobs/${n}/confirmation`, observedAt,
+    submissionDate: new Intl.DateTimeFormat('en-CA', {timeZone:'Europe/Sofia',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(observedAt)),
+    evidence: { source: 'owner_provided_employer_confirmation', successText: 'Thank you for applying. Your application has been received.',
+      reference: 'Owner pasted exact employer confirmation in this chat', sha256: 'a'.repeat(64) } };
+}
+
+for (const kind of ['json', 'sqlite']) test(`${kind}: owner receipt completes held form without a retrospective attempt and counts once`, async t => {
+  const {queue,store,file,service} = await fixture(t, kind);
+  const id=(await add(queue,1)).application.id;
+  const next=(await add(queue,2)).application.id;
+  await queue.claim(input,owner);
+  await queue.checkpoint(id,{...input,kind:'tool_permission',message:'Privacy confirmation pending',checkpoint:{fields:[{key:'name',label:'Name',value:'Example Applicant'}]}},owner);
+  const proof=ownerProof();
+  assert.equal((await queue.ownerReceipt(id,proof,owner)).duplicate,false);
+  assert.equal((await queue.ownerReceipt(id,{...proof,observedAt:new Date().toISOString()},owner)).duplicate,true);
+  const app=store.snapshot().applications.find(a=>a.id===id);
+  assert.equal(app.status,'owner_reported_submitted');
+  assert.equal(app.ownerSubmission.channel,'browser');
+  assert.equal(app.blocker,undefined);
+  assert.equal(app.finalAction,undefined);
+  assert.equal(app.receipt,undefined);
+  assert.equal(app.checkpoint.fields.length,1);
+  assert.equal(store.snapshot().attempts.length,0);
+  assert.equal(queue.list(owner.profileId).submitted,1);
+  assert.ok(service.applicationLog(owner.profileId).find(a=>a.applicationId===id).submittedAt);
+  await service.recover();
+  assert.equal((await queue.claim(input,owner)).application.id,next);
+  const reopened=await (kind==='sqlite'?new SqliteStore(file):new JsonStore(file)).init();
+  assert.equal(reopened.snapshot().applications.find(a=>a.id===id).ownerSubmission.recordKey,proof.recordKey);
+  reopened.close?.();
+  await assert.rejects(queue.ownerReceipt(id,{...proof,evidence:{...proof.evidence,sha256:'b'.repeat(64)}},owner),/different evidence/);
+  await assert.rejects(queue.resume(id,{...input,resolution:'Try again'},owner),/already terminal/);
+  await assert.rejects(queue.startSubmission(id,{...input},owner),/already terminal/);
+});
+
+test('owner receipt rejects wrong role, identity, session, incomplete or failed confirmations and invalid dates',async t=>{
+ const {queue}=await fixture(t);const id=(await add(queue,1)).application.id;await queue.claim(input,owner);
+ const p=ownerProof();
+ await assert.rejects(queue.ownerReceipt(id,p,other),/not found/);
+ await assert.rejects(queue.ownerReceipt(id,{...p,sessionId:'another'},owner),/does not own/);
+ for(const finalUrl of ['https://unrelated.example/jobs/1/confirmation','https://employer.example/jobs/2/confirmation'])
+  await assert.rejects(queue.ownerReceipt(id,{...p,finalUrl},owner),/exact official role/);
+ for(const successText of ['Review your application','Thank you for applying','Application not submitted','Your application has been received. Error occurred.'])
+  await assert.rejects(queue.ownerReceipt(id,{...p,evidence:{...p.evidence,successText}},owner),/explicit owner submission/);
+ await assert.rejects(queue.ownerReceipt(id,{...p,ownerSubmitted:false},owner),/explicit owner submission/);
+ await assert.rejects(queue.ownerReceipt(id,{...p,evidence:{...p.evidence,simulated:true}},owner),/explicit owner submission/);
+ await assert.rejects(queue.ownerReceipt(id,{...p,submissionDate:'2099-01-01'},owner),/submission date/);
+ await assert.rejects(queue.ownerReceipt(id,{...p,observedAt:'2099-01-01T12:00:00Z'},owner),/observation time/);
+ assert.equal(queue.list(owner.profileId).submitted,0);
+});
+
+test('owner receipt accepts Greenhouse role confirmation and cannot replace an uncertain agent attempt',async t=>{
+ const {queue,store}=await fixture(t);
+ const app=(await queue.add({url:'https://job-boards.greenhouse.io/example/jobs/123'},owner)).application;
+ await queue.claim(input,owner);
+ await queue.ownerReceipt(app.id,{...ownerProof(),finalUrl:'https://job-boards.greenhouse.io/example/jobs/123/confirmation'},owner);
+ const next=(await add(queue,2)).application.id;await queue.claim(input,owner);await submit(queue,next);
+ await assert.rejects(queue.ownerReceipt(next,ownerProof(2),owner),/existing final attempt/);
+ assert.equal(store.snapshot().attempts.length,1);
+ assert.equal(queue.list(owner.profileId).current.id,next);
+});
+
+test('owner receipt consumes daily capacity without manufacturing an attempt',async t=>{
+ const {queue,store}=await fixture(t,'sqlite',1);const id=(await add(queue,1)).application.id;await add(queue,2);await queue.claim(input,owner);
+ await queue.ownerReceipt(id,ownerProof(),owner);
+ const next=(await queue.claim(input,owner)).application.id;const r=await review(queue,next);
+ await assert.rejects(queue.startSubmission(next,{...input,previewFingerprint:r.previewFingerprint},owner),/daily submission cap/);
+ assert.equal(store.snapshot().attempts.length,0);
+});
+
+test('authenticated HTTP owner receipt completes only the current applicant queue entry',async t=>{
+ const f=await fixture(t);const id=(await add(f.queue,1)).application.id;await f.queue.claim(input,owner);
+ const server=createHttpServer({service:f.service,profiles:f.service.profiles,config:f.config,authenticate:r=>r.headers.authorization==='Bearer profile-one'?owner:other,discovery:{}});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
+ const url=`http://127.0.0.1:${server.address().port}/v1/chrome-queue/${id}/owner-receipt`;
+ const call=token=>fetch(url,{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify({...ownerProof(),profileId:other.profileId})});
+ assert.equal((await call('profile-two')).status,404);
+ const response=await call('profile-one');assert.equal(response.status,200);
+ assert.equal((await response.json()).status,'owner_reported_submitted');assert.equal(f.queue.list(owner.profileId).submitted,1);
+});

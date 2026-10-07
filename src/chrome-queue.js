@@ -1,11 +1,12 @@
-import { ownerSubmissionSentAt } from '../dashboard/owner-submission.mjs';
+import { ownerSubmissionSentAt, explicitApplicationReceipt } from '../dashboard/owner-submission.mjs';
+import { roleKeys } from './discovery/handled-roles.js';
 import { createHash, randomUUID } from "node:crypto";
 import { ClientError, manualDailyCaps } from "./service.js";
 import { createFieldReview, requiresLegalReview } from "./reviewed-fields.js";
 
 const timestamp = () => new Date().toISOString();
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-const terminal = item => ["submitted", "skipped", "rejected"].includes(item.status);
+const terminal = item => ["submitted", "owner_reported_submitted", "skipped", "rejected"].includes(item.status);
 const owned = item => item.executionMode === "chrome_session";
 const active = item => owned(item) && !terminal(item) && item.status !== "pending";
 const secret = /password|passwd|verification.?code|security.?code|one.?time.?code|\botp\b|secret|token|cookie|session.?cookie/i;
@@ -63,7 +64,7 @@ export class ChromeQueue {
     return { workflow: "chrome_session", current, waiting: current?.status === "waiting_owner"
       || ["submission_started", "submission_unverified"].includes(current?.status),
     pending: items.filter(item => item.status === "pending").length,
-    submitted: items.filter(item => item.status === "submitted" && item.receipt?.simulated !== true).length, items };
+    submitted: items.filter(item => item.status === "submitted" && item.receipt?.simulated !== true || ownerSubmissionSentAt(item)).length, items };
   }
 
   async add(input, identity, { authorize } = {}) {
@@ -295,6 +296,53 @@ export class ChromeQueue {
       if (attempt) Object.assign(attempt, { status: "submitted", completedAt: item.updatedAt });
       event(state, identity, "receipt", item, { attemptId: input.attemptId, finalUrl: receipt.finalUrl });
       return item;
+    });
+  }
+
+  async ownerReceipt(id, input, identity) {
+    const proof = safe(input.evidence);
+    if (input.ownerSubmitted !== true || !proof || proof.source !== 'owner_provided_employer_confirmation'
+      || proof.simulated === true || !explicitApplicationReceipt(proof.successText)
+      || !/^[a-f0-9]{64}$/i.test(proof.sha256 ?? '')
+      || !Number.isFinite(Date.parse(input.observedAt)) || Date.parse(input.observedAt) > Date.now()) {
+      fail(400, 'explicit owner submission, employer confirmation, evidence hash and observation time required');
+    }
+    const recordKey = text(input.recordKey, 'recordKey', 300);
+    const successText = text(proof.successText, 'employer success text', 6000);
+    const reference = text(proof.reference, 'owner confirmation reference', 1000);
+    const finalUrl = https(input.finalUrl);
+    const observedAt = new Date(input.observedAt).toISOString();
+    const submissionDate = input.submissionDate;
+    const record = { version: 1, channel: 'browser', submissionActor: 'owner_browser', identityMatchPending: false,
+      recordKey, submissionDate, observedAt, finalUrl,
+      evidence: { source: proof.source, successText, reference, sha256: proof.sha256.toLowerCase() } };
+    return this.store.mutate(state => {
+      // Idempotent evidence import is separate from the agent final-action path.
+      const existing = state.applications.find(i => i.id === id && i.profileId === identity.profileId && owned(i));
+      if (!existing) fail(404, 'Chrome application not found');
+      if (!input.sessionId || existing.sessionId !== input.sessionId || existing.sessionActorId !== identity.actorId) fail(409, 'session does not own this application');
+      const opportunity = state.opportunities.find(o => o.id === existing.opportunityId && o.profileId === identity.profileId);
+      record.jobUrl = https(opportunity?.applyUrl ?? opportunity?.listingUrl);
+      const expectedKeys = roleKeys(opportunity);
+      if (new URL(finalUrl).origin !== new URL(record.jobUrl).origin
+        || ![...roleKeys({ applyUrl: finalUrl })].some(k => expectedKeys.has(k))) fail(409, 'owner receipt must identify the exact official role');
+      if (!ownerSubmissionSentAt({ ownerSubmission: record })) fail(400, 'valid owner receipt submission date and evidence required');
+      if (Date.parse(observedAt) < Date.parse(existing.createdAt)) fail(409, 'owner receipt predates this application');
+      const fingerprint = hash({ ...record, observedAt: undefined });
+      if (existing.ownerSubmission?.channel === 'browser') {
+        if (existing.ownerSubmission.fingerprint !== fingerprint) fail(409, 'owner receipt already has different evidence');
+        return { applicationId: id, status: existing.status, duplicate: true, submissionDate: existing.ownerSubmission.submissionDate };
+      }
+      const item = this.#item(state, id, input, identity);
+      if (item.finalAction || item.legacyOutcomeHold || !['in_progress', 'waiting_owner'].includes(item.status)) {
+        fail(409, 'record the existing final attempt receipt; owner import cannot replace an uncertain agent action');
+      }
+      item.ownerSubmission = { ...record, fingerprint };
+      item.status = 'owner_reported_submitted';
+      item.updatedAt = timestamp();
+      delete item.blocker;
+      event(state, identity, 'owner_receipt', item, { recordKey, finalUrl, submissionDate });
+      return { applicationId: id, status: item.status, duplicate: false, submissionDate };
     });
   }
 
