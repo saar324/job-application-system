@@ -14,6 +14,8 @@ Run `node {baseDir}/scripts/jobctl.js COMMAND [ID]`. Mutation payloads are JSON 
 
 ## Review and final action
 
+Draft learning: `draft-context` and `queue-draft ID` include profile-bound `learning` lessons and recurrence measurements. `queue-draft-review ID` accepts optional `feedback:[{key,cause}]` with the enum in [draft-feedback.md](draft-feedback.md), and returns the recorded feedback report. Existing draft payloads remain valid. No feedback operation changes applicant facts, clears a hold or authorizes Submit.
+
 `queue-review ID` accepts:
 
 ```json

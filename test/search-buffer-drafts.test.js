@@ -137,6 +137,8 @@ test('HTTP exposes one profile bound draft packet and correction routes without 
   const post = (route, body) => fetch(base + route, { method: 'POST', headers, body: JSON.stringify(body) });
   const context = await (await fetch(base + '/v1/draft-context', { headers })).json();
   assert.equal(context.facts.contact.firstName, 'Fixture'); assert.ok(context.profileFingerprint);
+  assert.equal(context.learning.authority, 'draft_suggestions_only');
+  assert.equal(context.learning.reports, 0);
   const a = await (await post('/v1/discovery/search/prepare-claim', { ...main, workerId: 'search-1' })).json();
   assert.equal((await post('/v1/discovery/search/prepare-save', { ...main, workerId: 'search-1', leaseId: a.lease.id,
     applicationId: a.applicationId, profileFingerprint: context.profileFingerprint, draft: draftPacket(a.opportunity.applyUrl) })).status, 200);
