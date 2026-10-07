@@ -62,6 +62,10 @@ If the owner completed Submit without a registered final attempt, use `queue-own
 
 ## Owner submitted LinkedIn applications
 
+### ATS redirects to an employer confirmation site
+
+Keep the actual final confirmation URL. Never replace it with the ATS URL to satisfy an origin check. For a cross-origin employer receipt, both `queue-receipt` and `queue-owner-receipt` accept `redirectEvidence:{sourceUrl,employerUrl,linkText}` alongside their existing payload. `sourceUrl` must be the exact recorded final-action destination (or the exact opportunity application URL for an owner receipt without an attempt). `employerUrl` and `linkText` must come from the labeled company home page or company website link on that official ATS page. The server independently fetches only the recorded ATS page, verifies the link and stores destination evidence. An HTTP company footer URL may be upgraded to HTTPS with the exact same hostname. Do not guess a domain, use a privacy link, follow a CAPTCHA around another route or invent a redirect. Preserve the receipt screenshot and exact-role browser context. If verification fails, retain the real receipt and investigate the cause without resubmitting. An identical registered-attempt receipt is idempotent and does not consume another attempt or count.
+
 `record-external-submission` records owner-provided LinkedIn success evidence on the server, with optional `jobUrl:null`. See [external-submissions.md](external-submissions.md). It does not operate a form, record an agent attempt, promote profile answers or advance the queue.
 
 ## Discovery and records

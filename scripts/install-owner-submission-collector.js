@@ -9,6 +9,7 @@ const snapshot=path.join(target,'snapshot.mjs');
 const before=await readFile(snapshot,'utf8');
 const after=patchOwnerSubmissionCollector(before);
 await copyFile(path.join(root,'dashboard/owner-submission.mjs'),path.join(target,'owner-submission.mjs'));
+await copyFile(path.join(root,'dashboard/receipt-destination.mjs'),path.join(target,'receipt-destination.mjs'));
 if(before!==after){
  await writeFile(snapshot+'.before-owner-import',before,{mode:0o600,flag:'wx'});
  await writeFile(snapshot+'.tmp',after,{mode:0o644});await rename(snapshot+'.tmp',snapshot);

@@ -12,11 +12,11 @@ const now = () => new Date().toISOString();
 const inactive = item => ["skipped", "rejected", "failed"].includes(item.status);
 
 export class ApplicationService {
-  constructor({ store, config, profiles, credentialVault }) {
+  constructor({ store, config, profiles, credentialVault, receiptFetchImpl = fetch }) {
     this.store = store; this.config = config; this.profiles = profiles;
     this.adapter = { name: "chrome_session" };
     this.sessionControlled = true;
-    this.chromeQueue = new ChromeQueue(this);
+    this.chromeQueue = new ChromeQueue(this, { receiptFetchImpl });
     this.searchCoordinator = new SearchCoordinator(this);
     this.externalSubmissions = new ExternalSubmissions(this);
     this.accountAccess = new AccountAccess(this, credentialVault);

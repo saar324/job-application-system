@@ -3,6 +3,8 @@ import { roleKeys } from './discovery/handled-roles.js';
 import { createHash, randomUUID } from "node:crypto";
 import { ClientError, manualDailyCaps } from "./service.js";
 import { createFieldReview, requiresLegalReview } from "./reviewed-fields.js";
+import { receiptDestinationMatches } from '../dashboard/receipt-destination.mjs';
+import { verifyEmployerReceiptRedirect } from './receipt-destination.js';
 
 const timestamp = () => new Date().toISOString();
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -52,7 +54,9 @@ function authority(profile) {
 
 /** Passive durable state. No browser, background runners, or automatic queue advancement. */
 export class ChromeQueue {
-  constructor(service) { this.service = service; this.store = service.store; }
+  constructor(service, { receiptFetchImpl = fetch } = {}) {
+    this.service = service; this.store = service.store; this.receiptFetchImpl = receiptFetchImpl;
+  }
 
   list(profileId) {
     const state = this.store.snapshot();
@@ -278,13 +282,32 @@ export class ChromeQueue {
       || typeof receipt.observedAt !== "string" || !Number.isFinite(Date.parse(receipt.observedAt))) fail(400, "verified employer success text, screenshot hash, and observation time required");
     receipt.successText = text(receipt.successText, "employer success text", 6000);
     receipt.finalUrl = https(receipt.finalUrl);
+    // Authenticate and bind the attempt before any network verification. Only
+    // the server may produce the trusted destination verification record.
+    delete receipt.destinationVerification;
+    const snapshot = this.store.snapshot();
+    const current = snapshot.applications.find(i => i.id === id && i.profileId === identity.profileId && owned(i));
+    if (current?.status === 'submitted') {
+      if (current.sessionId !== input.sessionId || current.sessionActorId !== identity.actorId) fail(409, 'session does not own this application');
+      if (current.receipt?.attemptId !== input.attemptId || current.receipt.finalUrl !== receipt.finalUrl
+        || current.receipt.visualReceiptHash !== receipt.visualReceiptHash || current.receipt.successText !== receipt.successText
+        || current.receipt.observedAt !== receipt.observedAt) fail(409, 'receipt already has different evidence');
+      return { ...current, duplicate: true };
+    }
+    const item = this.#item(snapshot, id, input, identity);
+    const destination = item.finalAction?.destination ?? item.legacyState?.pause?.origin
+      ?? snapshot.opportunities.find(o => o.id === item.opportunityId && o.profileId === identity.profileId)?.applyUrl;
+    const attemptId = item.finalAction?.attemptId ?? (item.legacyOutcomeHold ? item.claim?.attemptId ?? item.id : null);
+    if (!destination || attemptId !== input.attemptId) fail(409, 'receipt does not match the recorded final attempt');
+    try { receipt.destinationVerification = await verifyEmployerReceiptRedirect(destination, receipt.finalUrl, input.redirectEvidence, this.receiptFetchImpl); }
+    catch (error) { fail(409, `receipt destination or time does not match this attempt: ${error.message}`); }
     return this.store.mutate(state => {
       const item = this.#item(state, id, input, identity);
       const opportunity = state.opportunities.find(i => i.id === item.opportunityId && i.profileId === identity.profileId);
       const action = item.finalAction ?? (item.legacyOutcomeHold ? { destination: item.legacyState?.pause?.origin ?? opportunity.applyUrl,
         startedAt: item.createdAt, attemptId: item.claim?.attemptId ?? item.id } : null);
       if (!action || action.attemptId !== input.attemptId) fail(409, "receipt does not match the recorded final attempt");
-      if (new URL(receipt.finalUrl).origin !== new URL(action.destination).origin
+      if (!receiptDestinationMatches(action.destination, receipt.finalUrl, receipt.destinationVerification)
         || Date.parse(receipt.observedAt) < Date.parse(action.startedAt)
         || Date.parse(receipt.observedAt) > Date.now() + 60_000) fail(409, "receipt destination or time does not match this attempt");
       item.receipt = { ...receipt, submittedAt: receipt.observedAt, attemptId: input.attemptId };
@@ -316,6 +339,20 @@ export class ChromeQueue {
     const record = { version: 1, channel: 'browser', submissionActor: 'owner_browser', identityMatchPending: false,
       recordKey, submissionDate, observedAt, finalUrl,
       evidence: { source: proof.source, successText, reference, sha256: proof.sha256.toLowerCase() } };
+    const snapshot = this.store.snapshot();
+    const current = snapshot.applications.find(i => i.id === id && i.profileId === identity.profileId && owned(i));
+    if (!current) fail(404, 'Chrome application not found');
+    if (current.sessionId !== input.sessionId || current.sessionActorId !== identity.actorId) fail(409, 'session does not own this application');
+    const currentOpportunity = snapshot.opportunities.find(o => o.id === current.opportunityId && o.profileId === identity.profileId);
+    record.jobUrl = https(currentOpportunity?.applyUrl ?? currentOpportunity?.listingUrl);
+    // Existing exact evidence imports reuse their server-verified destination,
+    // keeping retries idempotent even if the posting later closes.
+    if (current.ownerSubmission?.channel === 'browser') record.destinationVerification = current.ownerSubmission.destinationVerification;
+    else {
+      if (current.finalAction || current.legacyOutcomeHold) fail(409, 'record the existing final attempt receipt; owner import cannot replace an uncertain agent action');
+      try { record.destinationVerification = await verifyEmployerReceiptRedirect(record.jobUrl, finalUrl, input.redirectEvidence, this.receiptFetchImpl); }
+      catch (error) { fail(409, `owner receipt must identify the exact official role: ${error.message}`); }
+    }
     return this.store.mutate(state => {
       // Idempotent evidence import is separate from the agent final-action path.
       const existing = state.applications.find(i => i.id === id && i.profileId === identity.profileId && owned(i));
@@ -324,8 +361,8 @@ export class ChromeQueue {
       const opportunity = state.opportunities.find(o => o.id === existing.opportunityId && o.profileId === identity.profileId);
       record.jobUrl = https(opportunity?.applyUrl ?? opportunity?.listingUrl);
       const expectedKeys = roleKeys(opportunity);
-      if (new URL(finalUrl).origin !== new URL(record.jobUrl).origin
-        || ![...roleKeys({ applyUrl: finalUrl })].some(k => expectedKeys.has(k))) fail(409, 'owner receipt must identify the exact official role');
+      if (!receiptDestinationMatches(record.jobUrl, finalUrl, record.destinationVerification)
+        || !record.destinationVerification && ![...roleKeys({ applyUrl: finalUrl })].some(k => expectedKeys.has(k))) fail(409, 'owner receipt must identify the exact official role');
       if (!ownerSubmissionSentAt({ ownerSubmission: record })) fail(400, 'valid owner receipt submission date and evidence required');
       if (Date.parse(observedAt) < Date.parse(existing.createdAt)) fail(409, 'owner receipt predates this application');
       const fingerprint = hash({ ...record, observedAt: undefined });

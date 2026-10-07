@@ -1,7 +1,8 @@
 // Owner-reported sends are distinct from agent attempts and browser-verified receipts.
 // Date-only evidence is placed at UTC noon, which is always the same Sofia day.
+import { receiptDestinationMatches } from './receipt-destination.mjs';
 export function explicitApplicationReceipt(text) {
- return typeof text === 'string' && /(?:\bwe\s+(?:have\s+)?received\s+(?:your|the)\s+application\b|\b(?:your\s+)?application\s+(?:has\s+been\s+|was\s+)?received\b|\bapplication\s+(?:successfully\s+)?submitted\b)/i.test(text)
+ return typeof text === 'string' && /(?:\bwe\s+(?:have\s+)?received\s+(?:your|the)\s+application\b|\b(?:your\s+)?application\s+(?:has\s+been\s+|was\s+)?received\b|\bapplication\s+(?:successfully\s+)?submitted\b|\bthank\s+you\s+for\s+submitting\s+your\s+application\b)/i.test(text)
   && !/\b(?:not received|not submitted|failed|unable to submit|could not submit|error)\b/i.test(text);
 }
 export function ownerSubmissionSentAt(application, now = new Date()) {
@@ -24,6 +25,6 @@ export function ownerSubmissionSentAt(application, now = new Date()) {
  const parts = new Intl.DateTimeFormat('en-CA', {timeZone:'Europe/Sofia',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(p.observedAt));
  if (p.submissionDate > parts) return null;
  if (p.jobUrl) { try { const u = new URL(p.jobUrl); if (u.protocol !== 'https:' || u.username || u.password) return null; } catch { return null; } }
- if (browser) { try { const u = new URL(p.finalUrl); if (u.protocol !== 'https:' || u.username || u.password || u.origin !== new URL(p.jobUrl).origin) return null; } catch { return null; } }
+ if (browser && !receiptDestinationMatches(p.jobUrl, p.finalUrl, p.destinationVerification, now)) return null;
  return date.toISOString();
 }
