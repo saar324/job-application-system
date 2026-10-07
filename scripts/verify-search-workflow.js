@@ -7,6 +7,8 @@ import path from 'node:path';
 import { SqliteStore } from '../src/sqlite-store.js';
 import { ApplicationService } from '../src/service.js';
 import { SearchCoordinator } from '../src/discovery/search-coordinator.js';
+import { draftProfileFingerprint } from '../src/application-drafts.js';
+import { draftPacket } from '../test/fixtures/draft-packet.js';
 
 const dir = await mkdtemp(path.join(os.tmpdir(), 'search-browser-fixture-'));
 const store = await new SqliteStore(path.join(dir, 'state.sqlite')).init();
@@ -43,6 +45,7 @@ const server = createServer(async(req,res)=>{
         leases=await Promise.all(['search-1','search-2'].map(workerId=>coordinator.claim({...main,workerId},owner)));
       }else if(action==='queue'){
         await Promise.all(leases.map(({lease},i)=>coordinator.enqueue({...scope('search-'+(i+1),lease),officialPostingReviewed:true,
+          draft:draftPacket('https://employer.example/new'),profileFingerprint:draftProfileFingerprint({}),
           candidate:{source:lease.sourceId,title:'Remote Engineer',company:'Synthetic Employer',description:'Full current remote role.',applyUrl:'https://employer.example/new'},fit:{decision:'relevant',reason:'Synthetic role fit'}},owner,discovery)));
       }else if(action==='rotate'){
         const input=scope('search-1',leases[0].lease);

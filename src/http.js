@@ -60,9 +60,19 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "GET" && url.pathname === "/v1/discovery/search") {
         return send(response, 200, service.searchCoordinator.status(identity));
       }
-      const searchAction = url.pathname.match(/^\/v1\/discovery\/search\/(start|claim|progress|finish|stop|enqueue|scan|query)$/);
+      if (request.method === 'GET' && url.pathname === '/v1/draft-context') {
+        response.setHeader('cache-control', 'no-store');
+        return send(response, 200, await service.applicationDrafts.context(identity));
+      }
+      const draftAction = url.pathname.match(/^\/v1\/chrome-queue\/([^/]+)\/draft(?:\/(review))?$/);
+      if (draftAction && (request.method === 'GET' && !draftAction[2] || request.method === 'POST' && draftAction[2] === 'review')) {
+        response.setHeader('cache-control', 'no-store');
+        return send(response, 200, draftAction[2] ? await service.applicationDrafts.review(draftAction[1], await jsonBody(request), identity)
+          : await service.applicationDrafts.load(draftAction[1], identity));
+      }
+      const searchAction = url.pathname.match(/^\/v1\/discovery\/search\/(start|claim|control|prepare-claim|prepare-save|progress|finish|stop|enqueue|scan|query)$/);
       if (request.method === "POST" && searchAction) {
-        const action = searchAction[1], body = await jsonBody(request);
+        const action = ({ 'prepare-claim': 'prepareClaim', 'prepare-save': 'prepareSave' })[searchAction[1]] ?? searchAction[1], body = await jsonBody(request);
         const result = ["enqueue", "scan", "query"].includes(action)
           ? await service.searchCoordinator[action === "query" ? "scan" : action](body, identity, discovery, action === "query")
           : await service.searchCoordinator[action](body, identity);

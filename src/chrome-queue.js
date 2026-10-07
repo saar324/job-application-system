@@ -63,7 +63,10 @@ export class ChromeQueue {
     const jobs = new Map(state.opportunities.filter(item => item.profileId === profileId).map(item => [item.id, item]));
     const items = state.applications.filter(item => item.profileId === profileId && owned(item))
       .sort((a, b) => a.queuePosition - b.queuePosition)
-      .map(item => ({ ...item, opportunity: jobs.get(item.opportunityId) }));
+      .map(item => ({ ...item, ...(item.preparation ? { preparation: {
+        status: item.preparation.status, revision: item.preparation.revision, createdAt: item.preparation.createdAt,
+        writer: item.preparation.writer, reviewedAt: item.preparation.review?.reviewedAt
+      } } : {}), opportunity: jobs.get(item.opportunityId) }));
     const current = items.find(active) ?? null;
     return { workflow: "chrome_session", current, waiting: current?.status === "waiting_owner"
       || ["submission_started", "submission_unverified"].includes(current?.status),
@@ -71,7 +74,7 @@ export class ChromeQueue {
     submitted: items.filter(item => item.status === "submitted" && item.receipt?.simulated !== true || ownerSubmissionSentAt(item)).length, items };
   }
 
-  async add(input, identity, { authorize } = {}) {
+  async add(input, identity, { authorize, prepare } = {}) {
     let opportunity;
     if (input.opportunityId) {
       opportunity = this.store.snapshot().opportunities.find(item => item.id === input.opportunityId && item.profileId === identity.profileId);
@@ -109,6 +112,7 @@ export class ChromeQueue {
           }
           event(state, identity, "adopted", previous, { uncertain: Boolean(uncertain) });
         }
+        prepare?.(state, previous, true);
         return { duplicate: true, application: previous, opportunity };
       }
       const createdAt = timestamp();
@@ -117,6 +121,7 @@ export class ChromeQueue {
         queuePosition: 1 + Math.max(0, ...state.applications.filter(i => i.profileId === identity.profileId).map(i => i.queuePosition ?? 0)),
         status: "pending", answers: {}, requestedBy: identity.actorId, createdAt, updatedAt: createdAt };
       state.applications.push(item);
+      prepare?.(state, item, false);
       event(state, identity, "added", item, { queuePosition: item.queuePosition });
       return { duplicate: false, application: item, opportunity };
     });

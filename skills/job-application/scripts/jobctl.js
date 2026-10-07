@@ -36,7 +36,10 @@ if (command === "resume-download") {
 
 const routes = {
   "search-status": ["GET", "/v1/discovery/search"],
-  ...Object.fromEntries(["start", "claim", "progress", "finish", "stop", "enqueue", "scan", "query"].map(action =>
+  "draft-context": ["GET", "/v1/draft-context"],
+  "queue-draft": ["GET", `/v1/chrome-queue/${id}/draft`],
+  "queue-draft-review": ["POST", `/v1/chrome-queue/${id}/draft/review`],
+  ...Object.fromEntries(["start", "claim", "control", "prepare-claim", "prepare-save", "progress", "finish", "stop", "enqueue", "scan", "query"].map(action =>
     [`search-${action}`, ["POST", `/v1/discovery/search/${action}`]])),
   config: ["GET", "/v1/config"], "standing-policy": ["GET", "/v1/standing-submission-policy"],
   "record-external-submission": ["POST", "/v1/external-submissions"],
