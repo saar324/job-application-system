@@ -1,4 +1,4 @@
 interface:
   display_name: "Job Application"
-  short_description: "Apply in Chrome with one session and a saved queue"
-  default_prompt: "Use $job-application to search and apply in Chrome, process my queued links in order, submit after your review, and stop to wait whenever you need my help."
+  short_description: "Two search agents, one application session"
+  default_prompt: "Use $job-application to coordinate two search agents and apply in the internal browser, process my queued links in order, submit after your review, and stop to wait whenever you need my help."

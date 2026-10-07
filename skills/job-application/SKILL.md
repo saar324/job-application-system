@@ -1,11 +1,11 @@
 ---
 name: job-application
-description: Search for jobs and apply through one interactive Chrome session, with a durable ordered queue, verified applicant facts, submission receipts, and immediate pauses for owner help.
+description: Coordinate two search agents and apply through one interactive Codex internal browser session, with a durable ordered queue, verified applicant facts, submission receipts, and immediate pauses for owner help.
 ---
 
 # Job Application
 
-Use one session with the owner in the Codex internal browser. Keep the owner's Chrome independent. Do not create application subagents, a manager, parallel workers or background campaigns. Use `node {baseDir}/scripts/jobctl.js` to save and retrieve state; the server is the source of truth for the queue, answers, history and receipts. Never read or print the installed profile credential.
+Use one session with the owner in the Codex internal browser. Keep the owner's Chrome independent. For an active search-and-apply request, this main session starts exactly two search-only subagents. They claim separate sources and append passive jobs; only this session fills, reviews and submits applications. Read [search-workers.md](references/search-workers.md) for synchronization, daily source resets and worker prompts. Do not create parallel form workers or server background campaigns. Use `node {baseDir}/scripts/jobctl.js` to save and retrieve state; the server is the source of truth for the queue, answers, history and receipts. Never read or print the installed profile credential.
 
 ## Start and recover
 
@@ -21,11 +21,11 @@ When the owner pastes a LinkedIn “Application submitted” confirmation, call 
 
 Save each new owner URL immediately with `queue-add` (or `direct`). New messages can add links while this session searches, applies or waits. Record duplicates without creating another attempt. Appending links does not interrupt the current application or resolve its blocker. Process the queue in recorded order. Do not start a second application while the current one needs owner help or an outcome check.
 
-Read `references/sources.json` for configured sources and filters. When its autonomous lists are empty, use `references/public-sources.json`. Preserve source settings, location and compensation preferences. Use Chrome to navigate and search visible job boards. LinkedIn remains user-controlled unless the owner explicitly changes that instruction. Respect source limits, manual-only entries and 403/429/challenge stops. An application challenge stops the session; do not route around it.
+Read `references/sources.json` for configured sources and filters. When its autonomous lists are empty, use `references/public-sources.json`. Preserve source settings, location and compensation preferences. Search workers use public discovery tools and leased server feeds. This main chat uses the internal browser for application forms. LinkedIn remains user-controlled unless the owner explicitly changes that instruction. Respect source limits, manual-only entries and 403/429/challenge stops. An application challenge stops the session; do not route around it.
 
 Server source retrieval remains available through `sources`, `scan` with `reviewOnly:true`, `query` and `filter`. Read the full official listing before judging fit. Review responsibilities, core skills, seniority, location and work authorization, compensation and employer quality. Unknown bonus skills alone do not disqualify a suitable role. Do not invent mandatory qualifications. A relevant `consider` verdict verifies the official destination and adds passive queue work; `apply:false` records review without adding work. For an unsupported official destination, save the reviewed opportunity and add its `opportunityId` to the queue. Never label a discovered role as owner-supplied.
 
-When queued work exists, work on it before continuing discovery. Search for another suitable role when the queue is empty and the owner's search request remains active. Runs are on demand. Do not create schedules.
+Process queued applications while the two search workers replenish the queue from exclusive ranked source leases. Daily Europe/Sofia resets reopen the source priority order without clearing job history. Discovery runs only within the active authorized session. Read [search-workers.md](references/search-workers.md); do not create a schedule.
 
 ## Apply in Chrome
 
@@ -41,7 +41,7 @@ For sign-in or registration, read [accounts.md](references/accounts.md). Check t
 
 ## Stop and wait
 
-For a CAPTCHA, genuinely missing or conflicting fact, uncovered legal commitment, account action or tool-required permission: save a `queue-checkpoint`, leave the current Chrome form visible, ask the owner only for what is needed, and stop. Do not continue discovery, open another application, choose a replacement or defer the question to a batch-end backlog. New links may still be recorded while waiting.
+For a CAPTCHA, genuinely missing or conflicting fact, uncovered legal commitment, account action or tool-required permission: save a `queue-checkpoint`, leave the current Chrome form visible, ask the owner only for what is needed, and stop. Do not open another application, choose a replacement or defer the question to a batch-end backlog. Search-only workers may continue passive discovery and enqueue without clearing the hold or using the application tab. New links may still be recorded while waiting.
 
 Check saved answers and applicable recruitment consent before treating a fact or permission as missing. Matching authorized email verification can be completed in the same application, without saving or echoing the code. Never solve CAPTCHAs. Legal attestations require verified applicable owner evidence; routine submission delegation does not approve new Terms, marketing or other commitments. Tool-specific permission and account requirements still apply.
 

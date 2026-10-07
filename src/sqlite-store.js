@@ -326,7 +326,8 @@ export class SqliteStore {
       applications: parseRows("applications"),
       confirmations: parseRows("confirmations"),
       audit: parseRows("audit_events"),
-      attempts: parseRows("attempts")
+      attempts: parseRows("attempts"),
+      ...(this.metadata("discovery_search_sessions") ? { searchSessions: JSON.parse(this.metadata("discovery_search_sessions")) } : {})
     };
   }
 
@@ -369,6 +370,13 @@ export class SqliteStore {
   close() { this.#db?.close(); }
 
   #writeState(state, original = EMPTY_STATE) {
+    if (state.searchSessions !== undefined) {
+      if (!Array.isArray(state.searchSessions)) throw new Error("state.searchSessions must be an array");
+      if (JSON.stringify(state.searchSessions) !== JSON.stringify(original.searchSessions)) {
+        this.#db.prepare("INSERT INTO runtime_metadata(key, value) VALUES ('discovery_search_sessions', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+          .run(JSON.stringify(state.searchSessions));
+      }
+    }
     for (const key of ["opportunities", "applications", "confirmations", "audit", "attempts"]) {
       if (!Array.isArray(state[key])) throw new Error(`state.${key} must be an array`);
     }
