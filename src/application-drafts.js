@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { ClientError } from './service.js';
 import { answerEvidenceFingerprint } from './approved-answers.js';
 import { officialAtsIdentityFromUrl } from './discovery/official-ats.js';
+import { analyzeDraftFeedback, learningContext, validateFeedbackNotes } from './draft-feedback.js';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = (status, message) => { throw new ClientError(status, message); };
@@ -86,8 +87,16 @@ export function saveDraft(item, opportunity, packet, profile, writer, at) {
     if (!submitted || !canonical || submitted.key !== canonical.key) fail(400, 'draft posting must match queued role');
     validated.officialPostingUrl = opportunity.applyUrl;
   }
-  item.preparation = { schemaVersion: 1, status: 'unreviewed', revision: (item.preparation?.revision ?? 0) + 1,
-    packet: validated, fingerprint: draftFingerprint(profile, opportunity), writer, createdAt: at };
+  const previous = item.preparation;
+  const feedbackHistory = previous?.feedbackHistory ?? (previous?.review ? [{
+    ...analyzeDraftFeedback(previous.packet, previous.review.packet, profile,
+      { profileChanged: previous.fingerprint.profile !== previous.review.fingerprint.profile }),
+    revision: previous.review.revision, reviewedAt: previous.review.reviewedAt,
+    reviewerId: previous.review.reviewerId, historical: true
+  }] : []);
+  item.preparation = { schemaVersion: 1, status: 'unreviewed', revision: (previous?.revision ?? 0) + 1,
+    packet: validated, fingerprint: draftFingerprint(profile, opportunity), writer, createdAt: at,
+    ...(feedbackHistory.length ? { feedbackHistory } : {}) };
   delete item.preparationLease;
 }
 
@@ -95,7 +104,7 @@ export class ApplicationDrafts {
   constructor(service) { this.service = service; this.store = service.store; }
   async context(identity) {
     const profile = await this.service.profiles.get(identity.profileId);
-    return { profileFingerprint: draftProfileFingerprint(profile), facts: Object.fromEntries(
+    return { profileFingerprint: draftProfileFingerprint(profile), learning: learningContext(this.store.snapshot(), identity.profileId, profile), facts: Object.fromEntries(
       ['contact', 'links', 'documents', 'skills', 'applicationAnswers', 'experience', 'workHistory', 'verifiedExamples', 'preferences']
         .filter(k => profile?.[k] !== undefined).map(k => [k, profile[k]])) };
   }
@@ -118,11 +127,12 @@ export class ApplicationDrafts {
       revision: draft?.revision ?? 0, fingerprint: current, status: !draft ? 'missing' : stale.profileChanged || stale.postingChanged ? 'stale' : 'unreviewed',
       packet: draft?.packet ?? null, correctedPacket: reviewedCurrent ? draft.review.packet : null,
       readyToFill: Boolean(reviewedCurrent && draft.review.readyToFill), stale,
+      learning: learningContext(state, identity.profileId, profile),
       facts: Object.fromEntries(['contact', 'links', 'documents', 'skills', 'applicationAnswers', 'experience', 'workHistory', 'verifiedExamples', 'preferences']
         .filter(k => profile?.[k] !== undefined).map(k => [k, profile[k]])) };
   }
   async review(id, input, identity) {
-    const packet = validateDraft(input.packet), profile = await this.service.profiles.get(identity.profileId);
+    const packet = validateDraft(input.packet), notes = validateFeedbackNotes(input.feedback), profile = await this.service.profiles.get(identity.profileId);
     return this.store.mutate(state => {
       const item = this.#item(state, id, identity);
       if (item.sessionId !== input.sessionId || item.sessionActorId !== identity.actorId || item.status !== 'in_progress' || item.finalAction) fail(409, 'only current main session may correct draft before filling');
@@ -135,9 +145,17 @@ export class ApplicationDrafts {
         && Date.now() - Date.parse(packet.formObservation.observedAt) <= 10 * 60_000
         && Date.parse(packet.formObservation.observedAt) <= Date.now()
         && packet.missingInformation.length === 0 && !packet.fields.some(f => f.required && ['missing', 'needs_review'].includes(f.status));
+      const reviewedAt = new Date().toISOString();
+      const feedback = { ...analyzeDraftFeedback(item.preparation.packet, packet, profile,
+        { notes, profileChanged: item.preparation.fingerprint.profile !== current.profile }),
+      revision: input.revision, reviewedAt, reviewerId: identity.actorId,
+      firstReviewedAt: item.preparation.feedbackHistory?.find(r => r.revision === input.revision)?.firstReviewedAt ?? reviewedAt };
+      item.preparation.feedbackHistory ??= [];
+      item.preparation.feedbackHistory = item.preparation.feedbackHistory.filter(r => r.revision !== input.revision);
+      item.preparation.feedbackHistory.push(feedback);
       item.preparation.review = { packet, revision: input.revision, fingerprint: current, readyToFill,
-        reviewerId: identity.actorId, sessionId: input.sessionId, reviewedAt: new Date().toISOString() };
-      return { applicationId: id, revision: input.revision, readyToFill, status: 'corrected_draft', liveReviewRequired: true };
+        reviewerId: identity.actorId, sessionId: input.sessionId, reviewedAt };
+      return { applicationId: id, revision: input.revision, readyToFill, status: 'corrected_draft', liveReviewRequired: true, feedback };
     });
   }
 }

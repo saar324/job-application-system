@@ -13,6 +13,8 @@ Run `health`, `profile`, `fit-context` and `queue`. Use `session-context` for th
 
 Use the current chat ID as `sessionId` in queue actions. Recover the current application before taking another job. An open tab is not durable state. Keep its checkpoint, non-secret answers and outcome evidence on the server. If a previous final action may have run, check the employer outcome before any further Submit action.
 
+Drafts improve through the review feedback loop in [draft-feedback.md](references/draft-feedback.md). The server compares worker suggestions with accepted corrections and returns bounded, profile-specific lessons in `draft-context` and `queue-draft`. Search workers refresh these lessons before each new packet. The main session investigates unexplained omissions and records a reason during draft review. Lessons point to current verified facts or better preparation steps; they never create applicant facts, grant consent or authorize submission.
+
 ## Owner LinkedIn confirmations
 
 When the owner pastes a LinkedIn “Application submitted” confirmation, call `record-external-submission` immediately, including when no URL is supplied. The server log must succeed before saying the dashboard will count it. Read [external-submissions.md](references/external-submissions.md) for evidence, deduplication and historical answers. A private archive alone does not update the dashboard. Keep listings and review screens separate from confirmed sends. This passive logging does not resolve or advance the current application blocker.
