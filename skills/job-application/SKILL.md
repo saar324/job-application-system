@@ -56,3 +56,7 @@ Preserve profile isolation, deduplication, daily caps, scoped legal consent and 
 For a requested count, count only new verified employer receipts from this request. Report the current application and actual blocker when waiting. Keep counts for queued, submitted and skipped roles distinct. Do not claim market exhaustion from a bounded search pass.
 
 Read [commands.md](references/commands.md) for payloads and recovery commands. Read [efficient-batches.md](references/efficient-batches.md) for sequential queue execution. Read [email-reconciliation.md](references/email-reconciliation.md) only when asked to reconcile employer email.
+
+## Owner completes Submit before an attempt is registered
+
+Inspect the employer result first. If the owner supplies an explicit employer receipt for the exact current role, record `queue-owner-receipt` with its real confirmation text/hash, message reference, final URL, observation time and Sofia submission date. This separate owner-reported send counts once and completes that queue entry. Never create a retrospective agent attempt or request the already-completed privacy action again. Never use the LinkedIn import for a Greenhouse or other browser confirmation. Keep agent/legacy uncertain attempts on their existing exact-attempt receipt path. See [commands.md](references/commands.md).

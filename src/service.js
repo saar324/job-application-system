@@ -1,4 +1,5 @@
 import { ExternalSubmissions } from './external-submissions.js';
+import { ownerSubmissionSentAt } from '../dashboard/owner-submission.mjs';
 import { SearchCoordinator } from "./discovery/search-coordinator.js";
 import { ChromeQueue } from "./chrome-queue.js";
 import { AccountAccess } from './account-access.js';
@@ -436,7 +437,7 @@ function buildApplicationLogEntry(application, opportunity = {}, confirmations =
     resolutions: application.resolutions,
     createdAt: application.createdAt,
     updatedAt: application.updatedAt,
-    submittedAt: application.receipt?.submittedAt,
+    submittedAt: application.receipt?.submittedAt ?? ownerSubmissionSentAt(application),
     ownerSubmission: application.ownerSubmission,
     ownerSubmissionEvidence: application.ownerSubmissionEvidence,
     questionsAndAnswers: [...answered.values()],
