@@ -7,6 +7,7 @@ import { JsonStore } from '../src/store.js';
 import { SqliteStore } from '../src/sqlite-store.js';
 import { ApplicationService } from '../src/service.js';
 import { createHttpServer } from '../src/http.js';
+import { ownerSubmissionSentAt } from '../dashboard/owner-submission.mjs';
 
 const owner = { actorId: 'application-session', profileId: 'applicant' };
 const other = { actorId: 'other-session', profileId: 'other-applicant' };
@@ -16,7 +17,7 @@ const preview = () => ({ company: 'Example', title: 'Engineer', destination: 'ht
   filled: [{ key: 'name', label: 'Name', value: 'Example Applicant', required: true, source: 'saved profile' }], unfilled: [] });
 const evidence = () => ({ manuallyVerified: true, finalUrl: 'https://employer.example/thanks',
   successText: 'We received your application', observedAt: new Date().toISOString(), visualReceiptHash: 'a'.repeat(64) });
-async function fixture(t, kind = 'sqlite', cap = 8) {
+async function fixture(t, kind = 'sqlite', cap = 8, receiptFetchImpl) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'chrome-queue-'));
   const file = path.join(dir, kind === 'sqlite' ? 'state.sqlite' : 'state.json');
   const store = await (kind === 'sqlite' ? new SqliteStore(file) : new JsonStore(file)).init();
@@ -25,7 +26,7 @@ async function fixture(t, kind = 'sqlite', cap = 8) {
   const config = { defaultMode: 'full_time', execution: { workflow: 'chrome_session', maxApplicationsPerDay: cap },
     modes: { full_time: { minimumScore: 75, dailyApplicationCap: cap }, freelance: { minimumScore: 70, dailyApplicationCap: cap } } };
   const service = new ApplicationService({ store, config, adapter: { name: 'must-not-run', submit: () => { browserCalls++; } },
-    profiles: { get: async () => structuredClone(profile) } });
+    profiles: { get: async () => structuredClone(profile) }, receiptFetchImpl });
   t.after(async () => { store.close?.(); await rm(dir, { recursive: true, force: true }); });
   return { service, queue: service.chromeQueue, store, file, profile, config, browserCalls: () => browserCalls };
 }
@@ -110,9 +111,85 @@ test('receipt requires proof for the exact recorded employer attempt', async t =
   await assert.rejects(queue.receipt(id, { ...input, attemptId: 'no-attempt', receipt: evidence() }, owner), /does not match/);
   const { attempt } = await submit(queue, id);
   await assert.rejects(queue.receipt(id, { ...input, attemptId: attempt.attemptId, receipt: { ...evidence(), simulated: true } }, owner), /verified employer/);
-  await assert.rejects(queue.receipt(id, { ...input, attemptId: attempt.attemptId, receipt: { ...evidence(), finalUrl: 'https://unrelated.example/thanks' } }, owner), /destination or time/);
+  await assert.rejects(queue.receipt(id, { ...input, attemptId: attempt.attemptId, receipt: { ...evidence(), finalUrl: 'https://unrelated.example/thanks' } }, owner), /verified official ATS employer link/);
   await assert.rejects(queue.receipt(id, { ...input, attemptId: attempt.attemptId, receipt: { ...evidence(), successText: '' } }, owner), /success text/);
   assert.equal(queue.list(owner.profileId).submitted, 0);
+});
+
+const redirectSource = 'https://jobs.lever.co/example/11111111-1111-4111-8111-111111111111/apply';
+const redirectFinal = 'https://www.employer.example/thanks?application=fixture-receipt';
+const redirectEvidence = () => ({sourceUrl:redirectSource, employerUrl:'https://www.employer.example/', linkText:'Example Home Page'});
+const employerPage = '<html><a href="http://www.employer.example">Example Home Page</a></html>';
+async function startRedirect(queue) {
+ const id = (await queue.add({url:redirectSource, company:'Example', title:'Engineer'}, owner)).application.id;
+ await queue.claim(input, owner);
+ const p = preview(); p.destination = redirectSource;
+ const r = await review(queue, id, {preview:p});
+ const attempt = await queue.startSubmission(id, {...input, previewFingerprint:r.previewFingerprint}, owner);
+ return {id, attempt};
+}
+
+for (const kind of ['json', 'sqlite']) test(`${kind}: verified ATS employer redirect completes held attempt once and advances FIFO`, async t => {
+ const requests = [];
+ const f = await fixture(t, kind, 8, async (url, options) => {
+  requests.push({url, options}); return new Response(employerPage, {headers:{'content-type':'text/html'}});
+ });
+ const {id, attempt} = await startRedirect(f.queue);
+ const next = (await add(f.queue, 2)).application.id;
+ await f.queue.checkpoint(id, {...input, kind:'captcha', message:'Owner completes verification'}, owner);
+ const body = {...input, attemptId:attempt.attemptId, redirectEvidence:redirectEvidence(),
+  receipt:{...evidence(), finalUrl:redirectFinal, successText:'Thank you for submitting your application'}};
+ const result = await f.queue.receipt(id, body, owner);
+ assert.equal(result.status, 'submitted');
+ assert.equal(result.receipt.finalUrl, redirectFinal);
+ assert.equal(result.receipt.destinationVerification.sourceUrl, redirectSource);
+ assert.match(result.receipt.destinationVerification.sourceContentHash, /^[a-f0-9]{64}$/);
+ assert.equal(requests[0].url, redirectSource);
+ assert.equal(requests[0].options.redirect, 'error');
+ assert.equal(requests[0].options.headers.authorization, undefined);
+ assert.equal((await f.queue.receipt(id, body, owner)).duplicate, true);
+ assert.equal(requests.length, 1);
+ assert.equal(f.queue.list(owner.profileId).submitted, 1);
+ assert.equal(f.store.snapshot().attempts.length, 1);
+ assert.equal((await f.queue.claim(input, owner)).application.id, next);
+ await assert.rejects(f.queue.receipt(id, {...body, receipt:{...body.receipt, finalUrl:'https://unrelated.example/thanks'}}, owner), /different evidence/);
+});
+
+test('redirect evidence cannot bypass attempt, session, source role or unrelated destination checks', async t => {
+ let calls = 0;
+ const {queue} = await fixture(t, 'sqlite', 8, async () => {calls++; return new Response(employerPage,{headers:{'content-type':'text/html'}})});
+ const {id, attempt} = await startRedirect(queue);
+ const body = {...input, attemptId:attempt.attemptId, redirectEvidence:redirectEvidence(),receipt:{...evidence(),finalUrl:redirectFinal}};
+ await assert.rejects(queue.receipt(id, {...body,attemptId:'other-attempt'}, owner), /recorded final attempt/);
+ await assert.rejects(queue.receipt(id, {...body,sessionId:'other-chat'}, owner), /session does not own/);
+ await assert.rejects(queue.receipt(id, body, other), /not found/);
+ await assert.rejects(queue.receipt(id, {...body,redirectEvidence:{...redirectEvidence(),sourceUrl:redirectSource.replace('111111111111','222222222222')}}, owner), /official ATS employer link/);
+ await assert.rejects(queue.receipt(id, {...body,receipt:{...body.receipt,finalUrl:'https://unrelated.example/thanks'}}, owner), /employer origin/);
+ await assert.rejects(queue.receipt(id, {...body,redirectEvidence:undefined,receipt:{...body.receipt,destinationVerification:{kind:'official_ats_employer_link'}}}, owner), /official ATS employer link/);
+ assert.equal(calls, 0);
+ await assert.rejects(queue.receipt(id, {...body,redirectEvidence:{...redirectEvidence(),employerUrl:'https://unrelated.example/'},receipt:{...body.receipt,finalUrl:'https://unrelated.example/thanks'}}, owner), /not the official ATS company link/);
+ assert.equal(calls, 1);
+ assert.equal(queue.list(owner.profileId).submitted, 0);
+});
+
+test('owner redirect receipt uses the same verification, counts in the collector and stays idempotent', async t => {
+ let calls = 0;
+ const {queue,store} = await fixture(t, 'sqlite', 8, async () => {calls++;return new Response(employerPage,{headers:{'content-type':'text/html'}})});
+ const id = (await queue.add({url:redirectSource,company:'Example',title:'Engineer'},owner)).application.id;
+ await queue.claim(input,owner);
+ await queue.checkpoint(id,{...input,kind:'captcha',message:'Owner completed the form'},owner);
+ const observedAt = new Date().toISOString();
+ const body = {...input,ownerSubmitted:true,recordKey:'fixture-redirect',observedAt,
+  submissionDate:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Sofia',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(observedAt)),
+  finalUrl:redirectFinal,redirectEvidence:redirectEvidence(),evidence:{source:'owner_provided_employer_confirmation',successText:'Thank you for submitting your application',reference:'Owner exact current role confirmation',sha256:'b'.repeat(64)}};
+ assert.equal((await queue.ownerReceipt(id,body,owner)).duplicate,false);
+ const app=store.snapshot().applications.find(i=>i.id===id);
+ assert.ok(ownerSubmissionSentAt(app));
+ assert.equal(ownerSubmissionSentAt({...app,ownerSubmission:{...app.ownerSubmission,destinationVerification:undefined}}),null);
+ assert.equal((await queue.ownerReceipt(id,body,owner)).duplicate,true);
+ assert.equal(calls,1);
+ assert.equal(queue.list(owner.profileId).submitted,1);
+ assert.equal(store.snapshot().attempts.length,0);
 });
 
 test('safe checkpoints and reviews reject password and verification-code fields', async t => {
