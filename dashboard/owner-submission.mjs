@@ -2,7 +2,7 @@
 // Date-only evidence is placed at UTC noon, which is always the same Sofia day.
 import { receiptDestinationMatches } from './receipt-destination.mjs';
 export function explicitApplicationReceipt(text) {
- return typeof text === 'string' && /(?:\bwe\s+(?:have\s+)?received\s+(?:your|the)\s+application\b|\b(?:your\s+)?application\s+(?:has\s+been\s+|was\s+)?received\b|\bapplication\s+(?:successfully\s+)?submitted\b|\bthank\s+you\s+for\s+submitting\s+your\s+application\b)/i.test(text)
+ return typeof text === 'string' && /(?:\bwe\s+(?:have\s+)?received\s+(?:your|the)\s+application\b|\b(?:your\s+)?application\s+(?:has\s+been\s+|was\s+)?received\b|\byour\s+application\s+to\s+[^\r\n!?;:]{1,160}?\s+has\s+been\s+received\b|\bapplication\s+(?:successfully\s+)?submitted\b|\bthank\s+you\s+for\s+submitting\s+your\s+application\b)/i.test(text)
   && !/\b(?:not received|not submitted|failed|unable to submit|could not submit|error)\b/i.test(text);
 }
 export function ownerSubmissionSentAt(application, now = new Date()) {
