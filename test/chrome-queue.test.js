@@ -365,6 +365,26 @@ for (const kind of ['json', 'sqlite']) test(`${kind}: owner receipt completes he
   await assert.rejects(queue.startSubmission(id,{...input},owner),/already terminal/);
 });
 
+for (const kind of ['json', 'sqlite']) test(`${kind}: YC named-employer receipt counts once and releases the queue without an attempt`, async t => {
+  const { queue, store } = await fixture(t, kind);
+  const url = 'https://www.ycombinator.com/companies/example-ai/jobs/ExampleId-full-stack-engineer';
+  const id = (await queue.add({ url }, owner)).application.id;
+  const next = (await add(queue, 2)).application.id;
+  await queue.claim(input, owner);
+  await queue.checkpoint(id, { ...input, kind: 'receipt_logging_bug', message: 'Exact employer receipt awaits import' }, owner);
+  const proof = { ...ownerProof(), finalUrl: url, evidence: { ...ownerProof().evidence,
+    successText: 'Thank you for applying. Your application to Example.ai has been received.' } };
+  assert.equal((await queue.ownerReceipt(id, proof, owner)).duplicate, false);
+  assert.equal((await queue.ownerReceipt(id, proof, owner)).duplicate, true);
+  const application = store.snapshot().applications.find(a => a.id === id);
+  assert.ok(ownerSubmissionSentAt(application));
+  assert.equal(application.ownerSubmission.evidence.successText, proof.evidence.successText);
+  assert.equal(application.finalAction, undefined);
+  assert.equal(store.snapshot().attempts.length, 0);
+  assert.equal(queue.list(owner.profileId).submitted, 1);
+  assert.equal((await queue.claim(input, owner)).application.id, next);
+});
+
 test('owner receipt rejects wrong role, identity, session, incomplete or failed confirmations and invalid dates',async t=>{
  const {queue}=await fixture(t);const id=(await add(queue,1)).application.id;await queue.claim(input,owner);
  const p=ownerProof();
