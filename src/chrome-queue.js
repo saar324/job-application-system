@@ -5,6 +5,7 @@ import { ClientError, manualDailyCaps } from "./service.js";
 import { createFieldReview, requiresLegalReview } from "./reviewed-fields.js";
 import { receiptDestinationMatches } from '../dashboard/receipt-destination.mjs';
 import { verifyEmployerReceiptRedirect } from './receipt-destination.js';
+import { verifyEmailReceipt } from './email-receipt.js';
 
 const timestamp = () => new Date().toISOString();
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -281,6 +282,7 @@ export class ChromeQueue {
   }
 
   async receipt(id, input, identity) {
+    const profile = await this.service.profiles?.get(identity.profileId);
     const receipt = safe(input.receipt);
     if (!receipt || receipt.manuallyVerified !== true || receipt.simulated === true
       || typeof receipt.visualReceiptHash !== "string" || !/^[a-f0-9]{64}$/.test(receipt.visualReceiptHash) || !receipt.successText
@@ -290,13 +292,16 @@ export class ChromeQueue {
     // Authenticate and bind the attempt before any network verification. Only
     // the server may produce the trusted destination verification record.
     delete receipt.destinationVerification;
+    delete receipt.emailVerification;
     const snapshot = this.store.snapshot();
     const current = snapshot.applications.find(i => i.id === id && i.profileId === identity.profileId && owned(i));
     if (current?.status === 'submitted') {
       if (current.sessionId !== input.sessionId || current.sessionActorId !== identity.actorId) fail(409, 'session does not own this application');
       if (current.receipt?.attemptId !== input.attemptId || current.receipt.finalUrl !== receipt.finalUrl
         || current.receipt.visualReceiptHash !== receipt.visualReceiptHash || current.receipt.successText !== receipt.successText
-        || current.receipt.observedAt !== receipt.observedAt) fail(409, 'receipt already has different evidence');
+        || current.receipt.observedAt !== receipt.observedAt
+        || current.receipt.evidenceType !== receipt.evidenceType
+        || hash(current.receipt.emailEvidence ?? null) !== hash(receipt.emailEvidence ?? null)) fail(409, 'receipt already has different evidence');
       return { ...current, duplicate: true };
     }
     const item = this.#item(snapshot, id, input, identity);
@@ -304,7 +309,13 @@ export class ChromeQueue {
       ?? snapshot.opportunities.find(o => o.id === item.opportunityId && o.profileId === identity.profileId)?.applyUrl;
     const attemptId = item.finalAction?.attemptId ?? (item.legacyOutcomeHold ? item.claim?.attemptId ?? item.id : null);
     if (!destination || attemptId !== input.attemptId) fail(409, 'receipt does not match the recorded final attempt');
-    try { receipt.destinationVerification = await verifyEmployerReceiptRedirect(destination, receipt.finalUrl, input.redirectEvidence, this.receiptFetchImpl); }
+    const email = receipt.evidenceType === 'employer_confirmation_email';
+    if (receipt.evidenceType && !email) fail(400, 'unsupported receipt evidence type');
+    try {
+      if (email) {
+        verifyEmailReceipt(receipt, item, snapshot.opportunities.find(o => o.id === item.opportunityId && o.profileId === identity.profileId), profile, item.finalAction);
+      } else receipt.destinationVerification = await verifyEmployerReceiptRedirect(destination, receipt.finalUrl, input.redirectEvidence, this.receiptFetchImpl);
+    }
     catch (error) { fail(409, `receipt destination or time does not match this attempt: ${error.message}`); }
     return this.store.mutate(state => {
       const item = this.#item(state, id, input, identity);
@@ -312,10 +323,13 @@ export class ChromeQueue {
       const action = item.finalAction ?? (item.legacyOutcomeHold ? { destination: item.legacyState?.pause?.origin ?? opportunity.applyUrl,
         startedAt: item.createdAt, attemptId: item.claim?.attemptId ?? item.id } : null);
       if (!action || action.attemptId !== input.attemptId) fail(409, "receipt does not match the recorded final attempt");
-      if (!receiptDestinationMatches(action.destination, receipt.finalUrl, receipt.destinationVerification)
+      if (email) {
+        receipt.emailVerification = verifyEmailReceipt(receipt, item, opportunity, profile, action);
+      }
+      if ((!email && !receiptDestinationMatches(action.destination, receipt.finalUrl, receipt.destinationVerification))
         || Date.parse(receipt.observedAt) < Date.parse(action.startedAt)
         || Date.parse(receipt.observedAt) > Date.now() + 60_000) fail(409, "receipt destination or time does not match this attempt");
-      item.receipt = { ...receipt, submittedAt: receipt.observedAt, attemptId: input.attemptId };
+      item.receipt = { ...receipt, submittedAt: email ? receipt.emailVerification.receivedAt : receipt.observedAt, attemptId: input.attemptId };
       item.status = "submitted";
       if (item.review) item.recordedQuestionAnswers = item.review.preview.filled.map(field => ({ question: field.label, answer: field.value, source: field.source }));
       item.updatedAt = timestamp();
