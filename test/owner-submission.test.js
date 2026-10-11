@@ -5,6 +5,47 @@ import { explicitApplicationReceipt, ownerSubmissionSentAt } from '../dashboard/
 const ashbyUrl = 'https://jobs.ashbyhq.com/example/11111111-1111-4111-8111-111111111111/application';
 const ashbySuccess = 'Success\nThank you so much for your interest in joining Example and considering us as part of your career journey! Wishing you the best of luck in the process!';
 
+const hubUrl = 'https://thehub.io/jobs/111111111111111111111111';
+const hubContext = { finalUrl: hubUrl, jobUrl: hubUrl, title: 'Senior Software Engineer', company: 'Example QMS' };
+const hubSuccess = 'Thank you for your application! You have applied for Senior Software Engineer at Example QMS';
+
+test('The Hub completed email requires the exact official job and trusted role and company names', () => {
+  assert.equal(explicitApplicationReceipt(hubSuccess, hubContext), true);
+  assert.equal(explicitApplicationReceipt(hubSuccess + '.', hubContext), true);
+  assert.equal(explicitApplicationReceipt(hubSuccess.replace('! ', '!\n'), hubContext), true);
+  for (const context of [{}, { finalUrl: hubUrl }, { ...hubContext, title: 'Other Engineer' },
+    { ...hubContext, company: 'Other QMS' }, { ...hubContext, title: '' },
+    { ...hubContext, jobUrl: hubUrl.replace(/1/g, '2') },
+    { ...hubContext, jobUrl: hubUrl.replace('https:', 'http:') },
+    { ...hubContext, finalUrl: hubUrl.replace('thehub.io', 'thehub.io.evil.example') },
+    { ...hubContext, finalUrl: hubUrl.replace('https:', 'http:') },
+    { ...hubContext, finalUrl: 'https://thehub.io/jobs' },
+    { ...hubContext, finalUrl: hubUrl.replace('thehub.io', 'thehub.io:444') },
+    { ...hubContext, finalUrl: hubUrl.replace('https://', 'https://example@') }]) {
+    assert.equal(explicitApplicationReceipt(hubSuccess, context), false);
+  }
+  for (const text of ['Applied', 'Thank you for your application!',
+    'You have applied for Senior Software Engineer at Example QMS',
+    hubSuccess.replace('have applied', 'can apply'), hubSuccess + '\nClick Apply to finish.',
+    hubSuccess + '\nUpload failed.', hubSuccess + '\nYour application was not submitted.']) {
+    assert.equal(explicitApplicationReceipt(text, hubContext), false, text);
+  }
+});
+
+test('dashboard recognizes persisted The Hub receipt context and rejects mismatched job or names', () => {
+  const now = new Date('2026-10-08T10:00:00Z');
+  const proof = { ...hubContext, version: 1, channel: 'browser', submissionActor: 'owner_browser',
+    identityMatchPending: false, recordKey: 'fixture/thehub', submissionDate: '2026-10-08',
+    observedAt: '2026-10-08T09:00:00Z', evidence: { source: 'owner_provided_employer_confirmation',
+      reference: 'Exact-role confirmation', sha256: 'a'.repeat(64), successText: hubSuccess } };
+  assert.equal(ownerSubmissionSentAt({ ownerSubmission: proof }, now), '2026-10-08T12:00:00.000Z');
+  for (const change of [{ title: 'Other Engineer' }, { company: 'Other QMS' },
+    { jobUrl: hubUrl.replace(/1/g, '2') }, { title: undefined },
+    { evidence: { ...proof.evidence, successText: 'Applied' } }]) {
+    assert.equal(ownerSubmissionSentAt({ ownerSubmission: { ...proof, ...change } }, now), null);
+  }
+});
+
 test('custom Ashby confirmation requires the success heading, complete template and official role URL', () => {
   assert.equal(explicitApplicationReceipt(ashbySuccess, { finalUrl: ashbyUrl }), true);
   const credentialUrl = new URL(ashbyUrl);

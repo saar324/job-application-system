@@ -1,14 +1,26 @@
 // Owner-reported sends are distinct from agent attempts and browser-verified receipts.
 // Date-only evidence is placed at UTC noon, which is always the same Sofia day.
 import { receiptDestinationMatches } from './receipt-destination.mjs';
-export function explicitApplicationReceipt(text, { finalUrl } = {}) {
+export function explicitApplicationReceipt(text, { finalUrl, jobUrl, title, company } = {}) {
  if (typeof text !== 'string' || /\b(?:not received|not submitted|failed|unable to submit|could not submit|error)\b/i.test(text)) return false;
  if (/(?:\bwe\s+(?:have\s+)?received\s+(?:your|the)\s+application\b|\b(?:your\s+)?application\s+(?:has\s+been\s+|was\s+)?received\b|\byour\s+application\s+to\s+[^\r\n!?;:]{1,160}?\s+has\s+been\s+received\b|\bapplication\s+(?:successfully\s+)?submitted\b|\bthank\s+you\s+for\s+submitting\s+your\s+application\b)/i.test(text)) return true;
- // Ashby can replace the form with a Success heading and this custom message.
- // Require the complete observed template and an official application URL;
- // the API and collector still bind that URL to the exact recorded role.
  try {
   const url = new URL(finalUrl);
+  // The Hub emails explicitly name the completed application. Bind both names
+  // to server-saved role metadata, never to caller-supplied confirmation context.
+  if (url.protocol === 'https:' && url.hostname === 'thehub.io' && !url.port
+   && !url.username && !url.password && /^\/jobs\/[a-f0-9]{24}\/?$/i.test(url.pathname)) {
+   const source = new URL(jobUrl);
+   if (source.origin !== url.origin || source.pathname.replace(/\/$/, '') !== url.pathname.replace(/\/$/, '')
+    || source.username || source.password || typeof title !== 'string' || !title.trim()
+    || typeof company !== 'string' || !company.trim()) return false;
+   const normalize = value => value.trim().replace(/\s+/g, ' ');
+   const expected = `Thank you for your application! You have applied for ${normalize(title)} at ${normalize(company)}`;
+   return normalize(text) === expected || normalize(text) === expected + '.';
+  }
+  // Ashby can replace the form with a Success heading and this custom message.
+  // Require the complete observed template and an official application URL;
+  // the API and collector still bind that URL to the exact recorded role.
   return url.protocol === 'https:' && !url.username && !url.password
    && url.hostname === 'jobs.ashbyhq.com' && !url.port
    && /^\/[^/]+\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/application\/?$/i.test(url.pathname)
