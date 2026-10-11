@@ -344,7 +344,7 @@ export class ChromeQueue {
   async ownerReceipt(id, input, identity) {
     const proof = safe(input.evidence);
     if (input.ownerSubmitted !== true || !proof || proof.source !== 'owner_provided_employer_confirmation'
-      || proof.simulated === true || !explicitApplicationReceipt(proof.successText, { finalUrl: input.finalUrl })
+      || proof.simulated === true
       || !/^[a-f0-9]{64}$/i.test(proof.sha256 ?? '')
       || !Number.isFinite(Date.parse(input.observedAt)) || Date.parse(input.observedAt) > Date.now()) {
       fail(400, 'explicit owner submission, employer confirmation, evidence hash and observation time required');
@@ -364,6 +364,16 @@ export class ChromeQueue {
     if (current.sessionId !== input.sessionId || current.sessionActorId !== identity.actorId) fail(409, 'session does not own this application');
     const currentOpportunity = snapshot.opportunities.find(o => o.id === current.opportunityId && o.profileId === identity.profileId);
     record.jobUrl = https(currentOpportunity?.applyUrl ?? currentOpportunity?.listingUrl);
+    const receiptContext = { ...record, title: currentOpportunity?.title, company: currentOpportunity?.company };
+    if (!explicitApplicationReceipt(successText, receiptContext)) {
+      fail(400, 'explicit owner submission, employer confirmation, evidence hash and observation time required');
+    }
+    // Preserve the trusted names only for receipts whose recognition needs them.
+    // Existing generic/Ashby receipt fingerprints remain unchanged on retries.
+    if (!explicitApplicationReceipt(successText, { finalUrl })) {
+      record.title = receiptContext.title;
+      record.company = receiptContext.company;
+    }
     // Existing exact evidence imports reuse their server-verified destination,
     // keeping retries idempotent even if the posting later closes.
     if (current.ownerSubmission?.channel === 'browser') record.destinationVerification = current.ownerSubmission.destinationVerification;
@@ -379,6 +389,10 @@ export class ChromeQueue {
       if (!input.sessionId || existing.sessionId !== input.sessionId || existing.sessionActorId !== identity.actorId) fail(409, 'session does not own this application');
       const opportunity = state.opportunities.find(o => o.id === existing.opportunityId && o.profileId === identity.profileId);
       record.jobUrl = https(opportunity?.applyUrl ?? opportunity?.listingUrl);
+      if (!explicitApplicationReceipt(successText, { ...record, title: opportunity?.title, company: opportunity?.company })
+        || record.title !== undefined && (record.title !== opportunity?.title || record.company !== opportunity?.company)) {
+        fail(409, 'receipt no longer matches the recorded role');
+      }
       const expectedKeys = roleKeys(opportunity);
       if (!receiptDestinationMatches(record.jobUrl, finalUrl, record.destinationVerification)
         || !record.destinationVerification && ![...roleKeys({ applyUrl: finalUrl })].some(k => expectedKeys.has(k))) fail(409, 'owner receipt must identify the exact official role');

@@ -13,8 +13,9 @@ const store=await new SqliteStore(path.join(dir,'state.sqlite')).init();
 const profileId=process.env.PREVIEW_PROFILE_ID??'synthetic-applicant';
 const identity={actorId:'synthetic-main',profileId},scope={sessionId:'synthetic-chat'};
 const service=new ApplicationService({store,config:{defaultMode:'full_time',modes:{full_time:{dailyApplicationCap:10}}},profiles:{get:async()=>({})}});
-const firstUrl='https://jobs.ashbyhq.com/example/11111111-1111-4111-8111-111111111111/application';
-const nextUrl='https://jobs.ashbyhq.com/example/22222222-2222-4222-8222-222222222222/application';
+const theHub=process.env.FIXTURE_PROVIDER==='thehub';
+const firstUrl=theHub?'https://thehub.io/jobs/111111111111111111111111':'https://jobs.ashbyhq.com/example/11111111-1111-4111-8111-111111111111/application';
+const nextUrl=theHub?'https://thehub.io/jobs/222222222222222222222222':'https://jobs.ashbyhq.com/example/22222222-2222-4222-8222-222222222222/application';
 const first=(await service.chromeQueue.add({url:firstUrl,company:'Synthetic Employer',title:'First Engineer'},identity)).application;
 await service.chromeQueue.add({url:nextUrl,company:'Synthetic Employer',title:'Next Engineer'},identity);
 await service.chromeQueue.claim(scope,identity);
@@ -25,14 +26,14 @@ const observedAt=new Date().toISOString();
 const proof={...scope,ownerSubmitted:true,recordKey:'fixture/browser/123',observedAt,
  submissionDate:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Sofia',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(observedAt)),
  finalUrl:firstUrl,
- evidence:{source:'owner_provided_employer_confirmation',successText:'Success\nThank you so much for your interest in joining Synthetic Employer and considering us as part of your career journey! Wishing you the best of luck in the process!',reference:'Synthetic owner confirmation',sha256:'a'.repeat(64)}};
+ evidence:{source:'owner_provided_employer_confirmation',successText:theHub?'Thank you for your application! You have applied for First Engineer at Synthetic Employer':'Success\nThank you so much for your interest in joining Synthetic Employer and considering us as part of your career journey! Wishing you the best of luck in the process!',reference:'Synthetic owner confirmation',sha256:'a'.repeat(64)}};
 const state=()=>({stats:snapshot(service.list('applications',profileId),service.list('opportunities',profileId)).stats,
  current:service.chromeQueue.list(profileId).current?.id??null,completed:service.chromeQueue.list(profileId).submitted,attempts:store.snapshot().attempts.length});
 const app=createServer(async(req,res)=>{
  if(req.url==='/favicon.ico'){res.writeHead(204);return res.end()}
  if(req.url==='/state'){res.setHeader('content-type','application/json');return res.end(JSON.stringify(state()))}
  if(req.method==='POST'){
-  const body=req.url==='/next'?scope:{...proof,...(req.url==='/wrong'?{finalUrl:nextUrl}:{}),...(req.url==='/incomplete'?{evidence:{...proof.evidence,successText:'Success'}}:{})};
+  const body=req.url==='/next'?scope:{...proof,...(req.url==='/wrong'?{finalUrl:nextUrl}:{}),...(req.url==='/incomplete'?{evidence:{...proof.evidence,successText:theHub?'Applied':'Success'}}:{})};
   const url=req.url==='/next'?'/v1/chrome-queue/next':`/v1/chrome-queue/${first.id}/owner-receipt`;
   const r=await fetch(`http://127.0.0.1:${api.address().port}${url}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   res.writeHead(r.status,{'content-type':'application/json'});return res.end(await r.text());

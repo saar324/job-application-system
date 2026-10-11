@@ -336,6 +336,36 @@ function ownerProof(n = 1) {
       reference: 'Owner pasted exact employer confirmation in this chat', sha256: 'a'.repeat(64) } };
 }
 
+for (const kind of ['json', 'sqlite']) test(`${kind}: The Hub exact completed receipt counts once and resumes FIFO without an attempt`, async t => {
+  const { queue, store, service } = await fixture(t, kind);
+  const url = 'https://thehub.io/jobs/111111111111111111111111';
+  const app = (await queue.add({ url, title: 'Senior Software Engineer', company: 'Example QMS' }, owner)).application;
+  const next = (await add(queue, 2)).application.id;
+  await queue.claim(input, owner);
+  await queue.checkpoint(app.id, { ...input, kind: 'receipt_logging_bug', message: 'Confirmed provider wording needs recognition' }, owner);
+  const proof = { ...ownerProof(), finalUrl: url, evidence: { ...ownerProof().evidence,
+    successText: 'Thank you for your application! You have applied for Senior Software Engineer at Example QMS' } };
+  for (const successText of ['Applied', proof.evidence.successText.replace('Senior Software Engineer', 'Other Engineer'),
+    proof.evidence.successText.replace('Example QMS', 'Other QMS'), proof.evidence.successText + '\nClick Apply to finish.']) {
+    await assert.rejects(queue.ownerReceipt(app.id, { ...proof, title: 'Other Engineer', company: 'Other QMS',
+      evidence: { ...proof.evidence, successText } }, owner), /explicit owner submission/);
+  }
+  await assert.rejects(queue.ownerReceipt(app.id, { ...proof,
+    finalUrl: url.replace(/1/g, '2') }, owner), /explicit owner submission|exact official role/);
+  assert.equal(queue.list(owner.profileId).submitted, 0);
+  assert.equal((await queue.ownerReceipt(app.id, proof, owner)).duplicate, false);
+  assert.equal((await queue.ownerReceipt(app.id, proof, owner)).duplicate, true);
+  const recorded = store.snapshot().applications.find(a => a.id === app.id);
+  assert.equal(recorded.ownerSubmission.title, 'Senior Software Engineer');
+  assert.equal(recorded.ownerSubmission.company, 'Example QMS');
+  assert.ok(ownerSubmissionSentAt(recorded));
+  assert.ok(service.applicationLog(owner.profileId).find(a => a.applicationId === app.id).submittedAt);
+  assert.equal(store.snapshot().attempts.length, 0);
+  assert.equal(queue.list(owner.profileId).submitted, 1);
+  await service.recover();
+  assert.equal((await queue.claim(input, owner)).application.id, next);
+});
+
 for (const kind of ['json', 'sqlite']) test(`${kind}: owner receipt completes held form without a retrospective attempt and counts once`, async t => {
   const {queue,store,file,service} = await fixture(t, kind);
   const id=(await add(queue,1)).application.id;
