@@ -344,7 +344,7 @@ export class ChromeQueue {
   async ownerReceipt(id, input, identity) {
     const proof = safe(input.evidence);
     if (input.ownerSubmitted !== true || !proof || proof.source !== 'owner_provided_employer_confirmation'
-      || proof.simulated === true || !explicitApplicationReceipt(proof.successText)
+      || proof.simulated === true || !explicitApplicationReceipt(proof.successText, { finalUrl: input.finalUrl })
       || !/^[a-f0-9]{64}$/i.test(proof.sha256 ?? '')
       || !Number.isFinite(Date.parse(input.observedAt)) || Date.parse(input.observedAt) > Date.now()) {
       fail(400, 'explicit owner submission, employer confirmation, evidence hash and observation time required');

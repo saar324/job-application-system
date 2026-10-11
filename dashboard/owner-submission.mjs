@@ -1,9 +1,19 @@
 // Owner-reported sends are distinct from agent attempts and browser-verified receipts.
 // Date-only evidence is placed at UTC noon, which is always the same Sofia day.
 import { receiptDestinationMatches } from './receipt-destination.mjs';
-export function explicitApplicationReceipt(text) {
- return typeof text === 'string' && /(?:\bwe\s+(?:have\s+)?received\s+(?:your|the)\s+application\b|\b(?:your\s+)?application\s+(?:has\s+been\s+|was\s+)?received\b|\byour\s+application\s+to\s+[^\r\n!?;:]{1,160}?\s+has\s+been\s+received\b|\bapplication\s+(?:successfully\s+)?submitted\b|\bthank\s+you\s+for\s+submitting\s+your\s+application\b)/i.test(text)
-  && !/\b(?:not received|not submitted|failed|unable to submit|could not submit|error)\b/i.test(text);
+export function explicitApplicationReceipt(text, { finalUrl } = {}) {
+ if (typeof text !== 'string' || /\b(?:not received|not submitted|failed|unable to submit|could not submit|error)\b/i.test(text)) return false;
+ if (/(?:\bwe\s+(?:have\s+)?received\s+(?:your|the)\s+application\b|\b(?:your\s+)?application\s+(?:has\s+been\s+|was\s+)?received\b|\byour\s+application\s+to\s+[^\r\n!?;:]{1,160}?\s+has\s+been\s+received\b|\bapplication\s+(?:successfully\s+)?submitted\b|\bthank\s+you\s+for\s+submitting\s+your\s+application\b)/i.test(text)) return true;
+ // Ashby can replace the form with a Success heading and this custom message.
+ // Require the complete observed template and an official application URL;
+ // the API and collector still bind that URL to the exact recorded role.
+ try {
+  const url = new URL(finalUrl);
+  return url.protocol === 'https:' && !url.username && !url.password
+   && url.hostname === 'jobs.ashbyhq.com' && !url.port
+   && /^\/[^/]+\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/application\/?$/i.test(url.pathname)
+   && /^\s*Success\s+Thank you so much for your interest in joining [^\r\n!?;:]{1,160}? and considering us as part of your career journey!\s+Wishing you the best of luck in the process!\s*$/.test(text);
+ } catch { return false; }
 }
 export function ownerSubmissionSentAt(application, now = new Date()) {
  const p = application.ownerSubmission;
@@ -12,7 +22,7 @@ export function ownerSubmissionSentAt(application, now = new Date()) {
   && /^Application status\s+Application submitted(?:\s+now)?\s*$/i.test(p.evidence.successText ?? '');
  const browser = p?.channel === 'browser' && p.submissionActor === 'owner_browser'
   && p.evidence?.source === 'owner_provided_employer_confirmation'
-  && explicitApplicationReceipt(p.evidence.successText) && p.jobUrl && p.finalUrl;
+  && explicitApplicationReceipt(p.evidence.successText, p) && p.jobUrl && p.finalUrl;
  if (p?.version !== 1 || (!linkedin && !browser)
   || p.identityMatchPending !== false
   || typeof p.recordKey !== 'string' || !p.recordKey.trim()
