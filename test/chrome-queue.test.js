@@ -258,6 +258,53 @@ test('explicit employer field errors allow bounded correction with a fresh revie
   assert.equal(queue.list(owner.profileId).current.status, 'submission_started');
 });
 
+for (const kind of ['json', 'sqlite']) test(`${kind}: explicit owner CAPTCHA rejection permits correction and requires a fresh attempt`, async t => {
+  const { queue, store } = await fixture(t, kind);
+  const id = (await add(queue, 1)).application.id;
+  await add(queue, 2);
+  await queue.claim(input, owner);
+  const ownerPreview = { ...preview(), plannedSubmissionActor: 'owner' };
+  const reviewed = await review(queue, id, { preview: ownerPreview });
+  const attempt = await queue.startSubmission(id, { ...input, previewFingerprint: reviewed.previewFingerprint }, owner);
+  await queue.checkpoint(id, { ...input, kind: 'captcha', message: 'Owner completes CAPTCHA and Submit',
+    checkpoint: { plannedSubmissionActor: 'owner', attemptId: attempt.attemptId } }, owner);
+  const correction = { ...input, attemptId: attempt.attemptId, employerExplicitlyRejected: true, errors: ['Required field: Address'] };
+  await assert.rejects(queue.validationError(id, { ...correction, employerExplicitlyRejected: false }, owner), /explicit live employer/);
+  await assert.rejects(queue.validationError(id, { ...correction, attemptId: 'another-attempt' }, owner), /explicit live employer/);
+  await assert.rejects(queue.validationError(id, correction, other), /not found/);
+  await assert.rejects(queue.validationError(id, { ...correction, sessionId: 'another-chat' }, owner), /does not own/);
+  const corrected = await queue.validationError(id, correction, owner);
+  assert.equal(corrected.status, 'in_progress');
+  assert.equal(corrected.blocker, undefined);
+  assert.equal(corrected.finalAction, undefined);
+  assert.equal(corrected.review, undefined);
+  assert.equal(corrected.finalActions[0].attemptId, attempt.attemptId);
+  assert.deepEqual(corrected.finalActions[0].errors, correction.errors);
+  assert.equal(store.snapshot().attempts.find(a => a.id === attempt.attemptId).status, 'validation_rejected');
+  assert.equal((await queue.claim(input, owner)).application.id, id);
+  await assert.rejects(queue.startSubmission(id, { ...input, previewFingerprint: reviewed.previewFingerprint }, owner), /current review/);
+  const fresh = await submit(queue, id);
+  assert.notEqual(fresh.attempt.attemptId, attempt.attemptId);
+  await queue.receipt(id, { ...input, attemptId: fresh.attempt.attemptId, receipt: evidence() }, owner);
+  assert.equal(queue.list(owner.profileId).submitted, 1);
+});
+
+for (const missing of ['review_actor', 'checkpoint_actor', 'checkpoint_attempt']) test(`CAPTCHA rejection recovery requires exact owner handoff evidence: ${missing}`, async t => {
+  const { queue } = await fixture(t);
+  const id = (await add(queue, 1)).application.id;
+  await queue.claim(input, owner);
+  const ownerPreview = { ...preview(), ...(missing === 'review_actor' ? {} : { plannedSubmissionActor: 'owner' }) };
+  const reviewed = await review(queue, id, { preview: ownerPreview });
+  const attempt = await queue.startSubmission(id, { ...input, previewFingerprint: reviewed.previewFingerprint }, owner);
+  await queue.checkpoint(id, { ...input, kind: 'captcha', message: 'CAPTCHA handoff', checkpoint: {
+    ...(missing === 'checkpoint_actor' ? {} : { plannedSubmissionActor: 'owner' }),
+    attemptId: missing === 'checkpoint_attempt' ? 'another-attempt' : attempt.attemptId
+  } }, owner);
+  await assert.rejects(queue.validationError(id, { ...input, attemptId: attempt.attemptId,
+    employerExplicitlyRejected: true, errors: ['Required field: Address'] }, owner), /explicit live employer/);
+  assert.equal(queue.list(owner.profileId).current.status, 'submission_unverified');
+});
+
 test('legacy uncertain submissions are adopted without replay; historical receipts remain intact', async t => {
   const { queue, service, store } = await fixture(t);
   const opportunity = await service.addOpportunity({ title: 'Engineer', company: 'Example', applyUrl: 'https://employer.example/jobs/1' }, owner);

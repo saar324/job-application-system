@@ -421,7 +421,12 @@ export class ChromeQueue {
     if (!Array.isArray(errors) || !errors.length || errors.some(e => typeof e !== "string" || !e.trim() || e.length > 1000)) fail(400, "exact employer validation errors required");
     return this.store.mutate(state => {
       const item = this.#item(state, id, input, identity);
-      if (item.status !== "submission_started" || item.finalAction?.attemptId !== input.attemptId
+      const ownerCaptchaHandoff = item.status === "submission_unverified"
+        && item.blocker?.kind === "captcha"
+        && item.review?.preview?.plannedSubmissionActor === "owner"
+        && item.checkpoint?.plannedSubmissionActor === "owner"
+        && item.checkpoint?.attemptId === item.finalAction?.attemptId;
+      if (!(item.status === "submission_started" || ownerCaptchaHandoff) || item.finalAction?.attemptId !== input.attemptId
         || input.employerExplicitlyRejected !== true) fail(409, "only an explicit live employer validation rejection can authorize correction");
       if ((item.finalActions?.length ?? 0) >= 2) fail(409, "validation retry limit reached; ask the owner");
       item.finalActions ??= [];
@@ -430,6 +435,7 @@ export class ChromeQueue {
       if (attempt) Object.assign(attempt, { status: "validation_rejected", completedAt: timestamp() });
       delete item.finalAction;
       delete item.review;
+      delete item.blocker;
       item.status = "in_progress";
       item.updatedAt = timestamp();
       event(state, identity, "validation_rejected", item, { attemptId: input.attemptId, errors });
