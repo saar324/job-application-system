@@ -79,7 +79,7 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
         return send(response, 200, result);
       }
 
-      const accountAction = url.pathname.match(/^\/v1\/chrome-queue\/([^/]+)\/account\/(status|access|store)$/);
+      const accountAction = url.pathname.match(/^\/v1\/chrome-queue\/([^/]+)\/account\/(status|access|store|update)$/);
       if (request.method === 'POST' && accountAction) {
         response.setHeader('cache-control', 'no-store');
         response.setHeader('pragma', 'no-cache');
@@ -95,9 +95,9 @@ export function createHttpServer({ service, discovery, profiles, authenticate, c
       if (request.method === "POST" && url.pathname === "/v1/chrome-queue/next") {
         return send(response, 200, await service.chromeQueue.claim(await jsonBody(request), identity));
       }
-      const queueAction = url.pathname.match(/^\/v1\/chrome-queue\/([^/]+)\/(checkpoint|resume|review|submit-start|receipt|owner-receipt|skip|validation-error|takeover)$/);
+      const queueAction = url.pathname.match(/^\/v1\/chrome-queue\/([^/]+)\/(checkpoint|resume|review|submit-start|receipt|owner-receipt|skip|validation-error|not-submitted|takeover)$/);
       if (request.method === "POST" && queueAction) {
-        const action = ({ "submit-start": "startSubmission", "owner-receipt": "ownerReceipt", "validation-error": "validationError" })[queueAction[2]] ?? queueAction[2];
+        const action = ({ "submit-start": "startSubmission", "owner-receipt": "ownerReceipt", "validation-error": "validationError", "not-submitted": "notSubmitted" })[queueAction[2]] ?? queueAction[2];
         return send(response, 200, await service.chromeQueue[action](queueAction[1], await jsonBody(request), identity));
       }
       if (request.method === "GET" && url.pathname === "/v1/session-context") {

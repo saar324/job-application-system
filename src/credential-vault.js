@@ -59,6 +59,31 @@ export class CredentialVault {
     this.#pending = operation.catch(() => undefined);
     return operation;
   }
+  /** Explicit reset recovery; CAS protects a newer login saved by another session. */
+  async update(profileId, origin, credential, expectedUpdatedAt) {
+    const normalized = normalizeCredentialOrigin(origin);
+    if (typeof credential?.username !== 'string' || !credential.username.trim() || credential.username.length > 320
+      || typeof credential.password !== 'string' || !credential.password || credential.password.length > 4096
+      || !(expectedUpdatedAt === null || typeof expectedUpdatedAt === 'string')) {
+      throw new Error('bounded existing account and expected revision required');
+    }
+    const operation = this.#pending.then(async () => {
+      const entries = await this.#read(profileId), old = entries[normalized];
+      if (!old || old.username !== credential.username) {
+        throw Object.assign(new Error('existing account identifier does not match'), { status: 409 });
+      }
+      if (old.password === credential.password) return { origin: normalized, saved: true, updated: false };
+      if ((old.updatedAt ?? null) !== expectedUpdatedAt) {
+        throw Object.assign(new Error('saved account changed; refresh its revision'), { status: 409 });
+      }
+      const updatedAt = new Date(Math.max(Date.now(), (Date.parse(old.updatedAt) || 0) + 1)).toISOString();
+      entries[normalized] = { ...old, password: credential.password, updatedAt };
+      await this.#write(profileId, entries);
+      return { origin: normalized, saved: true, updated: true };
+    });
+    this.#pending = operation.catch(() => undefined);
+    return operation;
+  }
   #target(profileId) {
     if (!SAFE_ID.test(profileId ?? '') || !this.keys.has(profileId)) throw new Error('credential vault unavailable for this applicant');
     return { file: path.join(this.directory, `${profileId}.enc.json`), key: this.keys.get(profileId) };

@@ -5,6 +5,7 @@ import { ClientError, manualDailyCaps } from "./service.js";
 import { createFieldReview, requiresLegalReview } from "./reviewed-fields.js";
 import { receiptDestinationMatches } from '../dashboard/receipt-destination.mjs';
 import { verifyEmployerReceiptRedirect } from './receipt-destination.js';
+import { sameOutcomeRole } from './employer-negative-outcome.js';
 import { verifyEmailReceipt } from './email-receipt.js';
 
 const timestamp = () => new Date().toISOString();
@@ -413,6 +414,49 @@ export class ChromeQueue {
       delete item.blocker;
       event(state, identity, 'owner_receipt', item, { recordKey, finalUrl, submissionDate });
       return { applicationId: id, status: item.status, duplicate: false, submissionDate };
+    });
+  }
+
+  async notSubmitted(id, input, identity) {
+    const proof = safe(input.evidence);
+    if (!proof || proof.source !== 'authenticated_employer_application_status'
+      || proof.manuallyVerified !== true || proof.authenticated !== true
+      || proof.statusText !== 'Not Submitted' || !/^[a-f0-9]{64}$/i.test(proof.sha256 ?? '')
+      || !Number.isFinite(Date.parse(proof.observedAt)) || Date.parse(proof.observedAt) > Date.now() + 60_000) {
+      fail(400, 'verified authenticated Not Submitted status, observation time and evidence hash required');
+    }
+    const evidence = { source: proof.source, manuallyVerified: true, authenticated: true,
+      statusText: proof.statusText, sha256: proof.sha256.toLowerCase(),
+      observedAt: new Date(proof.observedAt).toISOString(),
+      finalUrl: https(proof.finalUrl), roleUrl: https(proof.roleUrl),
+      reference: text(proof.reference, 'employer status evidence reference', 1000) };
+    return this.store.mutate(state => {
+      const item = this.#item(state, id, input, identity);
+      const action = item.finalAction;
+      if (!['submission_started', 'submission_unverified'].includes(item.status)
+        || item.legacyOutcomeHold || !action || action.attemptId !== input.attemptId) {
+        fail(409, 'negative outcome must match the current recorded final attempt');
+      }
+      const opportunity = state.opportunities.find(o => o.id === item.opportunityId && o.profileId === identity.profileId);
+      if (Date.parse(evidence.observedAt) < Date.parse(action.startedAt)
+        || Date.parse(evidence.observedAt) < Date.now() - 15 * 60_000
+        || new URL(evidence.finalUrl).origin !== new URL(action.destination).origin
+        || !sameOutcomeRole(action.destination, evidence.roleUrl)
+        || !sameOutcomeRole(opportunity.applyUrl, evidence.roleUrl)) {
+        fail(409, 'negative outcome must identify the exact employer role after this attempt');
+      }
+      if ((item.finalActions?.length ?? 0) >= 2) fail(409, 'validation retry limit reached; ask the owner');
+      item.finalActions ??= [];
+      item.finalActions.push({ ...action, outcome: 'not_submitted', completedAt: timestamp(), evidence });
+      const attempt = state.attempts.find(a => a.id === action.attemptId && a.profileId === identity.profileId);
+      if (attempt) Object.assign(attempt, { status: 'not_submitted', completedAt: timestamp() });
+      delete item.finalAction;
+      delete item.review;
+      delete item.blocker;
+      item.status = 'in_progress';
+      item.updatedAt = timestamp();
+      event(state, identity, 'not_submitted', item, { attemptId: action.attemptId, evidence });
+      return item;
     });
   }
 
