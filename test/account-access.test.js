@@ -37,7 +37,7 @@ test('original encrypted format unlocks without rewriting and remains profile-bo
   const file = path.join(f.dir, `${owner.profileId}.enc.json`);
   await writeFile(file, JSON.stringify({ version: 1, iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') }), { mode: 0o600 });
   const before = await readFile(file);
-  assert.deepEqual(await f.access('status'), { configured: true, available: true, origin: input.origin });
+  assert.deepEqual(await f.access('status'), { configured: true, available: true, origin: input.origin, updatedAt: null });
   assert.equal((await f.access('access')).password, credential.password);
   assert.deepEqual(await readFile(file), before);
   await assert.rejects(f.access('access', input, { ...owner, profileId: 'applicant-two' }), /not found/);
@@ -130,4 +130,87 @@ test('deployment environment update preserves encrypted vault paths and removes 
   assert.ok(value.includes('JOB_SERVER_VAULT_KEYS_FILE=/private/existing-keys.json'));
   assert.ok(value.includes('JOB_SERVER_CREDENTIAL_VAULTS=/private/existing-vault'));
   assert.ok(!value.includes('WORKER_ENDPOINT'));
+});
+
+const loginProof = () => ({ manuallyVerified:true,authenticated:true,finalUrl:'https://employer.example/account',
+ observedAt:new Date().toISOString(),sha256:'e'.repeat(64) });
+test('explicit verified reset updates one encrypted account with CAS and no secrets in history',async t=>{
+ const f=await fixture(t);await f.vault.save(owner.profileId,input.origin,credential);
+ await f.vault.save(owner.profileId,'https://second.example',credential);
+ const before=(await f.access('status')).updatedAt;
+ const update={...input,...credential,password:'synthetic-reset-password',expectedUpdatedAt:before,
+  updateAuthorization:'Owner explicitly requested saving this reset login in current chat',loginEvidence:loginProof()};
+ assert.equal((await f.access('update',update)).updated,true);
+ assert.equal((await f.access('update',update)).updated,false);
+ assert.equal((await f.access('access')).password,update.password);
+ assert.equal((await f.vault.get(owner.profileId,'https://second.example')).password,credential.password);
+ assert.equal(await f.vault.get('applicant-two',input.origin),null);
+ await assert.rejects(f.access('store',{...input,...credential,storageAuthorization:'Owner storage authorization'}),/owner-managed update/);
+ await assert.rejects(f.access('update',{...update,password:'another-fixture-password',expectedUpdatedAt:'stale'}),/refresh its revision/);
+ await assert.rejects(f.access('update',{...update,username:'other@example.test'}),/identifier does not match/);
+ const history=JSON.stringify(f.store.snapshot());
+ for(const value of [credential.password,update.password,credential.username]) assert.ok(!history.includes(value));
+ const raw=await readFile(path.join(f.dir,`${owner.profileId}.enc.json`),'utf8');
+ assert.ok(!raw.includes(update.password));assert.equal((await stat(path.join(f.dir,`${owner.profileId}.enc.json`))).mode&0o777,0o600);
+ assert.ok(f.store.snapshot().audit.some(a=>a.action==='account.update'));
+});
+test('reset storage requires fresh verified same-origin login, exact scope and explicit owner update',async t=>{
+ const f=await fixture(t);await f.vault.save(owner.profileId,input.origin,credential);
+ const update={...input,...credential,password:'synthetic-reset-password',expectedUpdatedAt:(await f.access('status')).updatedAt,
+  updateAuthorization:'Owner explicitly requested this reset login be saved',loginEvidence:loginProof()};
+ await assert.rejects(f.access('update',{...update,updateAuthorization:''}),/explicit owner update/);
+ await assert.rejects(f.access('update',{...update,expectedUpdatedAt:undefined}),/explicit owner update/);
+ for(const patch of [{authenticated:false},{manuallyVerified:false},{sha256:'invalid'},
+  {observedAt:'2020-01-01T00:00:00Z'},{finalUrl:'https://other.example/account'}]) {
+  await assert.rejects(f.access('update',{...update,loginEvidence:{...update.loginEvidence,...patch}}),/explicit owner update/);
+ }
+ await assert.rejects(f.access('update',{...update,sessionId:'another-chat'}),/does not own/);
+ await assert.rejects(f.access('update',update,{...owner,actorId:'other-agent'}),/does not own/);
+ await assert.rejects(f.access('update',{...update,profileId:'applicant-two'}),/unsupported/);
+ await f.store.mutate(s=>{s.applications.find(a=>a.id===f.id).status='submission_unverified';});
+ await assert.rejects(f.access('update',update),/uncertain/);
+ assert.equal((await f.vault.get(owner.profileId,input.origin)).password,credential.password);
+});
+
+test('HTTP and private CLI update replace an existing verified login without printing it',async t=>{
+ const f=await fixture(t);await f.vault.save(owner.profileId,input.origin,credential);
+ const server=createHttpServer({service:f.service,authenticate:req=>req.headers.authorization==='Bearer fixture-only'?owner:null});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>server.close());
+ const base=`http://127.0.0.1:${server.address().port}`;
+ const url=`${base}/v1/chrome-queue/${f.id}/account/update`;
+ const body={...input,...credential,password:'synthetic-updated-password',expectedUpdatedAt:(await f.access('status')).updatedAt,
+  updateAuthorization:'Owner explicitly requested this saved login update',loginEvidence:loginProof()};
+ assert.equal((await fetch(url,{method:'POST'})).status,401);
+ const response=await fetch(url,{method:'POST',headers:{authorization:'Bearer fixture-only','content-type':'application/json'},body:JSON.stringify(body)});
+ assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
+ assert.equal((await response.json()).updated,true);
+ const credentialFile=path.join(f.dir,'updated-login.json');
+ await writeFile(credentialFile,JSON.stringify({username:credential.username,password:'synthetic-cli-updated-password'}),{mode:0o600});
+ const scope={...input,credentialFile,expectedUpdatedAt:(await f.access('status')).updatedAt,
+  updateAuthorization:body.updateAuthorization,loginEvidence:loginProof()};
+ const script=path.resolve('skills/job-application/scripts/jobctl.js');
+ const child=await run(process.execPath,['-e',`process.argv=[process.execPath,${JSON.stringify(script)},'account-update',${JSON.stringify(f.id)}];const {Readable}=await import('node:stream');Object.defineProperty(process,'stdin',{value:Readable.from([Buffer.from(${JSON.stringify(JSON.stringify(scope))})])});await import(${JSON.stringify(script)});`],
+  {env:{...process.env,JOB_SERVER_URL:base,JOB_SERVER_TOKEN:'fixture-only'}});
+ assert.equal(JSON.parse(child.stdout).updated,true);
+ assert.ok(!child.stdout.includes('synthetic-cli-updated-password')&&!child.stderr.includes('synthetic-cli-updated-password'));
+ await assert.rejects(readFile(credentialFile),/ENOENT/);
+});
+
+test('private account reader works in browser runtimes without a process global',async t=>{
+ const f=await fixture(t),file=path.join(f.dir,'login.json');await writeFile(file,JSON.stringify(credential),{mode:0o600});
+ const script=path.resolve('skills/job-application/scripts/account-file.js');
+ const child=await run(process.execPath,['--input-type=module','-e',`const script=${JSON.stringify(script)},file=${JSON.stringify(file)};const original=process;globalThis.process=undefined;const {readPrivateAccountFile}=await import(script);const value=await readPrivateAccountFile(file);if(!value.username||!value.password)throw Error('unreadable private file');globalThis.process=original;console.log('private read succeeded');`]);
+ assert.equal(child.stdout.trim(),'private read succeeded');
+});
+
+test('concurrent reset updates cannot overwrite each other with the same revision',async t=>{
+ const f=await fixture(t);await f.vault.save(owner.profileId,input.origin,credential);
+ const revision=(await f.access('status')).updatedAt;
+ const changes=['synthetic-first-change','synthetic-second-change'].map(password=>f.access('update',{
+  ...input,...credential,password,expectedUpdatedAt:revision,
+  updateAuthorization:'Owner explicitly authorized the reset login update',loginEvidence:loginProof()}));
+ const results=await Promise.allSettled(changes);
+ assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+ assert.equal(results.filter(r=>r.status==='rejected').length,1);
+ assert.notEqual((await f.access('status')).updatedAt,revision);
 });

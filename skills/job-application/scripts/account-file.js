@@ -8,7 +8,7 @@ export async function readPrivateAccountFile(file) {
   try {
     const info = await handle.stat();
     if (!info.isFile() || (info.mode & 0o077) !== 0 || info.size > 16_384
-      || typeof process.getuid === 'function' && info.uid !== process.getuid()) throw new Error('account file must be a private regular file');
+      || typeof process !== 'undefined' && typeof process.getuid === 'function' && info.uid !== process.getuid()) throw new Error('account file must be a private regular file');
     try { return JSON.parse(await handle.readFile('utf8')); }
     catch { throw new Error('private account file could not be read'); }
   } finally { await handle.close(); }

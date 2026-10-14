@@ -45,7 +45,7 @@ const routes = {
   "record-external-submission": ["POST", "/v1/external-submissions"],
   queue: ["GET", "/v1/chrome-queue"], "queue-add": ["POST", "/v1/chrome-queue"],
   "queue-next": ["POST", "/v1/chrome-queue/next"], "session-context": ["GET", "/v1/session-context"],
-  ...Object.fromEntries(["checkpoint", "resume", "review", "submit-start", "receipt", "owner-receipt", "skip", "validation-error", "takeover"].map(action =>
+  ...Object.fromEntries(["checkpoint", "resume", "review", "submit-start", "receipt", "owner-receipt", "skip", "validation-error", "not-submitted", "takeover"].map(action =>
     [`queue-${action}`, ["POST", `/v1/chrome-queue/${id}/${action}`]])),
   health: ["GET", "/health"], me: ["GET", "/v1/me"], opportunities: ["GET", "/v1/opportunities"],
   profile: ["GET", "/v1/profile/status"], "profile-update": ["PATCH", "/v1/profile"],
@@ -63,9 +63,9 @@ const routes = {
   "record-employer-status": ["POST", `/v1/applications/${id}/employer-status`],
 
 };
-if ((!routes[command] && !["backlog", "handoff", "account-status", "account-download", "account-store"].includes(command))
+if ((!routes[command] && !["backlog", "handoff", "account-status", "account-download", "account-store", "account-update"].includes(command))
   || ((command.startsWith("queue-") && !["queue-add", "queue-next"].includes(command)
-    || ["apply", "record-employer-status", "record-recruiter", "handoff", "account-status", "account-download", "account-store"].includes(command)) && !id)) {
+    || ["apply", "record-employer-status", "record-recruiter", "handoff", "account-status", "account-download", "account-store", "account-update"].includes(command)) && !id)) {
   console.error("usage: jobctl <queue|queue-add|queue-next|queue-checkpoint ID|queue-resume ID|queue-review ID|queue-submit-start ID|queue-receipt ID|queue-skip ID|session-context|health|profile|fit-context|profile-update|sources|scan|filter|consider|query|direct|applications|application-log|backlog|handoff ID|config|standing-policy|record-recruiter ID|record-employer-status ID>");
   process.exit(2);
 }
@@ -98,7 +98,7 @@ async function request(method, pathname, body) {
         'account origin does not match the current official application', 'account origin must be public HTTPS',
         'encrypted account vault is not configured for this applicant', 'encrypted account vault could not be unlocked',
         'no saved account credential for this origin', 'explicit owner storage authorization is required',
-        'existing account credential requires owner-managed update', 'account access cannot clear an uncertain application outcome']);
+        'existing account credential requires owner-managed update', 'account access cannot clear an uncertain application outcome', 'explicit owner update authorization, fresh verified login and expected revision required', 'existing account identifier does not match', 'saved account changed; refresh its revision']);
       try { const e = JSON.parse(text).error; if (safeErrors.has(e)) message = e; } catch {}
       process.stdout.write(JSON.stringify({ error: message, status: response.status }) + '\n');
     } else process.stdout.write(text);
@@ -144,7 +144,7 @@ if (command.startsWith('account-')) {
   } else {
     const { credentialFile, ...scope } = input;
     const value = await readPrivateAccountFile(credentialFile);
-    const result = await request('POST', `/v1/chrome-queue/${id}/account/store`, {
+    const result = await request('POST', `/v1/chrome-queue/${id}/account/${command === 'account-update' ? 'update' : 'store'}`, {
       ...scope, username: value.username, password: value.password
     });
     await rm(credentialFile);

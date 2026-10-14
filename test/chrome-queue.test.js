@@ -535,3 +535,67 @@ test('authenticated HTTP owner receipt completes only the current applicant queu
  const response=await call('profile-one');assert.equal(response.status,200);
  assert.equal((await response.json()).status,'owner_reported_submitted');assert.equal(f.queue.list(owner.profileId).submitted,1);
 });
+
+const workdayRole = 'https://example.wd1.myworkdayjobs.com/en-US/external/job/Example-City/Engineer_12345-1/apply/applyManually';
+const negativeEvidence = () => ({ source: 'authenticated_employer_application_status', manuallyVerified: true,
+ authenticated: true, statusText: 'Not Submitted', observedAt: new Date().toISOString(), sha256: 'd'.repeat(64),
+ finalUrl: 'https://example.wd1.myworkdayjobs.com/en-US/external/userHome',
+ roleUrl: 'https://example.wd1.myworkdayjobs.com/en-US/external/job/Engineer_12345-1',
+ reference: 'Manually inspected authenticated candidate list and saved screenshot' });
+async function heldWorkday(f) {
+ const id = (await f.queue.add({url:workdayRole, company:'Example',title:'Engineer'},owner)).application.id;
+ await f.queue.claim(input,owner);
+ const p=preview(); p.destination=workdayRole;
+ const r=await review(f.queue,id,{preview:p});
+ const attempt=await f.queue.startSubmission(id,{...input,previewFingerprint:r.previewFingerprint},owner);
+ await f.queue.checkpoint(id,{...input,kind:'outcome_check',message:'Unknown after a page error'},owner);
+ return {id,attempt};
+}
+for (const kind of ['json','sqlite']) test(`${kind}: verified negative employer outcome preserves attempt and requires a new review`,async t=>{
+ const f=await fixture(t,kind); const {id,attempt}=await heldWorkday(f);
+ await add(f.queue,2);
+ const result=await f.queue.notSubmitted(id,{...input,attemptId:attempt.attemptId,evidence:negativeEvidence()},owner);
+ assert.equal(result.status,'in_progress'); assert.equal(result.finalAction,undefined); assert.equal(result.review,undefined);
+ assert.equal(result.blocker,undefined); assert.equal(result.finalActions[0].attemptId,attempt.attemptId);
+ assert.equal(result.finalActions[0].outcome,'not_submitted');
+ assert.equal(f.store.snapshot().attempts.find(a=>a.id===attempt.attemptId).status,'not_submitted');
+ assert.equal(f.queue.list(owner.profileId).submitted,0);
+ assert.equal((await f.queue.claim(input,owner)).application.id,id);
+ await assert.rejects(f.queue.startSubmission(id,{...input,previewFingerprint:'a'.repeat(64)},owner),/current review/);
+ const p=preview();p.destination=workdayRole;const r=await review(f.queue,id,{preview:p});
+ const next=await f.queue.startSubmission(id,{...input,previewFingerprint:r.previewFingerprint},owner);
+ assert.notEqual(next.attemptId,attempt.attemptId);
+ assert.equal(f.store.snapshot().attempts.length,2);
+ await assert.rejects(f.queue.notSubmitted(id,{...input,attemptId:attempt.attemptId,evidence:negativeEvidence()},owner),/current recorded/);
+});
+test('negative recovery rejects absent, stale, mismatched and unauthenticated employer evidence',async t=>{
+ const f=await fixture(t);const {id,attempt}=await heldWorkday(f);
+ const body={...input,attemptId:attempt.attemptId,evidence:negativeEvidence()};
+ for (const patch of [{authenticated:false},{manuallyVerified:false},{statusText:'Draft'}, {statusText:'No confirmation email'},
+  {sha256:'invalid'}, {observedAt:'bad'}, {observedAt:new Date(Date.now()+120000).toISOString()}]) {
+  await assert.rejects(f.queue.notSubmitted(id,{...body,evidence:{...body.evidence,...patch}},owner),/verified authenticated/);
+ }
+ for (const patch of [{roleUrl:body.evidence.roleUrl.replace('12345-1','12345-2')},
+  {roleUrl:body.evidence.roleUrl.replace('/external/','/internal/')},
+  {roleUrl:body.evidence.roleUrl.replace('example.wd1','other.wd1')},
+  {finalUrl:'https://unrelated.example/home'}, {observedAt:'2020-01-01T00:00:00Z'}]) {
+  await assert.rejects(f.queue.notSubmitted(id,{...body,evidence:{...body.evidence,...patch}},owner),/exact employer role/);
+ }
+ await assert.rejects(f.queue.notSubmitted(id,{...body,sessionId:'another-chat'},owner),/does not own/);
+ await assert.rejects(f.queue.notSubmitted(id,body,other),/not found/);
+ await assert.rejects(f.queue.notSubmitted(id,{...body,attemptId:'another-attempt'},owner),/current recorded/);
+ assert.equal(f.queue.list(owner.profileId).current.status,'submission_unverified');
+ await assert.rejects(f.queue.resume(id,{...input,resolution:'Retry'},owner),/do not repeat Submit/);
+});
+
+test('authenticated negative outcome HTTP route binds the exact held attempt and profile',async t=>{
+ const f=await fixture(t);const {id,attempt}=await heldWorkday(f);
+ const server=createHttpServer({service:f.service,authenticate:req=>req.headers.authorization==='Bearer fixture-only'?owner:null});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>server.close());
+ const url=`http://127.0.0.1:${server.address().port}/v1/chrome-queue/${id}/not-submitted`;
+ const body={...input,attemptId:attempt.attemptId,evidence:negativeEvidence()};
+ assert.equal((await fetch(url,{method:'POST'})).status,401);
+ const response=await fetch(url,{method:'POST',headers:{authorization:'Bearer fixture-only','content-type':'application/json'},body:JSON.stringify(body)});
+ assert.equal(response.status,200);assert.equal((await response.json()).status,'in_progress');
+ assert.equal(f.queue.list(owner.profileId).submitted,0);
+});

@@ -7,7 +7,9 @@ const fail = (status, message) => { throw new ClientError(status, message); };
 export class AccountAccess {
   constructor(service, vault) { this.service = service; this.vault = vault; }
   scope(id, input, identity, action) {
-    const allowed = action === 'store' ? ['sessionId', 'origin', 'username', 'password', 'storageAuthorization'] : ['sessionId', 'origin'];
+    const allowed = action === 'update'
+      ? ['sessionId', 'origin', 'username', 'password', 'updateAuthorization', 'expectedUpdatedAt', 'loginEvidence']
+      : action === 'store' ? ['sessionId', 'origin', 'username', 'password', 'storageAuthorization'] : ['sessionId', 'origin'];
     if (!input || Object.keys(input).some(key => !allowed.includes(key))) fail(400, 'unsupported account request fields');
     const current = this.service.chromeQueue.list(identity.profileId).current;
     if (!current || current.id !== id) fail(404, 'current applicant application not found');
@@ -27,7 +29,22 @@ export class AccountAccess {
       fail(503, 'encrypted account vault is not configured for this applicant');
     }
     let result;
-    if (action === 'store') {
+    if (action === 'update') {
+      const proof = input.loginEvidence;
+      let finalOrigin;
+      try { finalOrigin = normalizeCredentialOrigin(proof?.finalUrl); } catch {}
+      if (typeof input.updateAuthorization !== 'string' || input.updateAuthorization.trim().length < 8
+        || input.updateAuthorization.length > 1000 || !proof || proof.manuallyVerified !== true
+        || proof.authenticated !== true || finalOrigin !== origin
+        || !/^[a-f0-9]{64}$/i.test(proof.sha256 ?? '') || !Number.isFinite(Date.parse(proof.observedAt))
+        || Date.parse(proof.observedAt) < Date.now() - 15 * 60_000 || Date.parse(proof.observedAt) > Date.now() + 60_000
+        || !(input.expectedUpdatedAt === null || typeof input.expectedUpdatedAt === 'string')) {
+        fail(400, 'explicit owner update authorization, fresh verified login and expected revision required');
+      }
+      try { result = await this.vault.update(identity.profileId, origin,
+        { username: input.username, password: input.password }, input.expectedUpdatedAt); }
+      catch (error) { fail(error.status ?? 400, error.status === 409 ? error.message : 'account credential could not be updated'); }
+    } else if (action === 'store') {
       if (typeof input.storageAuthorization !== 'string' || input.storageAuthorization.trim().length < 8
         || input.storageAuthorization.length > 1000) fail(400, 'explicit owner storage authorization is required');
       try { result = await this.vault.save(identity.profileId, origin, { username: input.username, password: input.password }); }
@@ -36,7 +53,8 @@ export class AccountAccess {
       let credential;
       try { credential = await this.vault.get(identity.profileId, origin); }
       catch { fail(503, 'encrypted account vault could not be unlocked'); }
-      if (action === 'status') return { configured: true, available: Boolean(credential), origin };
+      if (action === 'status') return { configured: true, available: Boolean(credential), origin,
+        ...(credential ? { updatedAt: credential.updatedAt ?? null } : {}) };
       if (!credential) fail(404, 'no saved account credential for this origin');
       result = { ...credential, expiresAt: new Date(Date.now() + 120_000).toISOString() };
     }
@@ -45,7 +63,9 @@ export class AccountAccess {
     await this.service.store.mutate(state => {
       this.scope(id, input, identity, action);
       state.audit.push({ id: randomUUID(), profileId: identity.profileId, actorId: identity.actorId,
-        action: `account.${action}`, subjectId: id, at: new Date().toISOString(), details: { origin } });
+        action: `account.${action}`, subjectId: id, at: new Date().toISOString(), details: { origin,
+          ...(action === 'update' ? { authorization: input.updateAuthorization,
+            observedAt: input.loginEvidence.observedAt, visualEvidenceHash: input.loginEvidence.sha256 } : {}) } });
     });
     return result;
   }

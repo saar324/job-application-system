@@ -51,7 +51,7 @@ Use `account-store APPLICATION_ID` with `{ "sessionId": "CURRENT_CHAT_ID",
 "storageAuthorization": "Reference to the actual owner storage authorization" }`.
 The client consumes the file after a successful save. It prints only safe metadata.
 Saving an identical record is idempotent. A different existing password cannot be
-overwritten by this operation; password updates require the owner. Do not save cookies,
+overwritten by this operation; use the explicit reset update below after owner authorization and verified sign-in. Do not save cookies,
 OTP codes, OAuth grants or authentication tokens as passwords.
 
 ## Deployment and recovery
@@ -62,3 +62,20 @@ keys, initialize an empty replacement over an old vault, or put credentials in a
 answers. Configure `JOB_SERVER_CREDENTIAL_VAULTS` and either a private
 `JOB_SERVER_VAULT_KEYS_FILE` or systemd `LoadCredential=job-vault-keys:...`.
 Missing or damaged keys must fail closed and be reported as a system problem.
+
+## Explicit reset credential update
+
+After the owner completes the reset and an actual sign-in with the resulting credential
+succeeds, use `account-update APPLICATION_ID` instead of overwriting through `account-store`.
+This action requires the owner's specific request to update the saved login. Keep the
+existing username. Retrieve `updatedAt` from `account-status` as `expectedUpdatedAt`
+(null for an original record without a timestamp). Supply `sessionId`, `origin`,
+`credentialFile`, `expectedUpdatedAt`, `updateAuthorization` referencing that actual
+owner request, and `loginEvidence:{manuallyVerified:true,authenticated:true,finalUrl,observedAt,sha256}`.
+The proof is a saved screenshot of the successful authenticated page, observed within
+15 minutes on the same official origin. Never screenshot the new password or reset link.
+The client consumes the private credential file after success. The encrypted update is
+limited to this existing profile, origin and username and rejects a changed revision.
+It neither changes the employer's password nor resolves a submission hold. Resolve a
+verified negative submission outcome through `queue-not-submitted` first; do not bypass
+an uncertain outcome. No credential content enters the queue or audit log.

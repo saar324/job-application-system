@@ -103,3 +103,19 @@ Read [search-workers.md](search-workers.md) for payloads. `search-status`, `sear
 `search-control` persists the 20/30 refill decision. `draft-context` returns verified applicant facts and their fingerprint. `search-prepare-claim` / `search-prepare-save` lease and draft existing pending jobs during refill. `search-enqueue` now requires `profileFingerprint` and `draft`, and appends atomically with a high watermark check.
 
 `queue-draft ID` loads the full packet, current facts, revision and freshness metadata in one response. `queue-draft-review ID` accepts `{sessionId,revision,fingerprint,packet}` from that response with corrected values after main-session inspection of the live form. It saves corrected suggestions only, never a live preview or final-action permit. Use `scripts/draft-fill-plan.js PRIVATE_JSON_FILE` to map corrected answers to observed input locators. The planner never operates a browser. See [application-drafts.md](application-drafts.md).
+
+### Verified negative employer outcome
+
+Use `queue-not-submitted ID` only after inspecting an authenticated employer account
+that explicitly shows **Not Submitted** for the exact recorded role. Absence of mail,
+a timeout, a generic error, a blank form or a different requisition is insufficient.
+Supply `sessionId`, the existing `attemptId`, and
+`evidence:{source:"authenticated_employer_application_status",manuallyVerified:true,authenticated:true,statusText:"Not Submitted",finalUrl,roleUrl,observedAt,reference,sha256}`.
+`roleUrl` is the actual job link beside that status in the account; `finalUrl` is the
+observed account page. Preserve its screenshot and hash. Observation must be after
+the attempt and within 15 minutes. Workday matches the complete requisition and tenant,
+including numeric suffixes. Other destinations require matching canonical role URLs.
+The server archives the failed attempt and proof, keeps FIFO and retry limits, and
+invalidates the old review. It does not submit, count a send or advance the queue.
+Review the whole live form again and register a new final attempt before any retry.
+Uncertain outcomes and legacy holds retain their existing safeguards.
